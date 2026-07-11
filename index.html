@@ -13962,14 +13962,15 @@ function FinancialPage() {
     function prLoad(y,m1){try{return JSON.parse(localStorage.getItem(prKey(y,m1))||'null');}catch(ex){return null;}}
     function prSave(y,m1,d){try{localStorage.setItem(prKey(y,m1),JSON.stringify(d));}catch(ex){}}
 
-    /* \u2500\u2500 Working days (excl Sundays + holidays) \u2500\u2500 */
+    /* \u2500\u2500 Working days (excl configured Week Off days + holidays) \u2500\u2500 */
     function prWorkDays(year,month1){
       var dim=new Date(year,month1,0).getDate();
       var hols=(function(){try{return JSON.parse(localStorage.getItem('kbdc_la_holidays')||'[]');}catch(ex){return[];}}());
+      var weekOffDays=laGetWeekOff();
       var cnt=0;
       for(var d=1;d<=dim;d++){
         var dt=new Date(year,month1-1,d);
-        if(dt.getDay()===0)continue;
+        if(weekOffDays.indexOf(dt.getDay())!==-1)continue;
         var ds=year+'-'+String(month1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
         if(hols.some(function(h){return h.date===ds;}))continue;
         cnt++;
@@ -20116,7 +20117,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     var dStr=calYear+'-'+laPad(calMonth+1)+'-'+laPad(cd);
     var cRec=myAtt.find(function(a){return a.date===dStr;});
     var cDt=new Date(calYear,calMonth,cd);
-    var isWE=cDt.getDay()===0||cDt.getDay()===6;
+    var isWE=laGetWeekOff().indexOf(cDt.getDay())!==-1;
     var isFut=dStr>LA_TODAY;
     var cStat='',cColor='#90A4AE';
     if(isWE){cStat='WO';cColor='#78909C';}
@@ -21089,7 +21090,7 @@ function LA_Calendar({leaves,activeBranch,staff}){
         for(var d2=1;d2<=daysInMonth;d2++){
           var ds=year+'-'+laPad(month+1)+'-'+laPad(d2);
           var dt2=new Date(year,month,d2);
-          var isWE=dt2.getDay()===0||dt2.getDay()===6;
+          var isWE=laGetWeekOff().indexOf(dt2.getDay())!==-1;
           var isFut=ds>LA_TODAY;
           var hol=holidays.find(function(h){return h.date===ds;});
           if(hol)totalHols++;
@@ -21277,7 +21278,7 @@ function LA_Regularisation({staff,attendance,setAttendance,activeBranch}){
   for(var di=0;di<14;di++){
     var dt=new Date(today);dt.setDate(today.getDate()-di);
     var ds=dt.getFullYear()+'-'+laPad(dt.getMonth()+1)+'-'+laPad(dt.getDate());
-    if(dt.getDay()===0||dt.getDay()===6)continue;
+    if(laGetWeekOff().indexOf(dt.getDay())!==-1)continue;
     var dayRecs=attendance.filter(function(a){return a.date===ds;});
     dayRecs.forEach(function(rec){
       if(!rec.checkIn&&!rec.checkOut)return;
