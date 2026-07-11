@@ -2277,6 +2277,12 @@ function LoginGate({onLogin}){
 }
 
 function Sidebar({active, onNav, session, onLogout}) {
+  const [,sbForceRefresh] = React.useState(0);
+  React.useEffect(function(){
+    function onSheetLinkSync(){ sbForceRefresh(function(n){ return n+1; }); }
+    window.addEventListener('kbdc-sheetlink-sync',onSheetLinkSync);
+    return function(){ window.removeEventListener('kbdc-sheetlink-sync',onSheetLinkSync); };
+  },[]);
   const isOwner = session && (session.isOwner || KBDC_OWNER_ROLES.indexOf(session.roleCode)>=0);
   const access = isOwner ? KBDC_ALL_IDS : (session ? (session.appAccess||[]) : []);
   const navMain = [{id:'home',l:'HOME',n:'home'},{id:'myapps',l:'MY APPS',n:'apps'}];
@@ -9639,6 +9645,7 @@ function DataBackendTab() {
     function saveSheetUrl() {
       if (!setSheetLink) return;
       setSheetLink(sheetUrl.trim());
+      window.dispatchEvent(new Event('kbdc-sheetlink-sync'));
       setSheetSavedMsg('✓ Saved');
       setTimeout(function(){ setSheetSavedMsg(''); }, 2500);
     }
