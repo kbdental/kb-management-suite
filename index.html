@@ -10892,6 +10892,15 @@ function IdeaBoardPage() {
 
   function saveIdeas(list) { saveIdeasLS(list); set({ ideas: list }); }
 
+  // Background sync pulls fresh ideas into localStorage silently — without
+  // this, whoever already has the board open keeps looking at whatever it
+  // had at mount time.
+  React.useEffect(function(){
+    function onSync(){ set({ ideas: loadIdeas() }); }
+    window.addEventListener('kbdc-modules-sync', onSync);
+    return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+  }, []);
+
   /* ── SUBMIT / EDIT ── */
   function submitIdea() {
     var f = state.form;
@@ -13614,6 +13623,17 @@ function FinancialPage() {
   var st = s0[0]; var setSt = s0[1];
   function upd(p){ setSt(function(prev){ return Object.assign({},prev,typeof p==='function'?p(prev):p); }); }
   function toast(msg,ok){ upd({toast:{msg:msg,ok:ok!==false}}); setTimeout(function(){ upd({toast:null}); },2700); }
+
+  // Background sync pulls fresh Payroll/Claims/Advances into localStorage
+  // silently — without this, whoever already has Financial open keeps
+  // looking at whatever it had at mount time.
+  React.useEffect(function(){
+    function onSync(){
+      upd({ payrolls: lsG(FK.payroll) || [], claims: lsG(FK.claims) || [], advances: lsG(FK.advances) || [] });
+    }
+    window.addEventListener('kbdc-modules-sync', onSync);
+    return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+  }, []);
   function persist(key,stateKey,data){ lsS(FK[key],data); var patch={}; patch[stateKey]=data; upd(patch); }
   function fUpd(k){ return function(v){ upd(function(prev){ var f=Object.assign({},prev.form); f[k]=v; return {form:f}; }); }; }
 
@@ -15155,6 +15175,27 @@ function HRAdminPage() {
     const fresh = (()=>{ const s=sharedStaffGet(); return s.length>0?s:ls('staff'); })().filter(m=>m.active!==false);
     setStaff(fresh);
   }, [tab]);
+  // Background sync pulls fresh Staff/Onboarding data into localStorage
+  // silently — without this, whoever already has HR Admin open on the same
+  // tab keeps looking at whatever it had at mount time.
+  React.useEffect(function(){
+    function onStaffSync(){
+      const fresh = (()=>{ const s=sharedStaffGet(); return s.length>0?s:ls('staff'); })().filter(m=>m.active!==false);
+      setStaff(fresh);
+    }
+    function onModulesSync(){
+      try {
+        const saved = JSON.parse(localStorage.getItem('kbdc_hr_onboardings')||'null');
+        if (saved && saved.length) setOnboardings(saved);
+      } catch(e) {}
+    }
+    window.addEventListener('kbdc-staff-sync', onStaffSync);
+    window.addEventListener('kbdc-modules-sync', onModulesSync);
+    return function(){
+      window.removeEventListener('kbdc-staff-sync', onStaffSync);
+      window.removeEventListener('kbdc-modules-sync', onModulesSync);
+    };
+  }, []);
   const [docs, setDocs] = useState(ls('docs'));
   const [policies, setPolicies] = useState(() => {
     const saved = ls('policies');
@@ -16776,6 +16817,16 @@ function HRAdminPage() {
   function HiringStaffing() {
     const subTab = hiringTab; const setSubTab = setHiringTab;
     const sepView = hiringSepView; const setSepView = setHiringSepView;
+    // separations/absconders below are read fresh from localStorage on every
+    // render rather than kept in useState — this counter just forces a
+    // re-render when background sync brings in fresh data, since nothing
+    // else would otherwise trigger one while this tab stays open.
+    const [, forceRefresh] = React.useState(0);
+    React.useEffect(function(){
+      function onSync(){ forceRefresh(function(n){ return n+1; }); }
+      window.addEventListener('kbdc-modules-sync', onSync);
+      return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+    }, []);
     const separations = (() => { try { return JSON.parse(localStorage.getItem('kbdc_hr_separations')||'[]'); } catch(e) { return []; } })();
     const absconders = (() => { try { return JSON.parse(localStorage.getItem('kbdc_hr_absconders')||'[]'); } catch(e) { return []; } })();
     function saveSeps(list){ localStorage.setItem('kbdc_hr_separations', JSON.stringify(list)); }
@@ -18793,6 +18844,14 @@ function HRAdminPage() {
     function saveAssets2(l){ localStorage.setItem('kbdc_hr_assets2',JSON.stringify(l)); setAssets(l); }
     function saveTypes(l){ localStorage.setItem('kbdc_hr_asset_types',JSON.stringify(l)); setAssetTypes(l); }
 
+    React.useEffect(function(){
+      function onSync(){
+        try { const l = JSON.parse(localStorage.getItem('kbdc_hr_assets2')||'[]'); setAssets(l); } catch(e) {}
+      }
+      window.addEventListener('kbdc-modules-sync', onSync);
+      return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+    }, []);
+
     const filteredAssets = assets.filter(a=>(!filterType||a.assetType===filterType)&&(!filterStatus||a.assetStatus===filterStatus));
     const asIcon = t => t==='Laptop'?'💻':t==='Mobile'?'📱':t==='SIM Card'?'📶':t==='Desktop'||t==='Monitor'?'🖥️':t==='Keyboard'?'⌨️':t==='Mouse'?'🖱️':t==='Headphone'?'🎧':t==='iPad'?'📲':t==='Printer'?'🖨️':'📦';
     const stBadge = s => s==='Good'?[C.greenLt,C.green]:s==='Returned'?[C.blueLt,C.blue]:s==='Lost'?[C.redLt,C.red]:['#FFF3E0',C.orange];
@@ -19050,6 +19109,14 @@ function HRAdminPage() {
     const [trainings, setTrainings] = useState(() => { try { return JSON.parse(localStorage.getItem('kbdc_hr_trainings')||'[]'); } catch(e){ return []; } });
     function savePrograms(list){ localStorage.setItem('kbdc_hr_programs',JSON.stringify(list)); setPrograms(list); }
     function saveTrainings(list){ localStorage.setItem('kbdc_hr_trainings',JSON.stringify(list)); setTrainings(list); }
+
+    React.useEffect(function(){
+      function onSync(){
+        try { setTrainings(JSON.parse(localStorage.getItem('kbdc_hr_trainings')||'[]')); } catch(e) {}
+      }
+      window.addEventListener('kbdc-modules-sync', onSync);
+      return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+    }, []);
 
     // Stats
     const totalDone = trainings.filter(t=>t.status==='Completed').length;
