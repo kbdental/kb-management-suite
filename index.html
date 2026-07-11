@@ -9464,7 +9464,9 @@ async function kbdcAutoPushTasks() {
   try {
     var mods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id === 'tasks' || m.id === 'taskcompletions'; });
     for (var i = 0; i < mods.length; i++) {
-      await kbdcBackendReq(mods[i].sheet, 'saveAll', { rows: mods[i].get().map(kbdcFlattenRow) });
+      var rows = mods[i].get().map(kbdcFlattenRow);
+      if (!rows.length) continue; // never push emptiness over whatever the Sheet already has
+      await kbdcBackendReq(mods[i].sheet, 'saveAll', { rows: rows });
     }
   } catch (e) {}
 }
@@ -9473,7 +9475,9 @@ async function kbdcAutoPushInventory() {
   try {
     for (var i = 0; i < KBDC_INVENTORY_MODULES.length; i++) {
       var mod = KBDC_INVENTORY_MODULES[i];
-      await kbdcInvBackendReq(mod.sheet, 'saveAll', { rows: mod.get().map(kbdcFlattenRow) });
+      var rows = mod.get().map(kbdcFlattenRow);
+      if (!rows.length) continue;
+      await kbdcInvBackendReq(mod.sheet, 'saveAll', { rows: rows });
     }
   } catch (e) {}
 }
@@ -9541,14 +9545,17 @@ async function kbdcAutoPullStaff() {
   } catch (e) {}
 }
 async function kbdcAutoSyncCycle() {
-  // Pull before push: a brand-new device must load the real Sheet data first,
-  // so it never pushes its own empty local storage over real remote data.
-  await kbdcAutoPullStaff();
-  await kbdcAutoPullTasks();
-  await kbdcAutoPullInventory();
+  // Push before pull: a just-made local edit (e.g. an employee's PIN changed
+  // in HR Admin) must reach the Sheet before a pull can happen, otherwise the
+  // pull would silently overwrite the fresh edit with the older remote value.
+  // Every push above already skips modules with no local rows, so a
+  // brand-new/empty device still can't wipe real Sheet data by pushing first.
   await kbdcAutoPushStaff();
   await kbdcAutoPushTasks();
   await kbdcAutoPushInventory();
+  await kbdcAutoPullStaff();
+  await kbdcAutoPullTasks();
+  await kbdcAutoPullInventory();
 }
 
 function AppDataTransferPanel() {
@@ -15859,8 +15866,8 @@ function HRAdminPage() {
                 React.createElement('input',{type:'password',value:empForm.pin||'',onChange:e=>setF('pin',e.target.value.replace(/\D/g,'').slice(0,6)),placeholder:'e.g. 1234',style:{...iStyle,letterSpacing:empForm.pin?6:0}})
               ),
               React.createElement('div',{style:{display:'flex',alignItems:'flex-end',paddingBottom:6}},
-                empForm.pin&&empForm.pin.length>=4
-                  ? React.createElement('div',{style:{fontSize:11,color:'#2E7D32',fontWeight:600}},'✅ PIN is set ('+empForm.pin.length+' digits)')
+                empForm.pin&&String(empForm.pin).length>=4
+                  ? React.createElement('div',{style:{fontSize:11,color:'#2E7D32',fontWeight:600}},'✅ PIN is set ('+String(empForm.pin).length+' digits)')
                   : React.createElement('div',{style:{fontSize:11,color:'#90A4AE'}},empForm.pin?'⚠️ Need at least 4 digits':'No PIN yet — employee cannot log in')
               )
             )
