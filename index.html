@@ -2190,6 +2190,12 @@ function LoginGate({onLogin}){
   const [showAdminOverride,setShowAdminOverride]=useState(false);
   const [overridePass,setOverridePass]=useState('');
   const [overrideErr,setOverrideErr]=useState('');
+  const [,forceRefresh]=useState(0);
+  useEffect(function(){
+    function onStaffSync(){ forceRefresh(function(n){ return n+1; }); }
+    window.addEventListener('kbdc-staff-sync',onStaffSync);
+    return function(){ window.removeEventListener('kbdc-staff-sync',onStaffSync); };
+  },[]);
   const allNames=kbdcGetAllNames();
 
   function getAdminOverridePass(){try{return localStorage.getItem('kbdc_admin_override_pwd')||'kbdc@admin';}catch(e){return 'kbdc@admin';}}
@@ -2207,7 +2213,7 @@ function LoginGate({onLogin}){
     if(pin.length<4){setError('PIN must be at least 4 digits.');return;}
     const found=kbdcFindEmpPin(empName,pin);
     if(!found){setError('Incorrect PIN. Ask admin to set your PIN in HR Admin → Employee Master.');return;}
-    const isOwner=emp.designation==='Owner'||emp.designation==='Medical Director'||emp.designation==='Clinical Director'||emp.designation==='Admin Head'||emp.isOwner===true;
+    const isOwner=found.emp.designation==='Owner'||found.emp.designation==='Medical Director'||found.emp.designation==='Clinical Director'||found.emp.designation==='Admin Head'||found.emp.isOwner===true;
     const empAccess=kbdcGetEmpAppAccess(empName);
     const appAccess=isOwner?KBDC_ALL_IDS:(empAccess||['tasks','leave']);
     const session={name:found.emp.name,empId:found.emp.id,roleCode:found.roleCode,appAccess,isOwner};
@@ -9299,6 +9305,20 @@ function kbdcFlattenRow(obj) {
   });
   return out;
 }
+// Reverses kbdcFlattenRow for fields the Sheet round-trips as JSON-looking
+// strings (e.g. an employee's appAccess array) so a pull doesn't silently
+// turn a real array/object field into an inert string.
+function kbdcUnflattenRow(obj) {
+  var out = {};
+  Object.keys(obj || {}).forEach(function(k) {
+    var v = obj[k];
+    if (typeof v === 'string' && v.length > 1 && (v.charAt(0) === '[' || v.charAt(0) === '{')) {
+      try { out[k] = JSON.parse(v); return; } catch(e) {}
+    }
+    out[k] = v;
+  });
+  return out;
+}
 
 function kbdcScanPrefixed(prefix) {
   var out = [];
@@ -9440,6 +9460,14 @@ async function kbdcAutoPushInventory() {
     }
   } catch (e) {}
 }
+async function kbdcAutoPushStaff() {
+  if (!kbdcBackendUrl()) return;
+  try {
+    var raw = kbdcLsArray('kbdc_hr_staff');
+    if (!raw.length) return; // never push an empty local list over a real remote one
+    await kbdcBackendReq('StaffFull', 'saveAll', { rows: raw.map(kbdcFlattenRow) });
+  } catch (e) {}
+}
 async function kbdcAutoPullTasks() {
   if (!kbdcBackendUrl()) return;
   try {
@@ -9447,12 +9475,18 @@ async function kbdcAutoPullTasks() {
     var logData = await kbdcBackendReq('TaskCompletions', 'getData', {});
     var byRole = kbdcTasksRowsToByRole(taskData.rows || []);
     var changed = false;
+    // Only touches roles present in the pulled data — roles absent from the
+    // Sheet (e.g. it hasn't been seeded yet) are left completely untouched,
+    // so an empty/unready Sheet can never wipe real local task lists.
     Object.keys(byRole).forEach(function(code) {
       var next = JSON.stringify(byRole[code]);
       if (localStorage.getItem('kbdc_tasks_' + code) !== next) { localStorage.setItem('kbdc_tasks_' + code, next); changed = true; }
     });
-    var nextLog = JSON.stringify(logData.rows || []);
-    if (localStorage.getItem('kbdc_task_log') !== nextLog) { localStorage.setItem('kbdc_task_log', nextLog); changed = true; }
+    var logRows = logData.rows || [];
+    if (logRows.length) {
+      var nextLog = JSON.stringify(logRows);
+      if (localStorage.getItem('kbdc_task_log') !== nextLog) { localStorage.setItem('kbdc_task_log', nextLog); changed = true; }
+    }
     if (changed) window.dispatchEvent(new Event('kbdc-tasks-sync'));
   } catch (e) {}
 }
@@ -9461,17 +9495,43 @@ async function kbdcAutoPullInventory() {
   try {
     var itemsData = await kbdcInvBackendReq('InventoryItems', 'getData', {});
     var txData = await kbdcInvBackendReq('InventoryTransactions', 'getData', {});
-    var nextItems = JSON.stringify(itemsData.rows || []);
-    var nextTx = JSON.stringify(txData.rows || []);
-    if (localStorage.getItem('kbdc_inv_items') !== nextItems) localStorage.setItem('kbdc_inv_items', nextItems);
-    if (localStorage.getItem('kbdc_inv_tx') !== nextTx) localStorage.setItem('kbdc_inv_tx', nextTx);
+    var itemRows = (itemsData.rows || []).map(kbdcUnflattenRow);
+    var txRows = (txData.rows || []).map(kbdcUnflattenRow);
+    // Guard: an empty response (Sheet not seeded yet, or a transient hiccup)
+    // must never overwrite real local inventory data with nothing.
+    if (itemRows.length) {
+      var nextItems = JSON.stringify(itemRows);
+      if (localStorage.getItem('kbdc_inv_items') !== nextItems) localStorage.setItem('kbdc_inv_items', nextItems);
+    }
+    if (txRows.length) {
+      var nextTx = JSON.stringify(txRows);
+      if (localStorage.getItem('kbdc_inv_tx') !== nextTx) localStorage.setItem('kbdc_inv_tx', nextTx);
+    }
+  } catch (e) {}
+}
+async function kbdcAutoPullStaff() {
+  if (!kbdcBackendUrl()) return;
+  try {
+    var d = await kbdcBackendReq('StaffFull', 'getData', {});
+    var rows = (d.rows || []).map(kbdcUnflattenRow);
+    if (!rows.length) return; // Sheet not seeded yet — never blank out real local staff data
+    var next = JSON.stringify(rows);
+    if (localStorage.getItem('kbdc_hr_staff') !== next) {
+      localStorage.setItem('kbdc_hr_staff', next);
+      localStorage.setItem('kbdc_shared_staff', next);
+      window.dispatchEvent(new Event('kbdc-staff-sync'));
+    }
   } catch (e) {}
 }
 async function kbdcAutoSyncCycle() {
-  await kbdcAutoPushTasks();
-  await kbdcAutoPushInventory();
+  // Pull before push: a brand-new device must load the real Sheet data first,
+  // so it never pushes its own empty local storage over real remote data.
+  await kbdcAutoPullStaff();
   await kbdcAutoPullTasks();
   await kbdcAutoPullInventory();
+  await kbdcAutoPushStaff();
+  await kbdcAutoPushTasks();
+  await kbdcAutoPushInventory();
 }
 
 function AppDataTransferPanel() {
@@ -21618,6 +21678,13 @@ function App() {
   }
     /* Sync HR Admin → role cards on every open */
   React.useEffect(function(){ kbdcMigrateLegacyDentalOpsData(); kbdcSyncRoleEmployeesFromHR(); }, []);
+  /* Staff list must sync even before login, so a brand-new device's login
+     dropdown fills in with the real team as soon as the Sheet has it. */
+  React.useEffect(function(){
+    kbdcAutoPullStaff();
+    var id = setInterval(kbdcAutoPullStaff, 20000);
+    return function(){ clearInterval(id); };
+  }, []);
   const [nav, setNav] = useState('home');
   const [session, setSession] = useState(()=>kbdcGetSession());
   const [appUser, setAppUser] = useState(null);
