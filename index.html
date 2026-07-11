@@ -9485,12 +9485,41 @@ async function kbdcAutoPushInventory() {
     }
   } catch (e) {}
 }
+function kbdcMergeStaffByRecency(localRows, remoteRows) {
+  // Per-record "whoever edited more recently wins", using the updatedAt
+  // stamp saveEmp() already sets on every HR Admin save. This is what stops
+  // a device with a stale local copy from clobbering a fresher edit made on
+  // another device — a blanket "last sync wins" overwrite can't tell the
+  // difference between "stale" and "just edited", but timestamps can.
+  var remoteById = {};
+  remoteRows.forEach(function(r){ if (r.id) remoteById[r.id] = r; });
+  var merged = localRows.map(function(loc) {
+    var rem = remoteById[loc.id];
+    if (!rem) return loc;
+    var remoteTime = rem.updatedAt ? new Date(rem.updatedAt).getTime() : 0;
+    var localTime = loc.updatedAt ? new Date(loc.updatedAt).getTime() : 0;
+    return remoteTime > localTime ? rem : loc;
+  });
+  var localIds = {};
+  localRows.forEach(function(s){ if (s.id) localIds[s.id] = true; });
+  remoteRows.forEach(function(r){ if (r.id && !localIds[r.id]) merged.push(r); });
+  return merged;
+}
 async function kbdcAutoPushStaff() {
   if (!kbdcBackendUrl()) return;
   try {
-    var raw = kbdcLsArray('kbdc_hr_staff');
-    if (!raw.length) return; // never push an empty local list over a real remote one
-    await kbdcBackendReq('StaffFull', 'saveAll', { rows: raw.map(kbdcFlattenRow) });
+    var localRows = kbdcLsArray('kbdc_hr_staff');
+    if (!localRows.length) return; // never push an empty local list over a real remote one
+    var d = await kbdcBackendReq('StaffFull', 'getData', {});
+    var remoteRows = (d.rows || []).map(kbdcUnflattenRow);
+    var merged = remoteRows.length ? kbdcMergeStaffByRecency(localRows, remoteRows) : localRows;
+    var mergedJson = JSON.stringify(merged);
+    if (localStorage.getItem('kbdc_hr_staff') !== mergedJson) {
+      localStorage.setItem('kbdc_hr_staff', mergedJson);
+      localStorage.setItem('kbdc_shared_staff', mergedJson);
+      window.dispatchEvent(new Event('kbdc-staff-sync'));
+    }
+    await kbdcBackendReq('StaffFull', 'saveAll', { rows: merged.map(kbdcFlattenRow) });
   } catch (e) {}
 }
 // Small key/value store for single-value clinic settings (e.g. Week Off days)
@@ -9561,6 +9590,25 @@ async function kbdcAutoPullGenericModules() {
     if (changed) window.dispatchEvent(new Event('kbdc-modules-sync'));
   } catch (e) {}
 }
+async function kbdcAutoPullLeaveAlloc() {
+  if (!kbdcBackendUrl()) return;
+  try {
+    var d = await kbdcBackendReq('LeaveAllocations', 'getData', {});
+    var rows = d.rows || [];
+    if (!rows.length) return; // Sheet not seeded yet — never blank out real local allocations
+    var alloc = {};
+    rows.forEach(function(r) {
+      if (!r.staffName || !r.leaveType) return;
+      if (!alloc[r.staffName]) alloc[r.staffName] = {};
+      alloc[r.staffName][r.leaveType] = Number(r.allocatedDays) || 0;
+    });
+    var next = JSON.stringify(alloc);
+    if (localStorage.getItem('kbdc_la_alloc') !== next) {
+      localStorage.setItem('kbdc_la_alloc', next);
+      window.dispatchEvent(new Event('kbdc-modules-sync'));
+    }
+  } catch (e) {}
+}
 async function kbdcAutoPullInventory() {
   if (!kbdcInvBackendUrl()) return;
   try {
@@ -9608,6 +9656,7 @@ async function kbdcAutoSyncCycle() {
   await kbdcAutoPullTasks();
   await kbdcAutoPullInventory();
   await kbdcAutoPullGenericModules();
+  await kbdcAutoPullLeaveAlloc();
   await kbdcAutoPullSettings();
 }
 
