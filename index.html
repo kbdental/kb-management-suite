@@ -13834,7 +13834,11 @@ function FinancialPage() {
         return l.staffName===sName&&l.status==='approved'&&l.halfDay&&l.halfDay!=='none'&&l.from&&l.from.startsWith(ms);
       }).length;
       var workDays=prWorkDays(year,month1);
-      var absentUnpaid=Math.max(0,workDays-presentDays-approvedFullDays-halfDayCount);
+      // Only deduct for absent days once attendance/leave is actually being
+      // tracked for this employee this month — otherwise "no check-in record"
+      // would be misread as "absent every day" and wipe out the whole salary.
+      var hasAttendanceData=recs.length>0||leaveArr.some(function(l){return l.staffName===sName&&l.from&&l.from.startsWith(ms);});
+      var absentUnpaid=hasAttendanceData?Math.max(0,workDays-presentDays-approvedFullDays-halfDayCount):0;
       var halfDed=Math.floor(halfDayCount/2);
       return{workDays:workDays,present:presentDays,approved:approvedFullDays,halfDays:halfDayCount,absentUnpaid:absentUnpaid,halfDed:halfDed,totalDeductDays:absentUnpaid+halfDed};
     }
