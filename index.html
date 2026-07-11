@@ -1987,7 +1987,14 @@ function sharedStaffSet(list) {
         role:        match.role || h.role || h.designation,
         designation: match.role || h.role || h.designation,
         reportsTo:   match.reportsTo || h.reportsTo,
-        reportingManagerName: (match.reportsTo && match.reportsTo.name) || h.reportingManagerName || ''
+        reportingManagerName: (match.reportsTo && match.reportsTo.name) || h.reportingManagerName || '',
+        // PIN (and active/updatedAt) must carry over too — HR Admin's
+        // Employee Master save goes through this same function, and without
+        // this, a PIN reset here would never actually reach kbdc_hr_staff
+        // (the key login checks), silently leaving the OLD PIN in place.
+        pin:       match.pin != null && match.pin !== '' ? match.pin : h.pin,
+        active:    match.active !== undefined ? match.active : h.active,
+        updatedAt: match.updatedAt || h.updatedAt
       });
     });
     var newOnes = list.filter(function(s) {
