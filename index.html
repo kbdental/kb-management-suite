@@ -9426,20 +9426,20 @@ function kbdcAllocRows() {
 var KBDC_BACKEND_MODULES = [
   { id:'staff',       label:'Staff / Employees',        sheet:'Staff',              get: function(){ return sharedStaffGet().map(function(s){ return { id:s.id, name:s.name, role:s.role||s.designation, email:s.email, mobile:s.mobile||s.phone, accessLevel:s.accessLevel, department:s.dept||s.group, status:s.s, joined:s.joined, reportsTo:(s.reportsTo&&s.reportsTo.name)||s.reportingManagerName||'' }; }); } },
   { id:'tasks',       label:'Task Lists & Completion',  sheet:'Tasks',              get: function(){ return kbdcScanPrefixed('kbdc_tasks_').map(function(t){ return { roleCode:t.sourceKey, taskCode:t.code, taskEn:t.en, taskHi:t.hi, frequency:t.freq, done:t.done }; }); } },
-  { id:'taskcompletions', label:'Task Completions Log',  sheet:'TaskCompletions',    get: function(){ return kbdcLsArray('kbdc_task_log'); } },
-  { id:'leaves',      label:'Leave Requests',           sheet:'LeaveRequests',      get: function(){ return kbdcLsArray('kbdc_la_leaves'); } },
-  { id:'attendance',  label:'Attendance',               sheet:'Attendance',         get: function(){ return kbdcLsArray('kbdc_la_attendance'); } },
+  { id:'taskcompletions', label:'Task Completions Log',  sheet:'TaskCompletions',    localKey:'kbdc_task_log', get: function(){ return kbdcLsArray('kbdc_task_log'); } },
+  { id:'leaves',      label:'Leave Requests',           sheet:'LeaveRequests',      localKey:'kbdc_la_leaves', get: function(){ return kbdcLsArray('kbdc_la_leaves'); } },
+  { id:'attendance',  label:'Attendance',               sheet:'Attendance',         localKey:'kbdc_la_attendance', get: function(){ return kbdcLsArray('kbdc_la_attendance'); } },
   { id:'leavealloc',  label:'Leave Allocations',        sheet:'LeaveAllocations',   get: kbdcAllocRows },
   { id:'appraisals',  label:'Appraisals',               sheet:'Appraisals',         get: kbdcAppraisalRows },
   { id:'achievers',   label:'Achievers Club Scores',    sheet:'AchieversScores',    get: kbdcAchieversRows },
-  { id:'payroll',     label:'Payroll',                  sheet:'Payroll',            get: function(){ return kbdcLsArray('kbdc_fin_payroll'); } },
-  { id:'claims',      label:'Reimbursement Claims',     sheet:'Claims',             get: function(){ return kbdcLsArray('kbdc_fin_claims'); } },
-  { id:'advances',    label:'Advances & Loans',         sheet:'Advances',           get: function(){ return kbdcLsArray('kbdc_loans_v2'); } },
-  { id:'ideas',       label:'Idea Board',               sheet:'Ideas',              get: function(){ return kbdcLsArray('kbdc_ideas'); } },
-  { id:'assets',      label:'Assets',                   sheet:'Assets',             get: function(){ return kbdcLsArray('kbdc_hr_assets2'); } },
-  { id:'onboarding',  label:'Onboarding',               sheet:'Onboarding',         get: function(){ return kbdcLsArray('kbdc_hr_onboardings'); } },
-  { id:'separations', label:'Separations',              sheet:'Separations',       get: function(){ return kbdcLsArray('kbdc_hr_separations'); } },
-  { id:'trainings',   label:'Trainings',                sheet:'Trainings',          get: function(){ return kbdcLsArray('kbdc_hr_trainings'); } },
+  { id:'payroll',     label:'Payroll',                  sheet:'Payroll',            localKey:'kbdc_fin_payroll', get: function(){ return kbdcLsArray('kbdc_fin_payroll'); } },
+  { id:'claims',      label:'Reimbursement Claims',     sheet:'Claims',             localKey:'kbdc_fin_claims', get: function(){ return kbdcLsArray('kbdc_fin_claims'); } },
+  { id:'advances',    label:'Advances & Loans',         sheet:'Advances',           localKey:'kbdc_loans_v2', get: function(){ return kbdcLsArray('kbdc_loans_v2'); } },
+  { id:'ideas',       label:'Idea Board',               sheet:'Ideas',              localKey:'kbdc_ideas', get: function(){ return kbdcLsArray('kbdc_ideas'); } },
+  { id:'assets',      label:'Assets',                   sheet:'Assets',             localKey:'kbdc_hr_assets2', get: function(){ return kbdcLsArray('kbdc_hr_assets2'); } },
+  { id:'onboarding',  label:'Onboarding',               sheet:'Onboarding',         localKey:'kbdc_hr_onboardings', get: function(){ return kbdcLsArray('kbdc_hr_onboardings'); } },
+  { id:'separations', label:'Separations',              sheet:'Separations',       localKey:'kbdc_hr_separations', get: function(){ return kbdcLsArray('kbdc_hr_separations'); } },
+  { id:'trainings',   label:'Trainings',                sheet:'Trainings',          localKey:'kbdc_hr_trainings', get: function(){ return kbdcLsArray('kbdc_hr_trainings'); } },
   { id:'forms',       label:'Form Builder Responses',   sheet:'FormResponses',      get: function(){ return kbdcScanPrefixed('kbdc_resp_'); } },
 ];
 
@@ -9462,7 +9462,11 @@ function kbdcTasksRowsToByRole(rows) {
 async function kbdcAutoPushTasks() {
   if (!kbdcBackendUrl()) return;
   try {
-    var mods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id === 'tasks' || m.id === 'taskcompletions'; });
+    // Pushes every Main-backend module (Tasks, Attendance, Leaves, Payroll,
+    // Claims, Advances, Ideas, Assets, Onboarding, Separations, Trainings,
+    // Appraisals, Achievers, Leave Allocations, Form Responses) — not just
+    // Tasks — so any admin action anywhere reaches the shared Sheet.
+    var mods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
     for (var i = 0; i < mods.length; i++) {
       var rows = mods[i].get().map(kbdcFlattenRow);
       if (!rows.length) continue; // never push emptiness over whatever the Sheet already has
@@ -9511,6 +9515,26 @@ async function kbdcAutoPullTasks() {
     if (changed) window.dispatchEvent(new Event('kbdc-tasks-sync'));
   } catch (e) {}
 }
+async function kbdcAutoPullGenericModules() {
+  if (!kbdcBackendUrl()) return;
+  try {
+    // Every simple flat-array module (Attendance, Leaves, Payroll, Claims,
+    // Advances, Ideas, Assets, Onboarding, Separations, Trainings) — Tasks and
+    // TaskCompletions are handled separately above since Tasks needs
+    // per-role grouping, and Staff has its own full-fidelity channel.
+    var mods = KBDC_BACKEND_MODULES.filter(function(m){ return m.localKey && m.id !== 'taskcompletions'; });
+    var changed = false;
+    for (var i = 0; i < mods.length; i++) {
+      var mod = mods[i];
+      var d = await kbdcBackendReq(mod.sheet, 'getData', {});
+      var rows = (d.rows || []).map(kbdcUnflattenRow);
+      if (!rows.length) continue; // never blank out real local data with an empty/unseeded sheet
+      var next = JSON.stringify(rows);
+      if (localStorage.getItem(mod.localKey) !== next) { localStorage.setItem(mod.localKey, next); changed = true; }
+    }
+    if (changed) window.dispatchEvent(new Event('kbdc-modules-sync'));
+  } catch (e) {}
+}
 async function kbdcAutoPullInventory() {
   if (!kbdcInvBackendUrl()) return;
   try {
@@ -9556,6 +9580,7 @@ async function kbdcAutoSyncCycle() {
   await kbdcAutoPullStaff();
   await kbdcAutoPullTasks();
   await kbdcAutoPullInventory();
+  await kbdcAutoPullGenericModules();
 }
 
 function AppDataTransferPanel() {
