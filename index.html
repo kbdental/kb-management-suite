@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>K.B. Dental Clinic – Management Suite</title>
 <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -847,6 +850,27 @@ body{background:#F5F6FA}
   } else {
     sessionStorage.setItem('kbdc_sw_cleanup_done','1');
   }
+})();
+</script>
+<script>
+// Some browsers (mobile/embedded ones especially) cache this page far past
+// any normal Cache-Control expiry and effectively need "clear all site
+// data" before they'll fetch anything new — a plain hard refresh isn't
+// enough. This does one no-cache network fetch of the page itself to check
+// whether a newer version is actually live, and force-navigates to a
+// cache-busted URL if so, so updates reach every device without anyone
+// needing to manually clear history/cache.
+var KBDC_APP_VERSION = '2026-07-11-1';
+(function(){
+  if (sessionStorage.getItem('kbdc_version_check_done')) return;
+  sessionStorage.setItem('kbdc_version_check_done','1');
+  var base = location.origin + location.pathname;
+  fetch(base, { cache: 'no-store' }).then(function(r){ return r.text(); }).then(function(html){
+    var m = html.match(/KBDC_APP_VERSION = '([^']+)'/);
+    if (m && m[1] && m[1] !== KBDC_APP_VERSION) {
+      location.href = base + '?_v=' + Date.now();
+    }
+  }).catch(function(){});
 })();
 </script>
 <div id="root"></div>
