@@ -2311,13 +2311,16 @@ function Sidebar({active, onNav, session, onLogout}) {
       title:"Open Google Sheet"
     },React.createElement("span",{style:{fontSize:13,width:13,display:'inline-block',textAlign:'center'}},'🔗'),"GOOGLE SHEET"),
     React.createElement("div",{className:"sb-space"}),
+    session&&React.createElement("div",{
+      onClick:onLogout,
+      style:{display:'flex',alignItems:'center',gap:8,margin:'0 12px 8px',padding:'9px 12px',borderRadius:8,background:'rgba(255,255,255,.1)',cursor:'pointer',fontSize:12,fontWeight:600,color:'#fff'}
+    },React.createElement("span",{style:{fontSize:14}},'🔄'),"Log Out / Switch User"),
     React.createElement("div",{className:"sb-user"},
       React.createElement("div",{className:"sb-uav"},userInitials),
       React.createElement("div",{style:{flex:1,minWidth:0}},
         React.createElement("div",{className:"sb-uname",style:{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:11}},userName),
         React.createElement("div",{className:"sb-urole"},userRole)
-      ),
-      session&&React.createElement("div",{onClick:onLogout,title:"Switch User / Log Out",style:{cursor:'pointer',fontSize:15,flexShrink:0,opacity:.75,marginLeft:4}},'🔄')
+      )
     )
   );
 }
