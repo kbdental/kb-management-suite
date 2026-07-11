@@ -9395,6 +9395,79 @@ var KBDC_INVENTORY_MODULES = [
   { id:'invtx',    label:'Inventory Transactions', sheet:'InventoryTransactions', get: function(){ return kbdcLsArray('kbdc_inv_tx'); } },
 ];
 
+function AppDataTransferPanel() {
+  var e2 = React.createElement;
+  var card = { background:'#fff', borderRadius:12, border:'1px solid #E5E7EB', padding:'20px 22px', marginBottom:16 };
+  var btn = { border:'none', borderRadius:8, fontWeight:600, cursor:'pointer', fontFamily:"'Poppins',sans-serif", fontSize:13, padding:'9px 18px' };
+  var ta = { width:'100%', minHeight:90, padding:'10px 12px', border:'1.5px solid #C7D2FE', borderRadius:8, fontSize:11.5, outline:'none', fontFamily:'monospace', boxSizing:'border-box', resize:'vertical' };
+
+  var code0 = React.useState(''); var code = code0[0]; var setCode = code0[1];
+  var msg0 = React.useState(''); var msg = msg0[0]; var setMsg = msg0[1];
+  var importText0 = React.useState(''); var importText = importText0[0]; var setImportText = importText0[1];
+  var importMsg0 = React.useState(''); var importMsg = importMsg0[0]; var setImportMsg = importMsg0[1];
+
+  function generateCode() {
+    try {
+      var dump = {};
+      var keyCount = 0;
+      for (var i = 0; i < localStorage.length; i++) {
+        var k = localStorage.key(i);
+        if (k && k.indexOf('kbdc') === 0) { dump[k] = localStorage.getItem(k); keyCount++; }
+      }
+      var json = JSON.stringify(dump);
+      setCode(btoa(unescape(encodeURIComponent(json))));
+      setMsg(keyCount + ' data item' + (keyCount !== 1 ? 's' : '') + ' ready to copy — staff, tasks, inventory, leave, everything.');
+    } catch(e) { setMsg('⚠ Could not read app data: ' + e.message); }
+  }
+
+  function copyCode() {
+    if (!code) return;
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(code).then(function(){ setMsg('✅ Copied to clipboard!'); })
+        .catch(function(){ setMsg('Select the text above and copy it manually.'); });
+    } else {
+      setMsg('Select the text above and copy it manually.');
+    }
+  }
+
+  function doImport() {
+    try {
+      var decoded = decodeURIComponent(escape(atob(importText.trim())));
+      var dump = JSON.parse(decoded);
+      var keys = Object.keys(dump);
+      if (!keys.length) throw new Error('That code doesn\'t look right.');
+      keys.forEach(function(k){ localStorage.setItem(k, dump[k]); });
+      setImportMsg('✅ Imported ' + keys.length + ' data item' + (keys.length !== 1 ? 's' : '') + '. Reloading...');
+      setTimeout(function(){ location.reload(); }, 1200);
+    } catch(e) { setImportMsg('⚠ Could not read that code: ' + e.message); }
+  }
+
+  return e2('div', { style:card },
+    e2('div', { style:{ fontSize:13, fontWeight:700, color:'#1A237E', marginBottom:6 } }, '📦 Move ALL App Data To Another Site'),
+    e2('div', { style:{ fontSize:11.5, color:'#6B7280', marginBottom:14, lineHeight:1.6 } },
+      'If you are running this app on more than one site (e.g. moving from one URL to another), use this to copy everything across — staff, tasks, inventory, leave records, all of it — without retyping anything. Nothing leaves your browser except what you manually copy and paste yourself.'
+    ),
+    e2('div', { style:{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:16 } },
+      e2('div', null,
+        e2('div', { style:{ fontSize:11, fontWeight:700, color:'#374151', marginBottom:6, textTransform:'uppercase' } }, 'On the OLD site: Export'),
+        e2('button', { onClick:generateCode, style:Object.assign({}, btn, { background:'#1A237E', color:'#fff', marginBottom:8 }) }, 'Generate Transfer Code'),
+        code && e2('div', null,
+          e2('textarea', { readOnly:true, value:code, style:ta, onClick:function(ev){ ev.target.select(); } }),
+          e2('button', { onClick:copyCode, style:Object.assign({}, btn, { background:'#EEF2FF', color:'#1A237E', marginTop:8, fontSize:11.5 }) }, '📋 Copy Code')
+        ),
+        msg && e2('div', { style:{ fontSize:11.5, fontWeight:600, marginTop:6, color: msg.charAt(0) === '⚠' ? '#C62828' : '#2E7D32' } }, msg)
+      ),
+      e2('div', null,
+        e2('div', { style:{ fontSize:11, fontWeight:700, color:'#374151', marginBottom:6, textTransform:'uppercase' } }, 'On the NEW site: Import'),
+        e2('textarea', { placeholder:'Paste the transfer code here...', value:importText, onChange:function(ev){ setImportText(ev.target.value); }, style:ta }),
+        e2('button', { onClick:doImport, disabled: !importText.trim(), style:Object.assign({}, btn, { background:'#2E7D32', color:'#fff', marginTop:8, opacity: importText.trim() ? 1 : 0.5 }) }, '📥 Import Now'),
+        importMsg && e2('div', { style:{ fontSize:11.5, fontWeight:600, marginTop:6, color: importMsg.charAt(0) === '⚠' ? '#C62828' : '#2E7D32' } }, importMsg)
+      )
+    )
+  );
+}
+
+
 function DataBackendTab() {
   var e2 = React.createElement;
   var card = { background:'#fff', borderRadius:12, border:'1px solid #E5E7EB', padding:'20px 22px', marginBottom:16 };
@@ -9494,6 +9567,8 @@ function DataBackendTab() {
     e2('div', { style:{ fontSize:12, color:'#6B7280', marginBottom:20, lineHeight:1.6 } },
       'Every module below can push its data to a Google Sheet so everything you fill in across the app can be collected and reviewed in one place. Inventory is kept on its own separate Sheet (and its own Web App URL) so its data isn’t mixed in with everything else — every other module shares one Sheet.'
     ),
+
+    e2(AppDataTransferPanel, null),
 
     e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:4 } }, '1. Main Backend — everything except Inventory'),
     e2(BackendGroup, { modules: KBDC_BACKEND_MODULES, getUrl: kbdcBackendUrl, setUrl: kbdcSetBackendUrl, reqFn: kbdcBackendReq, pushLabel: '⬆ Push Everything Now' }),
