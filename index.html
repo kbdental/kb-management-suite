@@ -21510,6 +21510,24 @@ function LeaveAttendancePage({ appUser }) {
     setStaff(sharedStaffGet().filter(m=>m.active!==false&&m.name&&m.name!=='—'));
   },[tab]);
 
+  // Background sync pulls fresh Attendance/Leaves/Staff into localStorage
+  // silently — without this, whoever already has this page open keeps
+  // looking at whatever it had at mount time until they navigate away and
+  // back, even though the data has already arrived.
+  useEffect(()=>{
+    function onSync(){
+      setAttendance(laGetAtt());
+      setLeaves(laGetLeaves());
+      setStaff(sharedStaffGet().filter(m=>m.active!==false&&m.name&&m.name!=='—'));
+    }
+    window.addEventListener('kbdc-modules-sync', onSync);
+    window.addEventListener('kbdc-staff-sync', onSync);
+    return function(){
+      window.removeEventListener('kbdc-modules-sync', onSync);
+      window.removeEventListener('kbdc-staff-sync', onSync);
+    };
+  }, []);
+
   const allTabs = [
     {id:'dashboard',label:'📊 Dashboard'},
     {id:'attendance',label:'⏱️ Attendance'},
