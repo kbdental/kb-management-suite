@@ -9493,6 +9493,32 @@ async function kbdcAutoPushStaff() {
     await kbdcBackendReq('StaffFull', 'saveAll', { rows: raw.map(kbdcFlattenRow) });
   } catch (e) {}
 }
+// Small key/value store for single-value clinic settings (e.g. Week Off days)
+// that don't fit the "array of records" shape every other module uses.
+async function kbdcAutoPushSettings() {
+  if (!kbdcBackendUrl()) return;
+  try {
+    await kbdcBackendReq('ClinicSettings', 'saveAll', { rows: [
+      { key: 'weekOffDays', value: JSON.stringify(laGetWeekOff()) }
+    ] });
+  } catch (e) {}
+}
+async function kbdcAutoPullSettings() {
+  if (!kbdcBackendUrl()) return;
+  try {
+    var d = await kbdcBackendReq('ClinicSettings', 'getData', {});
+    var row = (d.rows || []).find(function(r){ return r.key === 'weekOffDays'; });
+    if (!row || !row.value) return;
+    var parsed;
+    try { parsed = JSON.parse(row.value); } catch(e) { return; }
+    if (!Array.isArray(parsed) || !parsed.length) return;
+    var next = JSON.stringify(parsed);
+    if (localStorage.getItem('kbdc_la_weekoff') !== next) {
+      localStorage.setItem('kbdc_la_weekoff', next);
+      window.dispatchEvent(new Event('kbdc-modules-sync'));
+    }
+  } catch (e) {}
+}
 async function kbdcAutoPullTasks() {
   if (!kbdcBackendUrl()) return;
   try {
@@ -9577,10 +9603,12 @@ async function kbdcAutoSyncCycle() {
   await kbdcAutoPushStaff();
   await kbdcAutoPushTasks();
   await kbdcAutoPushInventory();
+  await kbdcAutoPushSettings();
   await kbdcAutoPullStaff();
   await kbdcAutoPullTasks();
   await kbdcAutoPullInventory();
   await kbdcAutoPullGenericModules();
+  await kbdcAutoPullSettings();
 }
 
 function AppDataTransferPanel() {
@@ -20563,14 +20591,15 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
 
       /* CTA Buttons */
       React.createElement('div',{style:{display:'flex',gap:10,marginBottom:20,flexWrap:'wrap'}},
-        /* Week Off config strip */
-      React.createElement('div',{style:{background:'#E8F5E9',borderRadius:10,border:'1px solid #C8E6C9',padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
+        /* Week Off config strip — owner/admin only; appUser is only set when a
+           regular employee PIN-verified in, so !appUser means owner/admin. */
+      !appUser&&React.createElement('div',{style:{background:'#E8F5E9',borderRadius:10,border:'1px solid #C8E6C9',padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
         React.createElement('span',{style:{fontSize:11.5,fontWeight:600,color:'#1B5E20',flex:1}},
           'Week Off: '+(function(){var w=laGetWeekOff();var dn=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];return w.map(function(d){return dn[d];}).join(' + ');})()
         ),
         React.createElement('button',{onClick:function(){setShowWeekOffEdit(function(v){return !v;});},style:{padding:'5px 13px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:7,fontSize:11.5,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif"}},showWeekOffEdit?'Close':'Edit Week Off')
       ),
-      showWeekOffEdit&&React.createElement('div',{style:{background:'#fff',border:'1px solid #C8E6C9',borderRadius:10,padding:'14px 16px',marginBottom:12,display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}},
+      !appUser&&showWeekOffEdit&&React.createElement('div',{style:{background:'#fff',border:'1px solid #C8E6C9',borderRadius:10,padding:'14px 16px',marginBottom:12,display:'flex',gap:10,alignItems:'center',flexWrap:'wrap'}},
         ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map(function(d,i){
           return React.createElement('label',{key:i,style:{display:'flex',alignItems:'center',gap:5,fontSize:12,cursor:'pointer',fontWeight:weekOffEdit.indexOf(i)!==-1?700:400,color:weekOffEdit.indexOf(i)!==-1?'#1B5E20':'#546E7A'}},
             React.createElement('input',{type:'checkbox',checked:weekOffEdit.indexOf(i)!==-1,onChange:function(){
@@ -20579,12 +20608,12 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
         }),
         React.createElement('button',{onClick:function(){laSaveWeekOff(weekOffEdit);setShowWeekOffEdit(false);showToast('Week Off saved',true);},style:{padding:'7px 18px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif",marginLeft:8}},'Save')
       ),
-      /* Allocation config strip */
-      React.createElement('div',{style:{background:'#EEF2FF',borderRadius:10,border:'1px solid #C5CAE9',padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
+      /* Allocation config strip — owner/admin only */
+      !appUser&&React.createElement('div',{style:{background:'#EEF2FF',borderRadius:10,border:'1px solid #C5CAE9',padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
         React.createElement('span',{style:{fontSize:11.5,fontWeight:600,color:'#1A237E',flex:1}},'Leave Allocation: Casual = '+allocEdit.casual+' days · Sick/Medical = '+allocEdit.medical+' days per year'),
         React.createElement('button',{onClick:function(){setShowAllocEdit(function(v){return !v;});},style:{padding:'5px 13px',background:'#1A237E',color:'#fff',border:'none',borderRadius:7,fontSize:11.5,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif"}},showAllocEdit?'Close':'Edit Allocation')
       ),
-      showAllocEdit&&React.createElement('div',{style:{background:'#fff',border:'1px solid #C5CAE9',borderRadius:10,padding:'14px 16px',marginBottom:12,display:'flex',gap:16,alignItems:'flex-end',flexWrap:'wrap'}},
+      !appUser&&showAllocEdit&&React.createElement('div',{style:{background:'#fff',border:'1px solid #C5CAE9',borderRadius:10,padding:'14px 16px',marginBottom:12,display:'flex',gap:16,alignItems:'flex-end',flexWrap:'wrap'}},
         React.createElement('div',null,
           React.createElement('label',{style:{fontSize:10,fontWeight:600,color:'#546E7A',display:'block',marginBottom:4}},'Casual Leave (days/year)'),
           React.createElement('input',{type:'number',min:0,max:365,value:allocEdit.casual,onChange:function(e){setAllocEdit(function(a){return Object.assign({},a,{casual:parseInt(e.target.value)||0});});},style:{padding:'7px 11px',border:'1px solid #DDE',borderRadius:7,fontSize:13,fontWeight:700,outline:'none',width:90,fontFamily:"'Poppins',sans-serif"}})
