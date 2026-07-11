@@ -2161,7 +2161,10 @@ function kbdcClearSession(){try{localStorage.removeItem(KBDC_SESSION_KEY);}catch
 function kbdcFindEmpPin(name,pin){
   try{
     var hr=JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]');
-    var emp=hr.find(function(s){return s.name&&s.name.toLowerCase()===name.toLowerCase()&&s.pin&&s.pin===pin;});
+    // Compare as strings — a numeric-looking PIN like "1111" can come back as
+    // an actual number after round-tripping through Google Sheets, and a
+    // strict === would then wrongly reject a correct PIN.
+    var emp=hr.find(function(s){return s.name&&s.name.toLowerCase()===name.toLowerCase()&&s.pin!=null&&String(s.pin)===String(pin);});
     if(emp) return {emp:emp, roleCode: emp.empStatus==='Active'?(emp.role||'Staff'):'Staff'};
   }catch(e){}
   return null;
@@ -21454,7 +21457,7 @@ function PinGateModal({ appName, session, onVerified, onCancel }) {
       return;
     }
     if (!emp.pin) { onVerified(emp); return; }
-    if (emp.pin === pin) { onVerified(emp); }
+    if (String(emp.pin) === String(pin)) { onVerified(emp); }
     else { setError('Incorrect PIN. Try again.'); setPin(''); }
   }
 
