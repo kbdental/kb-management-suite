@@ -2289,6 +2289,12 @@ function Sidebar({active, onNav, session, onLogout}) {
     navAcct.length>0&&React.createElement("div",{className:"sb-hr"}),
     navAcct.length>0&&React.createElement("div",{className:"sb-grp"},"Account"),
     navAcct.map(n=>React.createElement("div",{key:n.id,className:"nav"+(active===n.id?' on':''),onClick:()=>onNav(n.id)},React.createElement(Icon,{n:n.n,s:13}),n.l)),
+    (kbdcSheetLink()||kbdcInvSheetLink())&&React.createElement("div",{className:"sb-hr"}),
+    (kbdcSheetLink()||kbdcInvSheetLink())&&React.createElement("div",{
+      className:"nav",
+      onClick:()=>window.open(kbdcSheetLink()||kbdcInvSheetLink(),'_blank'),
+      title:"Open Google Sheet"
+    },React.createElement("span",{style:{fontSize:13,width:13,display:'inline-block',textAlign:'center'}},'🔗'),"GOOGLE SHEET"),
     React.createElement("div",{className:"sb-space"}),
     React.createElement("div",{className:"sb-user"},
       React.createElement("div",{className:"sb-uav"},userInitials),
@@ -9274,6 +9280,10 @@ function kbdcBackendUrl() { try { return localStorage.getItem('kbdc_backend_url'
 function kbdcSetBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url', u || ''); } catch(e) {} }
 function kbdcInvBackendUrl() { try { return localStorage.getItem('kbdc_backend_url_inventory') || ''; } catch(e) { return ''; } }
 function kbdcSetInvBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_inventory', u || ''); } catch(e) {} }
+function kbdcSheetLink() { try { return localStorage.getItem('kbdc_sheet_link') || ''; } catch(e) { return ''; } }
+function kbdcSetSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link', u || ''); } catch(e) {} }
+function kbdcInvSheetLink() { try { return localStorage.getItem('kbdc_sheet_link_inventory') || ''; } catch(e) { return ''; } }
+function kbdcSetInvSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link_inventory', u || ''); } catch(e) {} }
 
 function kbdcFlattenRow(obj) {
   var out = {};
@@ -9476,16 +9486,25 @@ function DataBackendTab() {
 
   function BackendGroup(props) {
     var modules = props.modules, getUrl = props.getUrl, setUrl = props.setUrl, reqFn = props.reqFn, pushLabel = props.pushLabel;
+    var getSheetLink = props.getSheetLink, setSheetLink = props.setSheetLink;
     var u0 = React.useState(getUrl()); var url = u0[0]; var setUrlSt = u0[1];
     var savedMsg0 = React.useState(''); var savedMsg = savedMsg0[0]; var setSavedMsg = savedMsg0[1];
     var status0 = React.useState({}); var rowStatus = status0[0]; var setRowStatus = status0[1];
     var busyAll0 = React.useState(false); var busyAll = busyAll0[0]; var setBusyAll = busyAll0[1];
     var connMsg0 = React.useState(''); var connMsg = connMsg0[0]; var setConnMsg = connMsg0[1];
+    var sheetUrl0 = React.useState(getSheetLink ? getSheetLink() : ''); var sheetUrl = sheetUrl0[0]; var setSheetUrlSt = sheetUrl0[1];
+    var sheetSavedMsg0 = React.useState(''); var sheetSavedMsg = sheetSavedMsg0[0]; var setSheetSavedMsg = sheetSavedMsg0[1];
 
     function saveUrl() {
       setUrl(url.trim());
       setSavedMsg('✓ Saved');
       setTimeout(function(){ setSavedMsg(''); }, 2500);
+    }
+    function saveSheetUrl() {
+      if (!setSheetLink) return;
+      setSheetLink(sheetUrl.trim());
+      setSheetSavedMsg('✓ Saved');
+      setTimeout(function(){ setSheetSavedMsg(''); }, 2500);
     }
     function setOne(id, patch) {
       setRowStatus(function(prev) { var o = Object.assign({}, prev); o[id] = Object.assign({}, o[id], patch); return o; });
@@ -9537,6 +9556,16 @@ function DataBackendTab() {
         ),
         connMsg && e2('div', { style:{ fontSize:12, fontWeight:600, marginTop:4, color:connMsg.charAt(0)==='❌'?'#C62828':'#2E7D32' } }, connMsg)
       ),
+      getSheetLink && e2('div', { style:card },
+        e2('div', { style:{ fontSize:13, fontWeight:700, color:'#1A237E', marginBottom:6 } }, 'Google Sheet Link'),
+        e2('div', { style:{ fontSize:11, color:'#6B7280', marginBottom:10, lineHeight:1.6 } }, 'Paste the normal link of this Sheet (the one you see in your browser when you have it open) so you can jump straight to it — this is separate from the Web App URL above.'),
+        e2('div', { style:{ display:'flex', gap:8, marginBottom:8 } },
+          e2('input', { type:'text', value:sheetUrl, onChange:function(ev){ setSheetUrlSt(ev.target.value); },
+            placeholder:'https://docs.google.com/spreadsheets/d/.../edit', style:iS }),
+          e2('button', { onClick:saveSheetUrl, style:Object.assign({}, btn, { background:'#1A237E', color:'#fff' }) }, sheetSavedMsg || 'Save Link'),
+          getSheetLink() && e2('button', { onClick:function(){ window.open(getSheetLink(), '_blank'); }, style:Object.assign({}, btn, { background:'#2E7D32', color:'#fff' }) }, '🔗 Open Sheet')
+        )
+      ),
       e2('div', { style:card },
         e2('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', marginBottom:14 } },
           e2('div', { style:{ fontSize:13, fontWeight:700, color:'#1A237E' } }, 'Modules'),
@@ -9571,10 +9600,10 @@ function DataBackendTab() {
     e2(AppDataTransferPanel, null),
 
     e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:4 } }, '1. Main Backend — everything except Inventory'),
-    e2(BackendGroup, { modules: KBDC_BACKEND_MODULES, getUrl: kbdcBackendUrl, setUrl: kbdcSetBackendUrl, reqFn: kbdcBackendReq, pushLabel: '⬆ Push Everything Now' }),
+    e2(BackendGroup, { modules: KBDC_BACKEND_MODULES, getUrl: kbdcBackendUrl, setUrl: kbdcSetBackendUrl, reqFn: kbdcBackendReq, pushLabel: '⬆ Push Everything Now', getSheetLink: kbdcSheetLink, setSheetLink: kbdcSetSheetLink }),
 
     e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:8 } }, '2. Inventory Backend — its own separate Sheet'),
-    e2(BackendGroup, { modules: KBDC_INVENTORY_MODULES, getUrl: kbdcInvBackendUrl, setUrl: kbdcSetInvBackendUrl, reqFn: kbdcInvBackendReq, pushLabel: '⬆ Push Inventory Now' }),
+    e2(BackendGroup, { modules: KBDC_INVENTORY_MODULES, getUrl: kbdcInvBackendUrl, setUrl: kbdcSetInvBackendUrl, reqFn: kbdcInvBackendReq, pushLabel: '⬆ Push Inventory Now', getSheetLink: kbdcInvSheetLink, setSheetLink: kbdcSetInvSheetLink }),
 
     e2('div', { style:{ background:'#E8F5E9', borderRadius:12, border:'1px solid #A5D6A7', padding:'16px 18px' } },
       e2('div', { style:{ fontSize:12, fontWeight:700, color:'#2E7D32', marginBottom:8 } }, 'Setup Guide (one-time, repeat for each Sheet above)'),
