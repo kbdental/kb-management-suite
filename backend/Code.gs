@@ -33,19 +33,44 @@ function doPost(e) {
   }
 
   var action = body.action;
-  var sheetName = sanitizeSheetName(body.sheet || 'Data');
 
   try {
     if (action === 'ping') {
       return respond({ ok: true, time: new Date().toISOString() });
     }
     if (action === 'saveAll') {
+      var sheetName = sanitizeSheetName(body.sheet || 'Data');
       var rows = body.rows || [];
       saveAllRows(sheetName, rows);
       return respond({ ok: true, saved: rows.length });
     }
     if (action === 'getData') {
-      return respond({ ok: true, rows: readAllRows(sheetName) });
+      var sheetName2 = sanitizeSheetName(body.sheet || 'Data');
+      return respond({ ok: true, rows: readAllRows(sheetName2) });
+    }
+    if (action === 'saveBatch') {
+      // Pushes many sheets in one Apps Script execution instead of one
+      // execution per module — several devices polling every ~30s all day
+      // would otherwise add up to tens of thousands of executions and risk
+      // hitting quota limits.
+      var modules = body.modules || {};
+      var savedCounts = {};
+      Object.keys(modules).forEach(function(name) {
+        var sn = sanitizeSheetName(name);
+        var mrows = modules[name] || [];
+        saveAllRows(sn, mrows);
+        savedCounts[name] = mrows.length;
+      });
+      return respond({ ok: true, saved: savedCounts });
+    }
+    if (action === 'getBatch') {
+      var sheetNames = body.sheets || [];
+      var data = {};
+      sheetNames.forEach(function(name) {
+        var sn2 = sanitizeSheetName(name);
+        data[name] = readAllRows(sn2);
+      });
+      return respond({ ok: true, data: data });
     }
     return respond({ ok: false, error: 'Unknown action: ' + action });
   } catch (err) {
@@ -101,7 +126,14 @@ function saveAllRows(sheetName, rows) {
     }));
   });
 
-  sheet.getRange(1, 1, data.length, headers.length).setValues(data);
+  var range = sheet.getRange(1, 1, data.length, headers.length);
+  // Force plain-text formatting before writing, so a numeric-looking value
+  // (a PIN like "0000", an employee code, a phone number with a leading
+  // zero) is never silently turned into a real number and lose its exact
+  // form — Sheets applies its "smart" number detection based on the cell's
+  // format at write time, so this has to be set before setValues().
+  range.setNumberFormat('@');
+  range.setValues(data);
   sheet.setFrozenRows(1);
   sheet.autoResizeColumns(1, headers.length);
 }

@@ -3106,7 +3106,7 @@ function TaskListView({
       }
       localStorage.setItem('kbdc_task_log', JSON.stringify(log));
     } catch(e) {}
-    kbdcAutoPushTasks();
+    kbdcAutoSyncMain();
   }
 
   const handleCSVUpload = () => {
@@ -9413,11 +9413,12 @@ function kbdcAppraisalRows() {
 function kbdcAllocRows() {
   var alloc = {};
   try { alloc = JSON.parse(localStorage.getItem('kbdc_la_alloc') || '{}'); } catch(e) {}
+  var updatedAt = localStorage.getItem('kbdc_la_alloc_updatedAt') || '';
   var rows = [];
   Object.keys(alloc).forEach(function(name) {
     var byType = alloc[name] || {};
     Object.keys(byType).forEach(function(type) {
-      rows.push({ staffName: name, leaveType: type, allocatedDays: byType[type] });
+      rows.push({ staffName: name, leaveType: type, allocatedDays: byType[type], updatedAt: updatedAt });
     });
   });
   return rows;
@@ -9459,31 +9460,8 @@ function kbdcTasksRowsToByRole(rows) {
   });
   return byRole;
 }
-async function kbdcAutoPushTasks() {
-  if (!kbdcBackendUrl()) return;
-  try {
-    // Pushes every Main-backend module (Tasks, Attendance, Leaves, Payroll,
-    // Claims, Advances, Ideas, Assets, Onboarding, Separations, Trainings,
-    // Appraisals, Achievers, Leave Allocations, Form Responses) — not just
-    // Tasks — so any admin action anywhere reaches the shared Sheet.
-    var mods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
-    for (var i = 0; i < mods.length; i++) {
-      var rows = mods[i].get().map(kbdcFlattenRow);
-      if (!rows.length) continue; // never push emptiness over whatever the Sheet already has
-      await kbdcBackendReq(mods[i].sheet, 'saveAll', { rows: rows });
-    }
-  } catch (e) {}
-}
-async function kbdcAutoPushInventory() {
-  if (!kbdcInvBackendUrl()) return;
-  try {
-    for (var i = 0; i < KBDC_INVENTORY_MODULES.length; i++) {
-      var mod = KBDC_INVENTORY_MODULES[i];
-      var rows = mod.get().map(kbdcFlattenRow);
-      if (!rows.length) continue;
-      await kbdcInvBackendReq(mod.sheet, 'saveAll', { rows: rows });
-    }
-  } catch (e) {}
+async function kbdcBackendReqBatch(url, action, payload) {
+  return kbdcBackendReqAt(url, null, action, payload);
 }
 function kbdcMergeStaffByRecency(localRows, remoteRows) {
   // Per-record "whoever edited more recently wins", using the updatedAt
@@ -9505,159 +9483,188 @@ function kbdcMergeStaffByRecency(localRows, remoteRows) {
   remoteRows.forEach(function(r){ if (r.id && !localIds[r.id]) merged.push(r); });
   return merged;
 }
-async function kbdcAutoPushStaff() {
-  if (!kbdcBackendUrl()) return;
-  try {
-    var localRows = kbdcLsArray('kbdc_hr_staff');
-    if (!localRows.length) return; // never push an empty local list over a real remote one
-    var d = await kbdcBackendReq('StaffFull', 'getData', {});
-    var remoteRows = (d.rows || []).map(kbdcUnflattenRow);
-    var merged = remoteRows.length ? kbdcMergeStaffByRecency(localRows, remoteRows) : localRows;
-    var mergedJson = JSON.stringify(merged);
-    if (localStorage.getItem('kbdc_hr_staff') !== mergedJson) {
-      localStorage.setItem('kbdc_hr_staff', mergedJson);
-      localStorage.setItem('kbdc_shared_staff', mergedJson);
-      window.dispatchEvent(new Event('kbdc-staff-sync'));
+// For record types with no per-record updatedAt (Attendance, Leave
+// Requests, Inventory items/transactions, etc.): keep everything local has
+// (so a just-added record that hasn't been pushed yet can never be dropped
+// by a pull that runs moments later) and fold in anything that exists ONLY
+// remotely (another device's addition). Field-level edits to the SAME id
+// from two devices at once aren't resolved here — that needs real
+// timestamps like Staff has — but new records are never silently lost.
+function kbdcUnionMergeById(localRows, remoteRows) {
+  var localIds = {};
+  localRows.forEach(function(r){ if (r.id) localIds[r.id] = true; });
+  var merged = localRows.slice();
+  var localFingerprints = null; // built lazily — only records that lack an id need this
+  remoteRows.forEach(function(r){
+    if (r.id) {
+      if (!localIds[r.id]) merged.push(r);
+      return;
     }
-    await kbdcBackendReq('StaffFull', 'saveAll', { rows: merged.map(kbdcFlattenRow) });
-  } catch (e) {}
-}
-// Small key/value store for single-value clinic settings (e.g. Week Off days)
-// that don't fit the "array of records" shape every other module uses.
-async function kbdcAutoPushSettings() {
-  if (!kbdcBackendUrl()) return;
-  try {
-    await kbdcBackendReq('ClinicSettings', 'saveAll', { rows: [
-      { key: 'weekOffDays', value: JSON.stringify(laGetWeekOff()) }
-    ] });
-  } catch (e) {}
-}
-async function kbdcAutoPullSettings() {
-  if (!kbdcBackendUrl()) return;
-  try {
-    var d = await kbdcBackendReq('ClinicSettings', 'getData', {});
-    var row = (d.rows || []).find(function(r){ return r.key === 'weekOffDays'; });
-    if (!row || !row.value) return;
-    var parsed;
-    try { parsed = JSON.parse(row.value); } catch(e) { return; }
-    if (!Array.isArray(parsed) || !parsed.length) return;
-    var next = JSON.stringify(parsed);
-    if (localStorage.getItem('kbdc_la_weekoff') !== next) {
-      localStorage.setItem('kbdc_la_weekoff', next);
-      window.dispatchEvent(new Event('kbdc-modules-sync'));
+    // Some record types (Attendance, older records) have no id at all —
+    // falling back to "has no id, so it never matches" would silently drop
+    // every id-less remote record every cycle. Dedupe by exact content
+    // instead, so a genuinely new record still gets folded in.
+    if (!localFingerprints) {
+      localFingerprints = {};
+      localRows.forEach(function(lr){ localFingerprints[JSON.stringify(lr)] = true; });
     }
-  } catch (e) {}
+    var fp = JSON.stringify(r);
+    if (!localFingerprints[fp]) { merged.push(r); localFingerprints[fp] = true; }
+  });
+  return merged;
 }
-async function kbdcAutoPullTasks() {
-  if (!kbdcBackendUrl()) return;
+// Everything for the Main backend travels in ONE getBatch + ONE saveBatch
+// call instead of one Apps Script execution per module (Staff, Tasks,
+// TaskCompletions, Attendance, Leaves, Payroll, Claims, Advances, Ideas,
+// Assets, Onboarding, Separations, Trainings, Appraisals, Achievers,
+// LeaveAllocations, FormResponses, ClinicSettings) — with several devices
+// polling every ~30s all day, one call per module adds up to tens of
+// thousands of Apps Script executions a day and risks hitting quota limits;
+// batching keeps it to a small, constant number regardless of module count.
+async function kbdcAutoSyncMain() {
+  var url = kbdcBackendUrl();
+  if (!url) return;
   try {
-    var taskData = await kbdcBackendReq('Tasks', 'getData', {});
-    var logData = await kbdcBackendReq('TaskCompletions', 'getData', {});
-    var byRole = kbdcTasksRowsToByRole(taskData.rows || []);
-    var changed = false;
-    // Only touches roles present in the pulled data — roles absent from the
-    // Sheet (e.g. it hasn't been seeded yet) are left completely untouched,
-    // so an empty/unready Sheet can never wipe real local task lists.
+    var pushMods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
+    var sheetNames = ['StaffFull', 'ClinicSettings'].concat(pushMods.map(function(m){ return m.sheet; }));
+    var got = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
+    var remote = got.data || {};
+
+    // ---- Staff: merge-by-recency so a stale device can never clobber a
+    // fresher edit made elsewhere (see kbdcMergeStaffByRecency above) ----
+    var localStaff = kbdcLsArray('kbdc_hr_staff');
+    var remoteStaff = (remote['StaffFull'] || []).map(kbdcUnflattenRow);
+    var staffForLocal = null;
+    if (localStaff.length && remoteStaff.length) staffForLocal = kbdcMergeStaffByRecency(localStaff, remoteStaff);
+    else if (remoteStaff.length) staffForLocal = remoteStaff; // brand-new device — adopt remote
+    else if (localStaff.length) staffForLocal = localStaff; // nothing remote yet — keep local
+    if (staffForLocal) {
+      var staffJson = JSON.stringify(staffForLocal);
+      if (localStorage.getItem('kbdc_hr_staff') !== staffJson) {
+        localStorage.setItem('kbdc_hr_staff', staffJson);
+        localStorage.setItem('kbdc_shared_staff', staffJson);
+        window.dispatchEvent(new Event('kbdc-staff-sync'));
+      }
+    }
+
+    // ---- Tasks: per-role pull-merge — only touches roles present in the
+    // pulled data, so an empty/unready Sheet can never wipe real local
+    // task lists ----
+    var byRole = kbdcTasksRowsToByRole(remote['Tasks'] || []);
+    var tasksChanged = false;
     Object.keys(byRole).forEach(function(code) {
-      var next = JSON.stringify(byRole[code]);
-      if (localStorage.getItem('kbdc_tasks_' + code) !== next) { localStorage.setItem('kbdc_tasks_' + code, next); changed = true; }
+      var nextT = JSON.stringify(byRole[code]);
+      if (localStorage.getItem('kbdc_tasks_' + code) !== nextT) { localStorage.setItem('kbdc_tasks_' + code, nextT); tasksChanged = true; }
     });
-    var logRows = logData.rows || [];
-    if (logRows.length) {
-      var nextLog = JSON.stringify(logRows);
-      if (localStorage.getItem('kbdc_task_log') !== nextLog) { localStorage.setItem('kbdc_task_log', nextLog); changed = true; }
+    var remoteLogRows = remote['TaskCompletions'] || [];
+    if (remoteLogRows.length) {
+      var nextLog = JSON.stringify(remoteLogRows);
+      if (localStorage.getItem('kbdc_task_log') !== nextLog) { localStorage.setItem('kbdc_task_log', nextLog); tasksChanged = true; }
     }
-    if (changed) window.dispatchEvent(new Event('kbdc-tasks-sync'));
-  } catch (e) {}
-}
-async function kbdcAutoPullGenericModules() {
-  if (!kbdcBackendUrl()) return;
-  try {
-    // Every simple flat-array module (Attendance, Leaves, Payroll, Claims,
-    // Advances, Ideas, Assets, Onboarding, Separations, Trainings) — Tasks and
-    // TaskCompletions are handled separately above since Tasks needs
-    // per-role grouping, and Staff has its own full-fidelity channel.
-    var mods = KBDC_BACKEND_MODULES.filter(function(m){ return m.localKey && m.id !== 'taskcompletions'; });
-    var changed = false;
-    for (var i = 0; i < mods.length; i++) {
-      var mod = mods[i];
-      var d = await kbdcBackendReq(mod.sheet, 'getData', {});
-      var rows = (d.rows || []).map(kbdcUnflattenRow);
-      if (!rows.length) continue; // never blank out real local data with an empty/unseeded sheet
-      var next = JSON.stringify(rows);
-      if (localStorage.getItem(mod.localKey) !== next) { localStorage.setItem(mod.localKey, next); changed = true; }
-    }
-    if (changed) window.dispatchEvent(new Event('kbdc-modules-sync'));
-  } catch (e) {}
-}
-async function kbdcAutoPullLeaveAlloc() {
-  if (!kbdcBackendUrl()) return;
-  try {
-    var d = await kbdcBackendReq('LeaveAllocations', 'getData', {});
-    var rows = d.rows || [];
-    if (!rows.length) return; // Sheet not seeded yet — never blank out real local allocations
-    var alloc = {};
-    rows.forEach(function(r) {
-      if (!r.staffName || !r.leaveType) return;
-      if (!alloc[r.staffName]) alloc[r.staffName] = {};
-      alloc[r.staffName][r.leaveType] = Number(r.allocatedDays) || 0;
+    if (tasksChanged) window.dispatchEvent(new Event('kbdc-tasks-sync'));
+
+    // ---- Generic flat-array modules (Attendance, Leaves, Payroll, Claims,
+    // Advances, Ideas, Assets, Onboarding, Separations, Trainings) — union
+    // merge by id, not a blind overwrite, so a record added locally just
+    // before this cycle ran can never be wiped out by an older remote
+    // snapshot that hasn't seen it yet. ----
+    var genericChanged = false;
+    pushMods.filter(function(m){ return m.localKey && m.id !== 'taskcompletions'; }).forEach(function(m) {
+      var remoteRows = (remote[m.sheet] || []).map(kbdcUnflattenRow);
+      var localRows = kbdcLsArray(m.localKey);
+      var mergedRows = kbdcUnionMergeById(localRows, remoteRows);
+      var nextG = JSON.stringify(mergedRows);
+      if (localStorage.getItem(m.localKey) !== nextG) { localStorage.setItem(m.localKey, nextG); genericChanged = true; }
     });
-    var next = JSON.stringify(alloc);
-    if (localStorage.getItem('kbdc_la_alloc') !== next) {
-      localStorage.setItem('kbdc_la_alloc', next);
-      window.dispatchEvent(new Event('kbdc-modules-sync'));
+    if (genericChanged) window.dispatchEvent(new Event('kbdc-modules-sync'));
+
+    // ---- Leave Allocation — custom reverse mapping (staff-name/leave-type
+    // keyed object, not a plain array). Single-value settings like this
+    // have no per-record id to union-merge, so — same as Staff — compare
+    // the updatedAt stamp laSaveAlloc() sets on every save: only adopt
+    // remote if it's genuinely newer than what was just saved locally. ----
+    var allocRows = remote['LeaveAllocations'] || [];
+    var remoteAllocAt = allocRows.length ? allocRows[0].updatedAt : '';
+    var remoteAllocTime = remoteAllocAt ? new Date(remoteAllocAt).getTime() : 0;
+    var localAllocTime = (function(){ var t = localStorage.getItem('kbdc_la_alloc_updatedAt'); return t ? new Date(t).getTime() : 0; })();
+    if (allocRows.length && remoteAllocTime >= localAllocTime) {
+      var alloc = {};
+      allocRows.forEach(function(r) {
+        if (!r.staffName || !r.leaveType) return;
+        if (!alloc[r.staffName]) alloc[r.staffName] = {};
+        alloc[r.staffName][r.leaveType] = Number(r.allocatedDays) || 0;
+      });
+      var nextAlloc = JSON.stringify(alloc);
+      if (localStorage.getItem('kbdc_la_alloc') !== nextAlloc) {
+        localStorage.setItem('kbdc_la_alloc', nextAlloc);
+        localStorage.setItem('kbdc_la_alloc_updatedAt', remoteAllocAt || new Date().toISOString());
+        window.dispatchEvent(new Event('kbdc-modules-sync'));
+      }
     }
+
+    // ---- Settings (Week Off days) — single key/value row. Same
+    // timestamp-comparison reasoning as Leave Allocation above. ----
+    var settingsRows = remote['ClinicSettings'] || [];
+    var weekOffRow = settingsRows.filter(function(r){ return r.key === 'weekOffDays'; })[0];
+    var remoteWeekOffTime = (weekOffRow && weekOffRow.updatedAt) ? new Date(weekOffRow.updatedAt).getTime() : 0;
+    var localWeekOffTime = (function(){ var t = localStorage.getItem('kbdc_la_weekoff_updatedAt'); return t ? new Date(t).getTime() : 0; })();
+    if (weekOffRow && weekOffRow.value && remoteWeekOffTime >= localWeekOffTime) {
+      try {
+        var parsedWO = JSON.parse(weekOffRow.value);
+        if (Array.isArray(parsedWO) && parsedWO.length) {
+          var nextW = JSON.stringify(parsedWO);
+          if (localStorage.getItem('kbdc_la_weekoff') !== nextW) {
+            localStorage.setItem('kbdc_la_weekoff', nextW);
+            localStorage.setItem('kbdc_la_weekoff_updatedAt', weekOffRow.updatedAt || new Date().toISOString());
+            window.dispatchEvent(new Event('kbdc-modules-sync'));
+          }
+        }
+      } catch(e) {}
+    }
+
+    // ---- Push everything (post-merge state) in ONE batched call ----
+    var pushPayload = {};
+    var staffToPush = staffForLocal || localStaff;
+    if (staffToPush && staffToPush.length) pushPayload['StaffFull'] = staffToPush.map(kbdcFlattenRow);
+    pushMods.forEach(function(m) {
+      var rows = m.get().map(kbdcFlattenRow);
+      if (rows.length) pushPayload[m.sheet] = rows;
+    });
+    pushPayload['ClinicSettings'] = [{ key: 'weekOffDays', value: JSON.stringify(laGetWeekOff()), updatedAt: localStorage.getItem('kbdc_la_weekoff_updatedAt') || '' }];
+    await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
   } catch (e) {}
 }
-async function kbdcAutoPullInventory() {
-  if (!kbdcInvBackendUrl()) return;
+async function kbdcAutoSyncInventory() {
+  var url = kbdcInvBackendUrl();
+  if (!url) return;
   try {
-    var itemsData = await kbdcInvBackendReq('InventoryItems', 'getData', {});
-    var txData = await kbdcInvBackendReq('InventoryTransactions', 'getData', {});
-    var itemRows = (itemsData.rows || []).map(kbdcUnflattenRow);
-    var txRows = (txData.rows || []).map(kbdcUnflattenRow);
-    // Guard: an empty response (Sheet not seeded yet, or a transient hiccup)
-    // must never overwrite real local inventory data with nothing.
-    if (itemRows.length) {
-      var nextItems = JSON.stringify(itemRows);
-      if (localStorage.getItem('kbdc_inv_items') !== nextItems) localStorage.setItem('kbdc_inv_items', nextItems);
-    }
-    if (txRows.length) {
-      var nextTx = JSON.stringify(txRows);
-      if (localStorage.getItem('kbdc_inv_tx') !== nextTx) localStorage.setItem('kbdc_inv_tx', nextTx);
-    }
-  } catch (e) {}
-}
-async function kbdcAutoPullStaff() {
-  if (!kbdcBackendUrl()) return;
-  try {
-    var d = await kbdcBackendReq('StaffFull', 'getData', {});
-    var rows = (d.rows || []).map(kbdcUnflattenRow);
-    if (!rows.length) return; // Sheet not seeded yet — never blank out real local staff data
-    var next = JSON.stringify(rows);
-    if (localStorage.getItem('kbdc_hr_staff') !== next) {
-      localStorage.setItem('kbdc_hr_staff', next);
-      localStorage.setItem('kbdc_shared_staff', next);
-      window.dispatchEvent(new Event('kbdc-staff-sync'));
-    }
+    var sheetNames = KBDC_INVENTORY_MODULES.map(function(m){ return m.sheet; });
+    var got = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
+    var remote = got.data || {};
+    // Union merge by id — a stock in/out just recorded locally (not pushed
+    // yet) must never be wiped out by an older remote snapshot that hasn't
+    // seen it. Field-level qty conflicts on the SAME item id from two
+    // devices at once aren't resolved here (no per-item timestamp), but a
+    // whole new record can never silently disappear.
+    KBDC_INVENTORY_MODULES.forEach(function(m) {
+      var remoteRows = (remote[m.sheet] || []).map(kbdcUnflattenRow);
+      var localKey = m.id === 'invitems' ? 'kbdc_inv_items' : 'kbdc_inv_tx';
+      var localRows = kbdcLsArray(localKey);
+      var mergedRows = kbdcUnionMergeById(localRows, remoteRows);
+      var next = JSON.stringify(mergedRows);
+      if (localStorage.getItem(localKey) !== next) localStorage.setItem(localKey, next);
+    });
+    var pushPayload = {};
+    KBDC_INVENTORY_MODULES.forEach(function(m) {
+      var rows = m.get().map(kbdcFlattenRow);
+      if (rows.length) pushPayload[m.sheet] = rows;
+    });
+    await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
   } catch (e) {}
 }
 async function kbdcAutoSyncCycle() {
-  // Push before pull: a just-made local edit (e.g. an employee's PIN changed
-  // in HR Admin) must reach the Sheet before a pull can happen, otherwise the
-  // pull would silently overwrite the fresh edit with the older remote value.
-  // Every push above already skips modules with no local rows, so a
-  // brand-new/empty device still can't wipe real Sheet data by pushing first.
-  await kbdcAutoPushStaff();
-  await kbdcAutoPushTasks();
-  await kbdcAutoPushInventory();
-  await kbdcAutoPushSettings();
-  await kbdcAutoPullStaff();
-  await kbdcAutoPullTasks();
-  await kbdcAutoPullInventory();
-  await kbdcAutoPullGenericModules();
-  await kbdcAutoPullLeaveAlloc();
-  await kbdcAutoPullSettings();
+  await kbdcAutoSyncMain();
+  await kbdcAutoSyncInventory();
 }
 
 function AppDataTransferPanel() {
@@ -20472,9 +20479,9 @@ function LA_CircleProgress({used,total,color}){
 }
 
 function laGetAlloc(){try{return JSON.parse(localStorage.getItem('kbdc_la_alloc')||'{}');}catch(e){return{};}}
-function laSaveAlloc(a){try{localStorage.setItem('kbdc_la_alloc',JSON.stringify(a));}catch(e){}}
+function laSaveAlloc(a){try{localStorage.setItem('kbdc_la_alloc',JSON.stringify(a));localStorage.setItem('kbdc_la_alloc_updatedAt',new Date().toISOString());}catch(e){}}
 function laGetWeekOff(){try{var w=localStorage.getItem('kbdc_la_weekoff');return w?JSON.parse(w):[0,6];}catch(e){return[0,6];}}
-function laSaveWeekOff(days){try{localStorage.setItem('kbdc_la_weekoff',JSON.stringify(days));}catch(e){}}
+function laSaveWeekOff(days){try{localStorage.setItem('kbdc_la_weekoff',JSON.stringify(days));localStorage.setItem('kbdc_la_weekoff_updatedAt',new Date().toISOString());}catch(e){}}
 function laGetStaffAlloc(alloc,sName,type){if(alloc[sName]&&alloc[sName][type]!=null)return alloc[sName][type];var def={'Casual Leave':12,'Sick / Medical Leave':12,'Medical Leave':12};return def[type]!=null?def[type]:0;}
 
 function laMigrateLeaveTypes(){
@@ -21812,17 +21819,21 @@ function App() {
   }
     /* Sync HR Admin → role cards on every open */
   React.useEffect(function(){ kbdcMigrateLegacyDentalOpsData(); kbdcSyncRoleEmployeesFromHR(); }, []);
-  /* Staff list must sync even before login, so a brand-new device's login
-     dropdown fills in with the real team as soon as the Sheet has it. */
-  React.useEffect(function(){
-    kbdcAutoPullStaff();
-    var id = setInterval(kbdcAutoPullStaff, 30000);
-    return function(){ clearInterval(id); };
-  }, []);
   const [nav, setNav] = useState('home');
   const [session, setSession] = useState(()=>kbdcGetSession());
   const [appUser, setAppUser] = useState(null);
   const [pinGate, setPinGate] = useState(null); // { appId, appName }
+
+  /* Staff list must sync even before login, so a brand-new device's login
+     dropdown fills in with the real team as soon as the Sheet has it. Stops
+     once logged in — the session-gated cycle below takes over from there,
+     so the two don't both poll the same backend at once. */
+  React.useEffect(function(){
+    if (session) return;
+    kbdcAutoSyncMain();
+    var id = setInterval(kbdcAutoSyncMain, 30000);
+    return function(){ clearInterval(id); };
+  }, [session]);
 
   React.useEffect(function(){
     if (!session) return;
