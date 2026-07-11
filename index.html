@@ -9288,9 +9288,14 @@ function SettingsClientPanel() {
 }
 
 /* ═══════════════ DATA BACKEND (Google Sheets sync) ═══════════════ */
-function kbdcBackendUrl() { try { return localStorage.getItem('kbdc_backend_url') || ''; } catch(e) { return ''; } }
+// Built into the app so every device connects to the shared clinic Sheet
+// automatically, with no per-device setup step. Settings → Data Backend can
+// still override these (e.g. if the clinic ever moves to a new Sheet).
+var KBDC_DEFAULT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbxfxWxPM4kk4Fa242Ewj2T9ktPsn3irBZjAxhWHCaEZkA0CG1ULBZED7PZWVD22cyDO/exec';
+var KBDC_DEFAULT_INV_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbw5XgC4jJWR3W7fdyLFKYYkd3fZyIeL3xbfzfSy3f_nmuOKLhP0rYjwLq_9ttQ8tjxRrA/exec';
+function kbdcBackendUrl() { try { return localStorage.getItem('kbdc_backend_url') || KBDC_DEFAULT_BACKEND_URL; } catch(e) { return KBDC_DEFAULT_BACKEND_URL; } }
 function kbdcSetBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url', u || ''); } catch(e) {} }
-function kbdcInvBackendUrl() { try { return localStorage.getItem('kbdc_backend_url_inventory') || ''; } catch(e) { return ''; } }
+function kbdcInvBackendUrl() { try { return localStorage.getItem('kbdc_backend_url_inventory') || KBDC_DEFAULT_INV_BACKEND_URL; } catch(e) { return KBDC_DEFAULT_INV_BACKEND_URL; } }
 function kbdcSetInvBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_inventory', u || ''); } catch(e) {} }
 function kbdcSheetLink() { try { return localStorage.getItem('kbdc_sheet_link') || ''; } catch(e) { return ''; } }
 function kbdcSetSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link', u || ''); } catch(e) {} }
