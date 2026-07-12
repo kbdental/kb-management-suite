@@ -22,6 +22,16 @@ body{background:#F5F6FA}
 
 /* ── SIDEBAR ── */
 .sb{width:210px;min-width:210px;background:#1357A6;display:flex;flex-direction:column;overflow-y:auto}
+.sb-mobile-toggle{display:none}
+.sb-mobile-backdrop{display:none}
+@media (max-width: 768px){
+  .sb-mobile-toggle{display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:8px;background:#EEF2FF;border:1.5px solid #C7D2FE;color:#1A237E;cursor:pointer;font-size:17px;flex-shrink:0;margin-right:8px}
+  .sb{position:fixed;top:0;left:0;height:100vh;z-index:2001;transform:translateX(-100%);transition:transform .25s ease;box-shadow:2px 0 24px rgba(0,0,0,.3)}
+  .sb.open{transform:translateX(0)}
+  .sb-mobile-backdrop.open{display:block;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:2000}
+  .sb-mobile-close{display:flex !important}
+}
+.sb-mobile-close{display:none;align-items:center;justify-content:center;width:26px;height:26px;border-radius:6px;background:rgba(255,255,255,.15);color:#fff;cursor:pointer;font-size:14px;flex-shrink:0}
 .sb-logo{padding:12px 10px;display:flex;align-items:center;gap:9px;border-bottom:1px solid rgba(255,255,255,.15)}
 .sb-logo-img{width:46px;height:46px;border-radius:50%;border:2px solid rgba(255,255,255,.4);background:#0D47A1;display:flex;align-items:center;justify-content:center;flex-shrink:0;overflow:hidden}
 .sb-clinic{font-size:11px;font-weight:700;color:#fff;line-height:1.3}
@@ -1948,11 +1958,16 @@ function sharedStaffGet() {
   // Self-heal: backfill a stable id for any staff record that never got one
   // (older bug — My Team's saveMember() didn't assign an id for new members,
   // breaking anything that looks staff up by id, e.g. Appraisals, Financial).
+  // The id is derived ONLY from the name (no random suffix) — this function
+  // runs on every device and on nearly every page mount, so a random suffix
+  // would assign a DIFFERENT id each time it ran, orphaning anything already
+  // keyed to a previous id (e.g. today's Attendance record for that
+  // employee would stop matching and silently look "unmarked").
   var neededBackfill = false;
   raw = raw.map(function(m) {
     if (m.id) return m;
     neededBackfill = true;
-    return Object.assign({}, m, { id: 'MTGEN_' + (m.name||'').replace(/\s+/g,'_') + '_' + Math.random().toString(36).slice(2,7) });
+    return Object.assign({}, m, { id: 'MTGEN_' + (m.name||'unknown').trim().toLowerCase().replace(/[^a-z0-9]+/g,'_') });
   });
   if (neededBackfill) {
     try { localStorage.setItem('kbdc_hr_staff', JSON.stringify(raw)); } catch(e) {}
@@ -2310,7 +2325,8 @@ function LoginGate({onLogin}){
   );
 }
 
-function Sidebar({active, onNav, session, onLogout}) {
+function Sidebar({active, onNav, session, onLogout, mobileOpen, onCloseMobile}) {
+  function navAndClose(id){ onNav(id); if (onCloseMobile) onCloseMobile(); }
   const [,sbForceRefresh] = React.useState(0);
   React.useEffect(function(){
     function onSheetLinkSync(){ sbForceRefresh(function(n){ return n+1; }); }
@@ -2325,16 +2341,17 @@ function Sidebar({active, onNav, session, onLogout}) {
   const userName = session ? session.name : 'K.B. Dental';
   const userInitials = userName.trim().split(' ').map(w=>w[0]||'').join('').toUpperCase().slice(0,2)||'KB';
   const userRole = session ? (isOwner ? 'Owner / Admin' : (session.roleCode||'Staff')) : '';
-  return React.createElement("div",{className:"sb"},
-    React.createElement("div",{className:"sb-logo"},React.createElement(Logo,null),React.createElement("div",null,React.createElement("div",{className:"sb-clinic"},"K. B. DENTAL CLINIC"),React.createElement("div",{className:"sb-suite"},"Management Suite"))),
+  return React.createElement("div",{className:"sb"+(mobileOpen?' open':'')},
+    React.createElement("div",{className:"sb-logo"},React.createElement(Logo,null),React.createElement("div",{style:{flex:1,minWidth:0}},React.createElement("div",{className:"sb-clinic"},"K. B. DENTAL CLINIC"),React.createElement("div",{className:"sb-suite"},"Management Suite")),
+      React.createElement("div",{className:"sb-mobile-close",onClick:onCloseMobile,title:"Close menu"},"✕")),
     React.createElement("div",{className:"sb-grp"},"Main"),
-    navMain.map(n=>React.createElement("div",{key:n.id,className:"nav"+(active===n.id?' on':''),onClick:()=>onNav(n.id)},React.createElement(Icon,{n:n.n,s:13}),n.l)),
+    navMain.map(n=>React.createElement("div",{key:n.id,className:"nav"+(active===n.id?' on':''),onClick:()=>navAndClose(n.id)},React.createElement(Icon,{n:n.n,s:13}),n.l)),
     navApps.length>0&&React.createElement("div",{className:"sb-hr"}),
     navApps.length>0&&React.createElement("div",{className:"sb-grp"},"Apps"),
-    navApps.map(n=>React.createElement("div",{key:n.id,className:"nav"+(active===n.id?' on':''),onClick:()=>onNav(n.id)},React.createElement(Icon,{n:n.n,s:13}),n.l)),
+    navApps.map(n=>React.createElement("div",{key:n.id,className:"nav"+(active===n.id?' on':''),onClick:()=>navAndClose(n.id)},React.createElement(Icon,{n:n.n,s:13}),n.l)),
     navAcct.length>0&&React.createElement("div",{className:"sb-hr"}),
     navAcct.length>0&&React.createElement("div",{className:"sb-grp"},"Account"),
-    navAcct.map(n=>React.createElement("div",{key:n.id,className:"nav"+(active===n.id?' on':''),onClick:()=>onNav(n.id)},React.createElement(Icon,{n:n.n,s:13}),n.l)),
+    navAcct.map(n=>React.createElement("div",{key:n.id,className:"nav"+(active===n.id?' on':''),onClick:()=>navAndClose(n.id)},React.createElement(Icon,{n:n.n,s:13}),n.l)),
     (kbdcSheetLink()||kbdcInvSheetLink())&&React.createElement("div",{className:"sb-hr"}),
     (kbdcSheetLink()||kbdcInvSheetLink())&&React.createElement("div",{
       className:"nav",
@@ -2373,7 +2390,7 @@ function saveActiveBranch(b) {
 
 
 
-function Topbar({ active }) {
+function Topbar({ active, onToggleSidebar }) {
   const isHome = active === 'home';
   const titles = {
     myapps:'My Applications', tasks:'Task Management', leave:'Leave & Attendance',
@@ -2401,6 +2418,7 @@ function Topbar({ active }) {
   const greet = greetHour < 12 ? 'Good morning' : greetHour < 17 ? 'Good afternoon' : 'Good evening';
   const dateStr = today.toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
   return React.createElement("div", { className:"topbar" },
+    React.createElement("div", { className:"sb-mobile-toggle", onClick:onToggleSidebar, title:"Menu" }, "☰"),
     React.createElement("div", null,
       isHome
         ? React.createElement(React.Fragment, null,
@@ -21940,6 +21958,7 @@ function App() {
   const [session, setSession] = useState(()=>kbdcGetSession());
   const [appUser, setAppUser] = useState(null);
   const [pinGate, setPinGate] = useState(null); // { appId, appName }
+  const [sidebarOpen, setSidebarOpen] = useState(false); // mobile drawer only — irrelevant on desktop
 
   /* Staff list must sync even before login, so a brand-new device's login
      dropdown fills in with the real team as soon as the Sheet has it. Stops
@@ -22026,9 +22045,10 @@ function App() {
 
   return React.createElement('div', { className: 'shell' },
     pinGate && React.createElement(PinGateModal, { appName: pinGate.appName, session: session, onVerified: handlePinVerified, onCancel: function(){ setPinGate(null); } }),
-    React.createElement(Sidebar, { active: nav, onNav: handleNavRequest, session: session, onLogout: handleLogout }),
+    React.createElement('div', { className: 'sb-mobile-backdrop'+(sidebarOpen?' open':''), onClick:function(){ setSidebarOpen(false); } }),
+    React.createElement(Sidebar, { active: nav, onNav: handleNavRequest, session: session, onLogout: handleLogout, mobileOpen: sidebarOpen, onCloseMobile: function(){ setSidebarOpen(false); } }),
     React.createElement('div', { className: 'main' },
-      React.createElement(Topbar, { active: nav }),
+      React.createElement(Topbar, { active: nav, onToggleSidebar: function(){ setSidebarOpen(function(v){ return !v; }); } }),
       renderMain()
     )
   );
