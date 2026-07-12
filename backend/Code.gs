@@ -34,6 +34,23 @@ function doPost(e) {
 
   var action = body.action;
 
+  // Optional shared-secret gate. If (and only if) an API_TOKEN Script Property
+  // is set on this project (Project Settings → Script Properties), every
+  // request must carry a matching body.token or it is rejected. When the
+  // property is not set, this check is skipped and the backend behaves exactly
+  // as before — so deploying this code changes nothing until a token is
+  // configured on both the backend and in the app's Settings → Data Backend.
+  try {
+    var API_TOKEN = PropertiesService.getScriptProperties().getProperty('API_TOKEN');
+    if (API_TOKEN && String(API_TOKEN).length && String(body.token || '') !== String(API_TOKEN)) {
+      return respond({ ok: false, error: 'Unauthorized: missing or invalid token.' });
+    }
+  } catch (authErr) {
+    // If Script Properties can't be read for any reason, fail closed only when
+    // we were able to determine a token was expected; otherwise allow, to avoid
+    // locking a clinic out of its own backend over a transient platform error.
+  }
+
   try {
     if (action === 'ping') {
       return respond({ ok: true, time: new Date().toISOString() });

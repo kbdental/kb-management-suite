@@ -1883,16 +1883,10 @@ const MGR_STAFF = {
 const MASTER_ROLES = [];
 const CLIENTS = [{
   clinic: 'K.B. Dental Clinic',
-  pass: 'KB2024',
+  pass: '',
   plan: 'OWNER',
   expiry: '~ Lifetime',
   badge: 'pb-owner'
-}, {
-  clinic: 'Demo Dental Clinic',
-  pass: 'demo123',
-  plan: 'TRIAL',
-  expiry: '~ Lifetime',
-  badge: 'pb-trial'
 }];
 const STAFF_TABLE = [];
 function getShareStaff() {
@@ -2245,6 +2239,29 @@ var KBDC_ALL_IDS=KBDC_APP_LIST.map(function(a){return a.id;});
 function kbdcGetSession(){try{return JSON.parse(localStorage.getItem(KBDC_SESSION_KEY)||'null');}catch(e){return null;}}
 function kbdcSaveSession(s){try{localStorage.setItem(KBDC_SESSION_KEY,JSON.stringify(s));}catch(e){}}
 function kbdcClearSession(){try{localStorage.removeItem(KBDC_SESSION_KEY);}catch(e){}}
+// Lightweight local audit trail: records who did a privileged action and when,
+// so the clinic has a "who changed what" history for sensitive changes (PIN
+// resets, payroll edits, week-off/allocation changes, master-password changes,
+// admin overrides). Kept append-only and capped so it can never grow unbounded
+// or throw. Stored locally for now; can be surfaced/synced later.
+function kbdcAudit(action,target,details){
+  try{
+    var sess=null; try{sess=JSON.parse(localStorage.getItem(KBDC_SESSION_KEY)||'null');}catch(e){}
+    var log=[]; try{log=JSON.parse(localStorage.getItem('kbdc_audit_log')||'[]');}catch(e){}
+    if(!Array.isArray(log)) log=[];
+    log.push({ts:new Date().toISOString(),actor:(sess&&sess.name)||'unknown',action:action||'',target:target||'',details:details||''});
+    if(log.length>500) log=log.slice(log.length-500);
+    localStorage.setItem('kbdc_audit_log',JSON.stringify(log));
+  }catch(e){}
+}
+// Simple per-device login throttle: after 5 wrong PIN / admin-password attempts,
+// this device is locked out of trying for 60 seconds, then resets. Stops rapid
+// guessing of a 4-digit PIN by anyone sitting at a logged-out device. A genuine
+// forgotten-PIN user just waits a minute (or asks an admin to reset). A correct
+// PIN/password always clears the counter, so real users are never locked out.
+function kbdcLoginLockRemaining(){try{var u=parseInt(localStorage.getItem('kbdc_login_lock_until')||'0',10);var r=u-Date.now();return r>0?Math.ceil(r/1000):0;}catch(e){return 0;}}
+function kbdcLoginNoteFail(){try{var fc=parseInt(localStorage.getItem('kbdc_login_fail_count')||'0',10)+1;if(fc>=5){localStorage.setItem('kbdc_login_lock_until',String(Date.now()+60000));localStorage.setItem('kbdc_login_fail_count','0');return true;}localStorage.setItem('kbdc_login_fail_count',String(fc));return false;}catch(e){return false;}}
+function kbdcLoginNoteSuccess(){try{localStorage.removeItem('kbdc_login_fail_count');localStorage.removeItem('kbdc_login_lock_until');}catch(e){}}
 function kbdcFindEmpPin(name,pin){
   try{
     var hr=JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]');
@@ -2272,6 +2289,40 @@ function kbdcGetEmpAppAccess(name){
   }catch(e){}
   return null;
 }
+// Re-derives a session's privilege fields (isOwner / roleCode / appAccess) from
+// the synced staff record every time the app loads, instead of trusting the
+// copy sitting in localStorage. Without this, anyone could open dev-tools, flip
+// isOwner to true in kbdc_suite_session, reload, and land in full owner access.
+// For a legitimate user this recomputes the *same* values their PIN login would
+// have produced, so nothing changes for them. If the staff record can't be
+// found yet (e.g. staff list hasn't synced on a fresh device), the session is
+// left untouched so a real user is never locked out. The master "Admin
+// Override" session (empId 'admin') has no staff record and is left as-is —
+// fully closing that path needs server-side auth and is deferred to the
+// planned cloud backend.
+function kbdcIsOwnerDesignation(emp){
+  return emp && (emp.designation==='Owner'||emp.designation==='Medical Director'||emp.designation==='Clinical Director'||emp.designation==='Admin Head'||emp.isOwner===true);
+}
+function kbdcReconcileSession(session){
+  try{
+    if(!session||typeof session!=='object') return session;
+    if(session.empId==='admin') return session; // master override — no staff record to derive from
+    var hr=JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]');
+    if(!Array.isArray(hr)||!hr.length) return session; // not synced yet — don't downgrade
+    var emp=hr.find(function(s){return s.id&&session.empId&&s.id===session.empId;})
+         || hr.find(function(s){return s.name&&session.name&&s.name.toLowerCase()===session.name.toLowerCase();});
+    if(!emp) return session; // unknown — leave as-is rather than lock out
+    var isOwner=kbdcIsOwnerDesignation(emp);
+    var roleCode=emp.empStatus==='Active'?(emp.role||'Staff'):'Staff';
+    var appAccess=isOwner?KBDC_ALL_IDS:(Array.isArray(emp.appAccess)?emp.appAccess:(session.appAccess||['tasks','leave']));
+    var reconciled={name:emp.name,empId:emp.id,roleCode:roleCode,appAccess:appAccess,isOwner:isOwner};
+    // Persist only if something actually changed, so a tampered copy is cleaned up.
+    if(JSON.stringify(reconciled)!==JSON.stringify(session)){
+      try{localStorage.setItem(KBDC_SESSION_KEY,JSON.stringify(reconciled));}catch(e){}
+    }
+    return reconciled;
+  }catch(e){ return session; }
+}
 
 function LoginGate({onLogin}){
   const [empName,setEmpName]=useState('');
@@ -2290,19 +2341,30 @@ function LoginGate({onLogin}){
 
   function getAdminOverridePass(){try{return localStorage.getItem('kbdc_admin_override_pwd')||'kbdc@admin';}catch(e){return 'kbdc@admin';}}
   function doAdminOverride(){
+    var lock=kbdcLoginLockRemaining();
+    if(lock>0){setOverrideErr('Too many wrong attempts. Please wait '+lock+' second'+(lock===1?'':'s')+'.');return;}
     if(overridePass===getAdminOverridePass()){
+      kbdcLoginNoteSuccess();
       const session={name:'Admin',empId:'admin',roleCode:'OWN',appAccess:KBDC_ALL_IDS,isOwner:true};
-      kbdcSaveSession(session); onLogin(session);
+      kbdcSaveSession(session); try{kbdcAudit('admin-override-login','full owner access');}catch(e){} onLogin(session);
     } else {
-      setOverrideErr('Incorrect password. Default is kbdc@admin');
+      var locked=kbdcLoginNoteFail();
+      setOverrideErr(locked?'Too many wrong attempts. Locked for 60 seconds.':'Incorrect password.');
     }
   }
   function pressKey(k){setError('');if(k==='del'){setPin(function(p){return p.slice(0,-1);});return;}if(pin.length>=6)return;setPin(function(p){return p+k;});}
   function doLogin(){
+    var lock=kbdcLoginLockRemaining();
+    if(lock>0){setError('Too many wrong attempts. Please wait '+lock+' second'+(lock===1?'':'s')+'.');return;}
     if(!empName){setError('Please select your name.');return;}
     if(pin.length<4){setError('PIN must be at least 4 digits.');return;}
     const found=kbdcFindEmpPin(empName,pin);
-    if(!found){setError('Incorrect PIN. Ask admin to set your PIN in HR Admin → Employee Master.');return;}
+    if(!found){
+      var locked=kbdcLoginNoteFail();
+      setError(locked?'Too many wrong attempts. Locked for 60 seconds.':'Incorrect PIN. Ask admin to set your PIN in HR Admin → Employee Master.');
+      return;
+    }
+    kbdcLoginNoteSuccess();
     const isOwner=found.emp.designation==='Owner'||found.emp.designation==='Medical Director'||found.emp.designation==='Clinical Director'||found.emp.designation==='Admin Head'||found.emp.isOwner===true;
     const empAccess=kbdcGetEmpAppAccess(empName);
     const appAccess=isOwner?KBDC_ALL_IDS:(empAccess||['tasks','leave']);
@@ -2347,7 +2409,7 @@ function LoginGate({onLogin}){
         },'🔑 Admin Override'),
         showAdminOverride && React.createElement('div',{style:{background:'#FFF8E1',borderRadius:10,padding:'14px 16px',textAlign:'left'}},
           React.createElement('div',{style:{fontSize:11.5,fontWeight:600,color:'#E65100',marginBottom:10}},'🔑 Admin Override Access'),
-          React.createElement('div',{style:{fontSize:10.5,color:'#78909C',marginBottom:10,lineHeight:1.6}},'For owner / initial setup only. Default password: ',React.createElement('b',null,'kbdc@admin')),
+          React.createElement('div',{style:{fontSize:10.5,color:'#78909C',marginBottom:10,lineHeight:1.6}},'For owner / initial setup only. Enter the master password set by the clinic owner.'),
           React.createElement('input',{
             type:'password',value:overridePass,
             onChange:function(e){setOverridePass(e.target.value);setOverrideErr('');},
@@ -5867,7 +5929,7 @@ function AdminTab() {
     CE("div",{className:"admin-hd-row"},CE("span",{className:"admin-title"},"Client Management"),CE("button",{className:"btn-add-client",onClick:openAdd},"+Add Client")),
     CE("div",{style:{fontSize:10.5,color:'#78909C',marginBottom:12}},clients.length+" Clinics \u2022 0 Expired"),
     CE("div",{className:"admin-kpis"},CE("div",{className:"akpi"},CE("div",{className:"akpi-num"},clients.length),CE("div",{className:"akpi-lbl"},"Total")),CE("div",{className:"akpi"},CE("div",{className:"akpi-num"},clients.length),CE("div",{className:"akpi-lbl"},"Active")),CE("div",{className:"akpi"},CE("div",{className:"akpi-num c-red"},"0"),CE("div",{className:"akpi-lbl"},"Expired")),CE("div",{className:"akpi"},CE("div",{className:"akpi-num",style:{color:'#6A1B9A'}},"1999"),CE("div",{className:"akpi-lbl"},"Monthly \u20B9"))),
-    CE("table",{className:"client-tbl"},CE("thead",null,CE("tr",null,CE("th",null,"Clinic"),CE("th",null,"Password"),CE("th",null,"Plan"),CE("th",null,"Expiry"),CE("th",null,"Actions"))),CE("tbody",null,clients.map(function(c,i){return CE("tr",{key:i},CE("td",null,c.clinic),CE("td",{style:{fontFamily:"monospace",fontSize:11,color:"#78909C"}},c.pass),CE("td",null,CE("span",{className:"plan-badge "+c.badge},c.plan)),CE("td",{style:{color:"#78909C",fontSize:11}},c.expiry),CE("td",null,CE("button",{onClick:function(){openEdit(i);},style:{padding:"3px 10px",borderRadius:5,border:"1px solid #DDE",background:"#fff",fontSize:11,cursor:"pointer"}},"Edit")));})))
+    CE("table",{className:"client-tbl"},CE("thead",null,CE("tr",null,CE("th",null,"Clinic"),CE("th",null,"Password"),CE("th",null,"Plan"),CE("th",null,"Expiry"),CE("th",null,"Actions"))),CE("tbody",null,clients.map(function(c,i){return CE("tr",{key:i},CE("td",null,c.clinic),CE("td",{style:{fontFamily:"monospace",fontSize:11,color:"#78909C"}},c.pass?"••••••":"—"),CE("td",null,CE("span",{className:"plan-badge "+c.badge},c.plan)),CE("td",{style:{color:"#78909C",fontSize:11}},c.expiry),CE("td",null,CE("button",{onClick:function(){openEdit(i);},style:{padding:"3px 10px",borderRadius:5,border:"1px solid #DDE",background:"#fff",fontSize:11,cursor:"pointer"}},"Edit")));})))
   );
 }
 /* ── Master Checklist Picker Modal ── */
@@ -9374,7 +9436,7 @@ function SettingsClientPanel() {
       React.createElement('thead',null,React.createElement('tr',null,['CLINIC','PASSWORD','PLAN','EXPIRY','ACTIONS'].map(h=>React.createElement('th',{key:h},h)))),
       React.createElement('tbody',null,clients.map((c,i)=>React.createElement('tr',{key:i},
         React.createElement('td',null,React.createElement('div',{style:{fontWeight:700,color:'#263238',fontSize:12}},c.clinic),React.createElement('div',{style:{fontSize:10,color:'#B0BEC5',marginTop:1}},c.clinicId||'')),
-        React.createElement('td',{style:{fontFamily:'monospace',fontSize:11,color:'#78909C'}},c.pass),
+        React.createElement('td',{style:{fontFamily:'monospace',fontSize:11,color:'#78909C'}},c.pass?'••••••':'—'),
         React.createElement('td',null,React.createElement('span',{className:'plan-badge '+c.badge},c.plan)),
         React.createElement('td',{style:{color:'#78909C',fontSize:11}},c.expiry),
         React.createElement('td',null,React.createElement('button',{onClick:()=>openEdit(i),style:{padding:'3px 10px',borderRadius:5,border:'1px solid #DDE',background:'#fff',fontSize:11,cursor:'pointer'}},'Edit'))
@@ -9399,6 +9461,16 @@ function kbdcBackendUrl() { try { return localStorage.getItem('kbdc_backend_url'
 function kbdcSetBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url', u || ''); } catch(e) {} }
 function kbdcInvBackendUrl() { try { return localStorage.getItem('kbdc_backend_url_inventory') || KBDC_DEFAULT_INV_BACKEND_URL; } catch(e) { return KBDC_DEFAULT_INV_BACKEND_URL; } }
 function kbdcSetInvBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_inventory', u || ''); } catch(e) {} }
+// Optional shared-secret sent with every backend request. When empty (the
+// default), the backend behaves exactly as before, so nothing breaks. When a
+// clinic sets a token here AND sets the matching API_TOKEN Script Property on
+// its Apps Script backend(s), the backend rejects any request that doesn't
+// carry the right token — so a leaked Web-App URL alone can no longer read or
+// overwrite the clinic's data. Rotating this per clinic also keeps one
+// clinic's URL from being replayed against another's backend.
+var KBDC_DEFAULT_BACKEND_TOKEN = '';
+function kbdcBackendToken() { try { return localStorage.getItem('kbdc_backend_token') || KBDC_DEFAULT_BACKEND_TOKEN; } catch(e) { return KBDC_DEFAULT_BACKEND_TOKEN; } }
+function kbdcSetBackendToken(t) { try { localStorage.setItem('kbdc_backend_token', t || ''); } catch(e) {} }
 function kbdcSheetLink() { try { return localStorage.getItem('kbdc_sheet_link') || ''; } catch(e) { return ''; } }
 function kbdcSetSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link', u || ''); } catch(e) {} }
 function kbdcInvSheetLink() { try { return localStorage.getItem('kbdc_sheet_link_inventory') || ''; } catch(e) { return ''; } }
@@ -9453,10 +9525,13 @@ async function kbdcBackendReqAt(u, sheet, action, payload) {
   // don't handle, so the real POST never goes out ("Failed to fetch"). Apps Script
   // reads the raw body via e.postData.contents regardless of the header, so this is
   // still valid JSON on the receiving end.
+  var _tok = kbdcBackendToken();
+  var _body = Object.assign({ sheet: sheet, action: action }, payload || {});
+  if (_tok) _body.token = _tok;
   var r = await fetch(u, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ sheet: sheet, action: action }, payload || {}))
+    body: JSON.stringify(_body)
   });
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
@@ -9946,6 +10021,36 @@ function DataBackendTab() {
     );
   }
 
+  function BackendSecurityCard() {
+    var t0 = React.useState(kbdcBackendToken()); var tok = t0[0]; var setTok = t0[1];
+    var m0 = React.useState(''); var msg = m0[0]; var setMsg = m0[1];
+    var open0 = React.useState(false); var open = open0[0]; var setOpen = open0[1];
+    function saveTok() {
+      kbdcSetBackendToken(tok.trim());
+      setMsg('✓ Saved. Make sure the SAME value is set as the API_TOKEN Script Property on both backends.');
+      setTimeout(function(){ setMsg(''); }, 6000);
+    }
+    var isOn = !!kbdcBackendToken();
+    return e2('div', { style:Object.assign({}, card, { border:'1.5px solid '+(isOn?'#C8E6C9':'#FFE0B2'), background:isOn?'#F1F8E9':'#FFF8E1' }) },
+      e2('div', { style:{ display:'flex', alignItems:'center', justifyContent:'space-between', cursor:'pointer' }, onClick:function(){ setOpen(!open); } },
+        e2('div', { style:{ fontSize:13, fontWeight:700, color:'#1A237E' } }, '🔒 Backend Security Key ' + (isOn ? '(ON)' : '(off)')),
+        e2('div', { style:{ fontSize:11, color:'#6B7280' } }, open ? '▲ hide' : '▼ show')
+      ),
+      open && e2('div', { style:{ marginTop:10 } },
+        e2('div', { style:{ fontSize:11, color:'#6B7280', marginBottom:10, lineHeight:1.6 } },
+          'By default your backend URL is unprotected — anyone who has the link could read or overwrite your data. To lock it: (1) open each Apps Script backend → Project Settings → Script Properties → add a property named ',
+          e2('b', null, 'API_TOKEN'),
+          ' with a long secret value; (2) paste the exact same value here and Save. Leave this blank to keep things as they are today.'),
+        e2('div', { style:{ display:'flex', gap:8 } },
+          e2('input', { type:'text', value:tok, onChange:function(ev){ setTok(ev.target.value); },
+            placeholder:'Paste the same secret you set as API_TOKEN on the backend', style:iS }),
+          e2('button', { onClick:saveTok, style:Object.assign({}, btn, { background:'#1A237E', color:'#fff' }) }, 'Save Key')
+        ),
+        msg && e2('div', { style:{ fontSize:11.5, fontWeight:600, marginTop:8, color:'#2E7D32', lineHeight:1.5 } }, msg)
+      )
+    );
+  }
+
   return e2('div', { style:{ maxWidth:760 } },
     e2('div', { style:{ fontSize:15, fontWeight:700, color:'#1A237E', marginBottom:4 } }, '🔄 Data Backend — Google Sheets'),
     e2('div', { style:{ fontSize:12, color:'#6B7280', marginBottom:20, lineHeight:1.6 } },
@@ -9953,6 +10058,8 @@ function DataBackendTab() {
     ),
 
     e2(AppDataTransferPanel, null),
+
+    e2(BackendSecurityCard, null),
 
     e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:4 } }, '1. Main Backend — everything except Inventory'),
     e2(BackendGroup, { modules: KBDC_BACKEND_MODULES, getUrl: kbdcBackendUrl, setUrl: kbdcSetBackendUrl, reqFn: kbdcBackendReq, pushLabel: '⬆ Push Everything Now', getSheetLink: kbdcSheetLink, setSheetLink: kbdcSetSheetLink }),
@@ -10210,7 +10317,52 @@ function GeneralTab(){
     var expanded0=useS({});var expanded=expanded0[0];var setExpanded=expanded0[1];
     function toggleExpand(id){setExpanded(function(prev){var o=Object.assign({},prev);o[id]=!o[id];return o;});}
     var sItems=[{id:'taskupdate',label:'Task Update Settings'},{id:'notifications',label:'Notifications & Reminders'},{id:'exporttasks',label:'Export Tasks'},{id:'exportlogs',label:'Export Task Logs'},{id:'importtasks',label:'Import Tasks'},{id:'roleperm',label:'Role and Permission'}];
+    var mp0=useS('');var mpNew=mp0[0];var setMpNew=mp0[1];
+    var mp1=useS('');var mpConf=mp1[0];var setMpConf=mp1[1];
+    var mpMsg0=useS('');var mpMsg=mpMsg0[0];var setMpMsg=mpMsg0[1];
+    var mpIsDefault=(function(){try{return !localStorage.getItem('kbdc_admin_override_pwd');}catch(x){return true;}}());
+    function saveMasterPwd(){
+      if(mpNew.length<6){setMpMsg('⚠ Password must be at least 6 characters.');return;}
+      if(mpNew!==mpConf){setMpMsg('⚠ The two entries do not match.');return;}
+      try{localStorage.setItem('kbdc_admin_override_pwd',mpNew);}catch(x){}
+      try{kbdcAudit&&kbdcAudit('master-password-changed','owner');}catch(x){}
+      setMpNew('');setMpConf('');setMpMsg('✓ Master password updated. Use this new password for Admin Override from now on.');
+      setTimeout(function(){setMpMsg('');},6000);
+    }
     return e2('div',null,
+      e2('div',{style:{background:'#fff',borderRadius:12,border:'1.5px solid '+(mpIsDefault?'#FFE0B2':'#C8E6C9'),padding:'24px 28px',marginBottom:16}},
+        e2('div',{style:{fontSize:11,fontWeight:700,color:'#9CA3AF',letterSpacing:'.1em',marginBottom:6}},'🔑 OWNER MASTER PASSWORD (ADMIN OVERRIDE)'),
+        mpIsDefault&&e2('div',{style:{fontSize:12,color:'#E65100',background:'#FFF8E1',border:'1px solid #FFE0B2',borderRadius:8,padding:'10px 12px',marginBottom:14,lineHeight:1.6,fontWeight:600}},'⚠ You are still using the built-in default master password. Anyone who knows it can gain full owner access. Please set your own private password now.'),
+        !mpIsDefault&&e2('div',{style:{fontSize:12,color:'#2E7D32',marginBottom:14,lineHeight:1.6}},'✓ A custom master password is set.'),
+        e2('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:14,marginBottom:12}},
+          e2('div',null,e2('label',{style:lS},'NEW MASTER PASSWORD'),e2('input',{type:'password',value:mpNew,onChange:function(ev){setMpNew(ev.target.value);setMpMsg('');},placeholder:'At least 6 characters',style:iS})),
+          e2('div',null,e2('label',{style:lS},'CONFIRM PASSWORD'),e2('input',{type:'password',value:mpConf,onChange:function(ev){setMpConf(ev.target.value);setMpMsg('');},placeholder:'Re-enter',style:iS}))
+        ),
+        e2('div',{style:{display:'flex',alignItems:'center',gap:14}},
+          e2('button',{onClick:saveMasterPwd,style:btnP},'Update Master Password'),
+          mpMsg&&e2('span',{style:{fontSize:12,fontWeight:600,color:mpMsg.charAt(0)==='⚠'?'#C62828':'#2E7D32'}},mpMsg)
+        )
+      ),
+      (function(){
+        var alog=[]; try{alog=JSON.parse(localStorage.getItem('kbdc_audit_log')||'[]');}catch(x){}
+        if(!Array.isArray(alog)) alog=[];
+        var recent=alog.slice(-15).reverse();
+        return e2('div',{style:{background:'#fff',borderRadius:12,border:'1px solid #E8EAF6',padding:'24px 28px',marginBottom:16}},
+          e2('div',{style:{fontSize:11,fontWeight:700,color:'#9CA3AF',letterSpacing:'.1em',marginBottom:12}},'🕑 ACTIVITY LOG (SENSITIVE CHANGES)'),
+          recent.length===0
+            ? e2('div',{style:{fontSize:12,color:'#9CA3AF'}},'No sensitive changes recorded yet. PIN resets, payroll-related edits, week-off / leave-allocation changes and admin overrides will appear here.')
+            : e2('div',{style:{display:'flex',flexDirection:'column',gap:0}},
+                recent.map(function(en,i){
+                  var when=''; try{when=new Date(en.ts).toLocaleString('en-IN');}catch(x){when=en.ts||'';}
+                  return e2('div',{key:i,style:{display:'flex',gap:10,padding:'8px 0',borderBottom:i<recent.length-1?'1px solid #F3F4F6':'none',fontSize:12}},
+                    e2('span',{style:{color:'#9CA3AF',whiteSpace:'nowrap',flexShrink:0,fontSize:11}},when),
+                    e2('span',{style:{fontWeight:600,color:'#1A237E',flexShrink:0}},en.actor||'—'),
+                    e2('span',{style:{color:'#374151'}},(en.action||'')+(en.target?(' · '+en.target):''))
+                  );
+                })
+              )
+        );
+      })(),
       e2('div',{style:{background:'#fff',borderRadius:12,border:'1px solid #E8EAF6',padding:'24px 28px',marginBottom:16}},
         e2('div',{style:{fontSize:11,fontWeight:700,color:'#9CA3AF',letterSpacing:'.1em',marginBottom:4}},'GOOGLE SHEETS INTEGRATION'),
         e2('div',{style:{fontSize:11.5,color:'#6B7280',marginBottom:16,lineHeight:1.7}},'Link your Google Sheet as a live task database. ',e2('br'),'Columns: ',e2('strong',null,'Task (English), Task (Hindi), Code, Frequency')),
@@ -14162,12 +14314,16 @@ function FinancialPage() {
 
     /* \u2500\u2500 Print payslip \u2500\u2500 */
     function printPayslip(emp){
+      // Escape any value that gets written into the payslip HTML, so a name,
+      // department or clinic field that happens to contain "<", ">" or quotes
+      // can't inject markup/script into the opened payslip window.
+      function esc(v){return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
       var ci=(function(){try{return JSON.parse(localStorage.getItem('kbdc_settings')||'null')||{};}catch(ex){return{};}}());
-      var cName=ci.clinicName||'K.B. Dental Clinic';
-      var cAddrLine=(ci.address||'')+(ci.city?', '+ci.city:'')||'Clinic Address, City';
+      var cName=esc(ci.clinicName||'K.B. Dental Clinic');
+      var cAddrLine=esc((ci.address||'')+(ci.city?', '+ci.city:'')||'Clinic Address, City');
       var cPhone=ci.phone||'';
       var cEmail=ci.email||'';
-      var cContact=[cPhone,cEmail].filter(Boolean).join('  |  ');
+      var cContact=esc([cPhone,cEmail].filter(Boolean).join('  |  '));
       var net=Math.round(emp.net||0);
       var words=numWords(net)+' Rupees Only';
       var mLabel=MONTHS[emp.month!=null?emp.month:prCurMonth]||'';
@@ -14192,8 +14348,8 @@ function FinancialPage() {
       h+='@media print{body{background:#fff;padding:0}.slip{border:none;border-radius:0}button{display:none}}</style></head><body>';
       h+='<div class="slip"><div class="hdr"><div><h1>'+cName+'</h1><p>'+cAddrLine+'</p>'+(cContact?'<p style="margin-top:2px;opacity:.75">'+cContact+'</p>':'')+' </div><div class="no"><div>'+ps+'</div><div>'+mLabel+' '+yr+'</div></div></div>';
       h+='<div class="info">';
-      h+='<div class="ic"><div class="lbl">Employee</div><div class="val">'+(emp.name||emp.staffName||'')+'</div></div>';
-      h+='<div class="ic"><div class="lbl">Department</div><div class="val">'+(emp.dept||'\u2014')+'</div></div>';
+      h+='<div class="ic"><div class="lbl">Employee</div><div class="val">'+esc(emp.name||emp.staffName||'')+'</div></div>';
+      h+='<div class="ic"><div class="lbl">Department</div><div class="val">'+esc(emp.dept||'\u2014')+'</div></div>';
       h+='<div class="ic"><div class="lbl">Working Days</div><div class="val">'+(emp.stats&&emp.stats.workDays||'\u2014')+'</div></div>';
       h+='<div class="ic"><div class="lbl">Present Days</div><div class="val">'+(emp.stats&&emp.stats.present||'\u2014')+'</div></div>';
       h+='</div><div class="body"><div class="col earn"><h3>Earnings</h3><table>';
@@ -15831,8 +15987,13 @@ function HRAdminPage() {
     const saveEmp = () => {
       if (!empForm.name.trim()) return;
       const entry = {...empForm, id: editId || ('EM'+Date.now()), updatedAt: new Date().toISOString()};
+      const prev = editId ? staff.find(s=>s.id===editId) : null;
       const list = editId ? staff.map(s=>s.id===editId?entry:s) : [entry,...staff];
       saveStaff(list);
+      try{
+        if(editId && prev && String(prev.pin||'')!==String(entry.pin||'')){ kbdcAudit('pin-changed', entry.name); }
+        else { kbdcAudit(editId?'employee-updated':'employee-added', entry.name); }
+      }catch(e){}
       showToast(editId?'Employee updated':'Employee added');
       setShowForm(false);
     };
@@ -20696,7 +20857,7 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
     bStaff.forEach(function(s){
       na[s.name]=Object.assign({},na[s.name]||{},{'Casual Leave':allocEdit.casual,'Sick / Medical Leave':allocEdit.medical});
     });
-    laSaveAlloc(na);setShowAllocEdit(false);showToast('Leave allocation saved',true);
+    laSaveAlloc(na);try{kbdcAudit('leave-allocation-changed','clinic-wide');}catch(e){}setShowAllocEdit(false);showToast('Leave allocation saved',true);
   }
   const pendingLeaves=leaves.filter(function(l){return l.status==='pending'&&(activeBranch==='All Branches'||l.branch===activeBranch);});
 
@@ -20820,7 +20981,7 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
               setWeekOffEdit(function(prev){return prev.indexOf(i)!==-1?prev.filter(function(x){return x!==i;}):[...prev,i].sort(function(a,b){return a-b;});});
             }}),d);
         }),
-        React.createElement('button',{onClick:function(){laSaveWeekOff(weekOffEdit);setShowWeekOffEdit(false);showToast('Week Off saved',true);},style:{padding:'7px 18px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif",marginLeft:8}},'Save')
+        React.createElement('button',{onClick:function(){laSaveWeekOff(weekOffEdit);try{kbdcAudit('week-off-changed','clinic-wide');}catch(e){}setShowWeekOffEdit(false);showToast('Week Off saved',true);},style:{padding:'7px 18px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif",marginLeft:8}},'Save')
       ),
       /* Allocation config strip — owner/admin only */
       !appUser&&React.createElement('div',{style:{background:'#EEF2FF',borderRadius:10,border:'1px solid #C5CAE9',padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
@@ -21996,7 +22157,7 @@ function App() {
     /* Sync HR Admin → role cards on every open */
   React.useEffect(function(){ kbdcMigrateLegacyDentalOpsData(); kbdcSyncRoleEmployeesFromHR(); }, []);
   const [nav, setNav] = useState('home');
-  const [session, setSession] = useState(()=>kbdcGetSession());
+  const [session, setSession] = useState(()=>kbdcReconcileSession(kbdcGetSession()));
   const [appUser, setAppUser] = useState(null);
   const [pinGate, setPinGate] = useState(null); // { appId, appName }
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile drawer only — irrelevant on desktop
@@ -22031,6 +22192,23 @@ function App() {
       window.removeEventListener('focus', cycle);
     };
   }, [session]);
+
+  // When the staff list syncs in, re-derive the current session's privileges
+  // from the (now-updated) source of truth. This both applies live permission
+  // changes an owner makes and cleans up any tampered localStorage session once
+  // the real staff record is available.
+  React.useEffect(function(){
+    function onStaffSync(){
+      setSession(function(cur){
+        if(!cur) return cur;
+        var rec=kbdcReconcileSession(kbdcGetSession());
+        if(rec&&JSON.stringify(rec)!==JSON.stringify(cur)) return rec;
+        return cur;
+      });
+    }
+    window.addEventListener('kbdc-staff-sync',onStaffSync);
+    return function(){ window.removeEventListener('kbdc-staff-sync',onStaffSync); };
+  },[]);
 
   function handleLogin(s){setSession(s);}
   function handleLogout(){kbdcClearSession();setSession(null);setNav('home');setAppUser(null);setPinGate(null);}
