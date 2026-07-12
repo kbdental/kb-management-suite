@@ -1972,6 +1972,47 @@ function sharedStaffGet() {
   if (neededBackfill) {
     try { localStorage.setItem('kbdc_hr_staff', JSON.stringify(raw)); } catch(e) {}
   }
+  // Self-heal: collapse duplicate records for the same person that could
+  // have accumulated from the old random-id backfill bug above — each
+  // device/page load could previously have generated a DIFFERENT id for
+  // the same nameless-id employee, creating separate records that a PIN
+  // reset or HR edit would only ever update ONE of, so login/other lookups
+  // could inconsistently land on whichever duplicate happens to be found
+  // first (e.g. "PIN reset works for some employees, not others"). Keeps
+  // whichever duplicate was edited most recently, filling in any fields
+  // it's missing from the others.
+  var byName = {};
+  raw.forEach(function(m) {
+    var key = (m.name||'').trim().toLowerCase();
+    if (!key) return;
+    if (!byName[key]) byName[key] = [];
+    byName[key].push(m);
+  });
+  var neededDedup = false;
+  var deduped = [];
+  Object.keys(byName).forEach(function(key) {
+    var group = byName[key];
+    if (group.length === 1) { deduped.push(group[0]); return; }
+    neededDedup = true;
+    var winner = group.reduce(function(best, cur) {
+      var bestTime = best.updatedAt ? new Date(best.updatedAt).getTime() : 0;
+      var curTime = cur.updatedAt ? new Date(cur.updatedAt).getTime() : 0;
+      return curTime > bestTime ? cur : best;
+    });
+    var merged = Object.assign({}, winner);
+    group.forEach(function(cur) {
+      Object.keys(cur).forEach(function(k) {
+        if ((merged[k] === undefined || merged[k] === null || merged[k] === '') && cur[k] !== undefined && cur[k] !== null && cur[k] !== '') {
+          merged[k] = cur[k];
+        }
+      });
+    });
+    deduped.push(merged);
+  });
+  if (neededDedup) {
+    raw = deduped;
+    try { localStorage.setItem('kbdc_hr_staff', JSON.stringify(raw)); } catch(e) {}
+  }
   return raw.filter(function(m){ return m.name && m.name !== '—'; }).map(function(m, i) {
     // Build reportsTo object from reportingManagerName
     var reporter = m.reportsTo || null;
