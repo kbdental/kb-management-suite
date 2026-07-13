@@ -9468,7 +9468,7 @@ function kbdcSetInvBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_
 // carry the right token — so a leaked Web-App URL alone can no longer read or
 // overwrite the clinic's data. Rotating this per clinic also keeps one
 // clinic's URL from being replayed against another's backend.
-var KBDC_DEFAULT_BACKEND_TOKEN = '';
+var KBDC_DEFAULT_BACKEND_TOKEN = 'kbdc-live-g01_zGKPi54vzk2zzKey7UST';
 function kbdcBackendToken() { try { return localStorage.getItem('kbdc_backend_token') || KBDC_DEFAULT_BACKEND_TOKEN; } catch(e) { return KBDC_DEFAULT_BACKEND_TOKEN; } }
 function kbdcSetBackendToken(t) { try { localStorage.setItem('kbdc_backend_token', t || ''); } catch(e) {} }
 function kbdcSheetLink() { try { return localStorage.getItem('kbdc_sheet_link') || ''; } catch(e) { return ''; } }
