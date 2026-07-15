@@ -9609,9 +9609,15 @@ var KBDC_BACKEND_MODULES = [
   { id:'forms',       label:'Form Builder Responses',   sheet:'FormResponses',      get: function(){ return kbdcScanPrefixed('kbdc_resp_'); } },
 ];
 
+// Transactions all live in one local array (kbdc_inv_tx) but are pushed to the
+// Sheet as two separate tabs by type, so the owner sees Stock IN and Stock OUT
+// on their own tabs. Both tx modules map back to the same local key on pull.
+function kbdcInvTxIn(){ return kbdcLsArray('kbdc_inv_tx').filter(function(t){ return String(t.type||'').toUpperCase()==='IN'; }); }
+function kbdcInvTxOut(){ return kbdcLsArray('kbdc_inv_tx').filter(function(t){ return String(t.type||'').toUpperCase()==='OUT'; }); }
 var KBDC_INVENTORY_MODULES = [
-  { id:'invitems', label:'Inventory Items',        sheet:'InventoryItems',        get: function(){ return kbdcLsArray('kbdc_inv_items'); } },
-  { id:'invtx',    label:'Inventory Transactions', sheet:'InventoryTransactions', get: function(){ return kbdcLsArray('kbdc_inv_tx'); } },
+  { id:'invitems', label:'Inventory Items',      sheet:'InventoryItems',    localKey:'kbdc_inv_items', get: function(){ return kbdcLsArray('kbdc_inv_items'); } },
+  { id:'invtxin',  label:'Stock IN Transactions',  sheet:'InventoryStockIn',  localKey:'kbdc_inv_tx', get: kbdcInvTxIn },
+  { id:'invtxout', label:'Stock OUT Transactions', sheet:'InventoryStockOut', localKey:'kbdc_inv_tx', get: kbdcInvTxOut },
 ];
 
 /* ═══════════════ LIVE AUTO-SYNC — keeps every device's Tasks + Inventory
@@ -9804,18 +9810,29 @@ async function kbdcAutoSyncInventory() {
   if (!url) return;
   try {
     var sheetNames = KBDC_INVENTORY_MODULES.map(function(m){ return m.sheet; });
+    // Also read the legacy single transactions tab so any history that only
+    // ever landed there (before the Stock IN / Stock OUT split) is folded in
+    // once and not lost.
+    sheetNames.push('InventoryTransactions');
     var got = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
     var remote = got.data || {};
     // Union merge by id — a stock in/out just recorded locally (not pushed
     // yet) must never be wiped out by an older remote snapshot that hasn't
     // seen it. Field-level qty conflicts on the SAME item id from two
     // devices at once aren't resolved here (no per-item timestamp), but a
-    // whole new record can never silently disappear.
+    // whole new record can never silently disappear. Both tx tabs (plus the
+    // legacy tab) map to the same local key, so their rows are unioned together.
+    var remoteByKey = {};
     KBDC_INVENTORY_MODULES.forEach(function(m) {
       var remoteRows = (remote[m.sheet] || []).map(kbdcUnflattenRow);
-      var localKey = m.id === 'invitems' ? 'kbdc_inv_items' : 'kbdc_inv_tx';
+      if (!remoteByKey[m.localKey]) remoteByKey[m.localKey] = [];
+      remoteByKey[m.localKey] = remoteByKey[m.localKey].concat(remoteRows);
+    });
+    // legacy InventoryTransactions rows -> the transaction key
+    remoteByKey['kbdc_inv_tx'] = (remoteByKey['kbdc_inv_tx'] || []).concat((remote['InventoryTransactions'] || []).map(kbdcUnflattenRow));
+    Object.keys(remoteByKey).forEach(function(localKey) {
       var localRows = kbdcLsArray(localKey);
-      var mergedRows = kbdcUnionMergeById(localRows, remoteRows);
+      var mergedRows = kbdcUnionMergeById(localRows, remoteByKey[localKey]);
       var next = JSON.stringify(mergedRows);
       if (localStorage.getItem(localKey) !== next) localStorage.setItem(localKey, next);
     });
