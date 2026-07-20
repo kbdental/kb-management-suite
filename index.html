@@ -9610,6 +9610,42 @@ var KBDC_BACKEND_MODULES = [
   { id:'forms',       label:'Form Builder Responses',   sheet:'FormResponses',      get: function(){ return kbdcScanPrefixed('kbdc_resp_'); } },
 ];
 
+// Data that must be backed up but doesn't have (or need) its own record-level
+// sheet tab — salary master, payroll settings/loans, shifts, regularisation
+// requests, reporting hierarchy, branches, HR config, clinic profile, etc.
+// Each is snapshotted as one row {key,value,updatedAt} in a single "AppData"
+// tab. Restore is "fill only when this device has nothing for that key", and
+// the push is a KEY-LEVEL union with whatever is already on the Sheet — so a
+// freshly-cleared device gets everything back and can never wipe a good one.
+var KBDC_BLOB_KEYS = [
+  'kbdc_settings','kbdc_payroll_salaries','kbdc_payroll_settings','kbdc_payroll_loans',
+  'kbdc_reporting_map','kbdc_mgr_roles','kbdc_hr_config','kbdc_hr_programs',
+  'kbdc_hr_asset_types','kbdc_hr_access','kbdc_hr_absconders','kbdc_la_alloc_v2',
+  'kbdc_la_shifts','kbdc_la_reg','kbdc_branches'
+];
+function kbdcBlobEmpty(v){
+  if (v == null) return true;
+  var s = String(v).trim();
+  return s === '' || s === 'null' || s === '[]' || s === '{}' || s === 'undefined';
+}
+// Prepare a value for the AppData tab. A single Google Sheets cell tops out
+// around 50k characters, so strip known-huge fields (e.g. a base64 logo data
+// URL in the clinic profile) and skip anything still too large — better to back
+// up the clinic's name/address/etc. than to have one oversized field break the
+// whole backup write.
+function kbdcBlobForBackup(key, value){
+  if (kbdcBlobEmpty(value)) return null;
+  var out = String(value);
+  if (key === 'kbdc_settings') {
+    try {
+      var o = JSON.parse(out);
+      if (o && typeof o === 'object' && o.logo && String(o.logo).length > 2000) { delete o.logo; out = JSON.stringify(o); }
+    } catch(e) {}
+  }
+  if (out.length > 45000) return null; // too big for one cell — skip this key
+  return out;
+}
+
 // Transactions all live in one local array (kbdc_inv_tx) but are pushed to the
 // Sheet as two separate tabs by type, so the owner sees Stock IN and Stock OUT
 // on their own tabs. Both tx modules map back to the same local key on pull.
@@ -9698,7 +9734,7 @@ async function kbdcAutoSyncMain() {
   if (!url) return;
   try {
     var pushMods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
-    var sheetNames = ['StaffFull', 'ClinicSettings'].concat(pushMods.map(function(m){ return m.sheet; }));
+    var sheetNames = ['StaffFull', 'ClinicSettings', 'AppData'].concat(pushMods.map(function(m){ return m.sheet; }));
     var got = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
     var remote = got.data || {};
 
@@ -9794,6 +9830,31 @@ async function kbdcAutoSyncMain() {
       } catch(e) {}
     }
 
+    // ---- Misc data blobs (salary master, shifts, regularisation, reporting
+    // map, clinic profile, etc.) — see KBDC_BLOB_KEYS. Read what's already on
+    // the Sheet, restore any key this device is missing, then push a KEY-LEVEL
+    // union so no key is ever dropped and an empty device can't wipe a good one.
+    var remoteBlobs = {};
+    (remote['AppData'] || []).forEach(function(r) {
+      if (r && r.key != null && r.key !== '') remoteBlobs[String(r.key)] = (r.value == null ? '' : String(r.value));
+    });
+    var blobsChanged = false;
+    var mergedBlobs = {};
+    Object.keys(remoteBlobs).forEach(function(k){ mergedBlobs[k] = remoteBlobs[k]; });
+    KBDC_BLOB_KEYS.forEach(function(key) {
+      var localVal = localStorage.getItem(key);
+      if (kbdcBlobEmpty(localVal) && !kbdcBlobEmpty(remoteBlobs[key])) {
+        // this device has nothing for this key — restore it from the Sheet
+        localStorage.setItem(key, remoteBlobs[key]);
+        mergedBlobs[key] = remoteBlobs[key];
+        blobsChanged = true;
+      } else if (!kbdcBlobEmpty(localVal)) {
+        // this device has real data — it wins and is (re)published
+        mergedBlobs[key] = localVal;
+      }
+    });
+    if (blobsChanged) window.dispatchEvent(new Event('kbdc-modules-sync'));
+
     // ---- Push everything (post-merge state) in ONE batched call ----
     var pushPayload = {};
     var staffToPush = staffForLocal || localStaff;
@@ -9803,6 +9864,12 @@ async function kbdcAutoSyncMain() {
       if (rows.length) pushPayload[m.sheet] = rows;
     });
     pushPayload['ClinicSettings'] = [{ key: 'weekOffDays', value: JSON.stringify(laGetWeekOff()), updatedAt: localStorage.getItem('kbdc_la_weekoff_updatedAt') || '' }];
+    var blobRows = [];
+    Object.keys(mergedBlobs).forEach(function(k){
+      var v = kbdcBlobForBackup(k, mergedBlobs[k]);
+      if (v != null) blobRows.push({ key: k, value: v, updatedAt: new Date().toISOString() });
+    });
+    if (blobRows.length) pushPayload['AppData'] = blobRows;
     await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
   } catch (e) {}
 }
