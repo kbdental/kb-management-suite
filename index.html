@@ -9594,6 +9594,7 @@ var KBDC_BACKEND_MODULES = [
   { id:'tasks',       label:'Task Lists & Completion',  sheet:'Tasks',              get: function(){ return kbdcScanPrefixed('kbdc_tasks_').map(function(t){ return { roleCode:t.sourceKey, taskCode:t.code, taskEn:t.en, taskHi:t.hi, frequency:t.freq, done:t.done }; }); } },
   { id:'taskcompletions', label:'Task Completions Log',  sheet:'TaskCompletions',    localKey:'kbdc_task_log', get: function(){ return kbdcLsArray('kbdc_task_log'); } },
   { id:'leaves',      label:'Leave Requests',           sheet:'LeaveRequests',      localKey:'kbdc_la_leaves', get: function(){ return kbdcLsArray('kbdc_la_leaves'); } },
+  { id:'holidays',    label:'Holidays',                 sheet:'Holidays',           localKey:'kbdc_la_holidays', get: function(){ return kbdcLsArray('kbdc_la_holidays'); } },
   { id:'attendance',  label:'Attendance',               sheet:'Attendance',         localKey:'kbdc_la_attendance', get: function(){ return kbdcLsArray('kbdc_la_attendance'); } },
   { id:'leavealloc',  label:'Leave Allocations',        sheet:'LeaveAllocations',   get: kbdcAllocRows },
   { id:'appraisals',  label:'Appraisals',               sheet:'Appraisals',         get: kbdcAppraisalRows },
@@ -19978,11 +19979,13 @@ const LA_DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday
 const LA_MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const LA_MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const LA_LEAVE_TYPES = ['Casual Leave','Sick / Medical Leave'];
+// Fallback list shown only when a device has no saved holidays yet. Kept to the
+// fixed-date national holidays that are certain every year; the clinic adds its
+// own festival/regional holidays, which now sync to the Sheet so they persist.
 const LA_HOLIDAYS = [
-  {date:'2025-01-26',name:'Republic Day'},
-  {date:'2025-03-14',name:'Holi'},
-  {date:'2025-08-15',name:'Independence Day'},
-  {date:'2025-10-02',name:'Gandhi Jayanti'},
+  {date:'2026-01-26',name:'Republic Day'},
+  {date:'2026-08-15',name:'Independence Day'},
+  {date:'2026-10-02',name:'Gandhi Jayanti'},
 ];
 const LA_AV_COLORS = ['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#283593','#558B2F'];
 
@@ -21430,6 +21433,14 @@ function LA_Holidays(){
   const [showForm,setShowForm]=useState(false);
   const [form,setForm]=useState({date:'',name:'',type:'National'});
   const [editId,setEditId]=useState(null);
+  // Refresh when a background sync pulls holidays in from the Sheet — this is
+  // what lets a device that had lost its holidays get them back automatically
+  // once another device (that still had them) uploads them.
+  useEffect(function(){
+    function onSync(){ setHolidays(laGetHolidays()); }
+    window.addEventListener('kbdc-modules-sync', onSync);
+    return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+  },[]);
   const TYPES=['National','Regional','Optional','Clinic'];
   const TYPE_COLORS={'National':'#2E7D32','Regional':'#1357A6','Optional':'#E65100','Clinic':'#8E24AA'};
   const iS={padding:'8px 11px',border:'1px solid #DDE',borderRadius:7,fontSize:11.5,fontFamily:"'Poppins',sans-serif",outline:'none',width:'100%',boxSizing:'border-box'};
