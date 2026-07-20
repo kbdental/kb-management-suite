@@ -9621,7 +9621,11 @@ var KBDC_BLOB_KEYS = [
   'kbdc_settings','kbdc_payroll_salaries','kbdc_payroll_settings','kbdc_payroll_loans',
   'kbdc_reporting_map','kbdc_mgr_roles','kbdc_hr_config','kbdc_hr_programs',
   'kbdc_hr_asset_types','kbdc_hr_access','kbdc_hr_absconders','kbdc_la_alloc_v2',
-  'kbdc_la_shifts','kbdc_la_reg','kbdc_branches'
+  'kbdc_la_shifts','kbdc_la_reg','kbdc_branches',
+  // Raw appraisal + achievers data. Their dedicated tabs (Appraisals /
+  // AchieversScores) hold a flattened summary for viewing; these blobs keep the
+  // full source so a cleared device can restore them intact.
+  'kbdc_hr_appraisals','kbdc_ach_v1'
 ];
 function kbdcBlobEmpty(v){
   if (v == null) return true;
