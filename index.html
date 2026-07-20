@@ -20181,20 +20181,30 @@ function laFetchLocation() {
       resolve({ lat:null, lng:null, address:'Not supported', denied:true });
       return;
     }
-    /* Use a quick race so we don't block check-in on slow location */
     var _resolved = false;
     function _resolve(v){ if(!_resolved){ _resolved=true; resolve(v); } }
-    /* Auto-proceed after 3s even if location is still pending */
-    setTimeout(function(){ _resolve({ lat:null, lng:null, address:'No location', denied:true }); }, 3000);
+    /* Hard safety cap so a check-in can never hang forever — but long enough
+       to allow the browser's permission prompt (the user tapping "Allow" the
+       first time alone can take several seconds) AND a GPS fix to complete.
+       The old 3s cap fired before the user could even grant permission, so the
+       real location almost always arrived too late and was thrown away. */
+    var capTimer = setTimeout(function(){ _resolve({ lat:null, lng:null, address:'No location', denied:true }); }, 20000);
     navigator.geolocation.getCurrentPosition(
       function(pos) {
         var lat = pos.coords.latitude;
         var lng = pos.coords.longitude;
+        var coordsAddr = lat.toFixed(5)+', '+lng.toFixed(5);
+        /* Reverse-geocode for a human address, but give it its own short
+           timeout — if the lookup is slow or blocked we still keep the exact
+           GPS coordinates rather than losing the location. */
+        var ctrl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+        var geoTimer = setTimeout(function(){ if (ctrl) ctrl.abort(); }, 5000);
         fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat='+lat+'&lon='+lng+'&zoom=16&addressdetails=1', {
-          headers: { 'Accept-Language': 'en' }
+          headers: { 'Accept-Language': 'en' }, signal: ctrl ? ctrl.signal : undefined
         })
         .then(function(r){ return r.json(); })
         .then(function(data) {
+          clearTimeout(geoTimer); clearTimeout(capTimer);
           var a = data.address || {};
           var parts = [
             a.shop || a.amenity || a.building || a.road || a.pedestrian,
@@ -20202,16 +20212,18 @@ function laFetchLocation() {
             a.city || a.town || a.county
           ].filter(Boolean);
           var address = parts.slice(0,2).join(', ') || (data.display_name||'').split(',').slice(0,2).join(',').trim();
-          _resolve({ lat:lat, lng:lng, address:address || (lat.toFixed(4)+', '+lng.toFixed(4)), denied:false });
+          _resolve({ lat:lat, lng:lng, address:address || coordsAddr, denied:false });
         })
         .catch(function() {
-          _resolve({ lat:lat, lng:lng, address:lat.toFixed(5)+', '+lng.toFixed(5), denied:false });
+          clearTimeout(geoTimer); clearTimeout(capTimer);
+          _resolve({ lat:lat, lng:lng, address:coordsAddr, denied:false });
         });
       },
-      function() {
-        _resolve({ lat:null, lng:null, address:'No location', denied:true });
+      function(err) {
+        clearTimeout(capTimer);
+        _resolve({ lat:null, lng:null, address:(err && err.code===1) ? 'Location permission denied' : 'No location', denied:true });
       },
-      { timeout:5000, maximumAge:30000, enableHighAccuracy:false }
+      { timeout:15000, maximumAge:60000, enableHighAccuracy:true }
     );
   });
 }
@@ -20861,7 +20873,10 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
     {type:'Sick / Medical Leave',lbl:'Sick / Medical Leave',color:'#E53935'},
   ];
 
-  const balEmp=appUser?appUser.name:(bStaff[0]?bStaff[0].name:'');
+  // For an employee (appUser) this is fixed to their own name; for an owner it
+  // is selectable so they can view — and watch auto-deduct — any employee's
+  // balance after approving a leave.
+  const [balEmp,setBalEmp]=React.useState(appUser?appUser.name:(bStaff[0]?bStaff[0].name:''));
   /* ── Leave allocation edit state ── */
   const [showAllocEdit,setShowAllocEdit]=React.useState(false);
   const [showWeekOffEdit,setShowWeekOffEdit]=React.useState(false);
@@ -20962,7 +20977,12 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
     subTab==='dashboard'&&React.createElement(React.Fragment,null,
 
       /* Leave Balance Cards */
-      React.createElement('div',{style:{fontSize:10.5,fontWeight:700,color:'#90A4AE',letterSpacing:'.08em',textTransform:'uppercase',marginBottom:12}},'Your Leave Balances'),
+      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:12,flexWrap:'wrap'}},
+        React.createElement('div',{style:{fontSize:10.5,fontWeight:700,color:'#90A4AE',letterSpacing:'.08em',textTransform:'uppercase'}},appUser?'Your Leave Balances':'Leave Balance —'),
+        !appUser&&React.createElement('select',{value:balEmp,onChange:function(e){setBalEmp(e.target.value);},style:{padding:'5px 10px',border:'1.5px solid #C7D2FE',borderRadius:7,fontSize:12,fontFamily:"'Poppins',sans-serif",color:'#1A237E',fontWeight:600,outline:'none',background:'#fff'}},
+          bStaff.map(function(s){return React.createElement('option',{key:s.name,value:s.name},s.name);})
+        )
+      ),
       React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(168px,1fr))',gap:12,marginBottom:20}},
         BAL_ITEMS.map(function(b){
           var total=laGetStaffAlloc(alloc,balEmp,b.type);
