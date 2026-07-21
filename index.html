@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-1';
+var KBDC_APP_VERSION = '2026-07-21-2';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -20050,13 +20050,21 @@ const LA_DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday
 const LA_MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const LA_MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const LA_LEAVE_TYPES = ['Casual Leave','Sick / Medical Leave'];
-// Fallback list shown only when a device has no saved holidays yet. Kept to the
-// fixed-date national holidays that are certain every year; the clinic adds its
-// own festival/regional holidays, which now sync to the Sheet so they persist.
+// The clinic's official 2026 holiday list (from the signed office circular).
+// Shown whenever a device has no saved holidays yet; once any device syncs,
+// the list also lives in the Google Sheet's Holidays tab and any edits made
+// in Holiday Management take precedence and spread to every device.
 const LA_HOLIDAYS = [
-  {date:'2026-01-26',name:'Republic Day'},
-  {date:'2026-08-15',name:'Independence Day'},
-  {date:'2026-10-02',name:'Gandhi Jayanti'},
+  {id:'lh2026-01-26',date:'2026-01-26',name:'Republic Day',type:'National'},
+  {id:'lh2026-03-04',date:'2026-03-04',name:'Holi',type:'National'},
+  {id:'lh2026-08-15',date:'2026-08-15',name:'Independence Day',type:'National'},
+  {id:'lh2026-08-28',date:'2026-08-28',name:'Raksha Bandhan',type:'National'},
+  {id:'lh2026-09-04',date:'2026-09-04',name:'Janmashtami',type:'National'},
+  {id:'lh2026-10-20',date:'2026-10-20',name:'Dussehra',type:'National'},
+  {id:'lh2026-10-29',date:'2026-10-29',name:'Karwa Chauth',type:'National'},
+  {id:'lh2026-11-08',date:'2026-11-08',name:'Diwali',type:'National'},
+  {id:'lh2026-11-11',date:'2026-11-11',name:'Bhai Dooj',type:'National'},
+  {id:'lh2026-12-25',date:'2026-12-25',name:'Christmas',type:'National'},
 ];
 const LA_AV_COLORS = ['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#283593','#558B2F'];
 
@@ -21323,7 +21331,24 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
 }
 
 /* ── Calendar sub-page ── */
-function laGetHolidays(){try{var h=JSON.parse(localStorage.getItem('kbdc_la_holidays')||'null');return(h&&h.length)?h:LA_HOLIDAYS.map(function(x){return Object.assign({},x,{id:x.id||'lh'+x.date});});}catch(e){return LA_HOLIDAYS.map(function(x){return Object.assign({},x,{id:x.id||'lh'+x.date});});}}
+function laGetHolidays(){
+  try{
+    var h=JSON.parse(localStorage.getItem('kbdc_la_holidays')||'null');
+    if(h&&h.length) return h;
+    // No saved holidays yet on this device. Seed the official list into storage
+    // ONCE (guarded so a deliberate "delete all" isn't undone on the next read)
+    // so it becomes real data that the backup sync uploads to the Sheet — a
+    // fallback that's only shown but never stored would never get backed up.
+    var seeded=LA_HOLIDAYS.map(function(x){return Object.assign({},x,{id:x.id||'lh'+x.date});});
+    if(!localStorage.getItem('kbdc_holidays_seeded_2026')){
+      try{
+        localStorage.setItem('kbdc_la_holidays',JSON.stringify(seeded));
+        localStorage.setItem('kbdc_holidays_seeded_2026','1');
+      }catch(e2){}
+    }
+    return seeded;
+  }catch(e){return LA_HOLIDAYS.map(function(x){return Object.assign({},x,{id:x.id||'lh'+x.date});});}
+}
 function laSaveHolidays(a){try{localStorage.setItem('kbdc_la_holidays',JSON.stringify(a));}catch(e){}}
 
 function LA_Calendar({leaves,activeBranch,staff}){
