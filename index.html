@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-2';
+var KBDC_APP_VERSION = '2026-07-21-3';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -2493,6 +2493,33 @@ function saveActiveBranch(b) {
 
 
 
+// Live "Backed up to Google Sheet" indicator. Reads the outcome recorded by
+// the background sync and shows green (recently saved), amber (a problem —
+// e.g. wrong/absent security key, or a stale device that can't reach the
+// backend), so a broken backup is impossible to miss.
+function SyncStatusBadge() {
+  const [, tick] = useState(0);
+  useEffect(function(){
+    function onStatus(){ tick(function(n){ return n+1; }); }
+    window.addEventListener('kbdc-sync-status', onStatus);
+    var id = setInterval(onStatus, 15000); // refresh the "x ago" label
+    return function(){ window.removeEventListener('kbdc-sync-status', onStatus); clearInterval(id); };
+  }, []);
+  var s = kbdcGetSyncStatus();
+  var rel = function(ms){ var d=Math.max(0,Math.round((Date.now()-ms)/1000)); if(d<60)return 'just now'; if(d<3600)return Math.floor(d/60)+'m ago'; if(d<86400)return Math.floor(d/3600)+'h ago'; return Math.floor(d/86400)+'d ago'; };
+  var color, bg, label, title;
+  if (s.err) {
+    color='#B71C1C'; bg='#FFEBEE'; label='⚠ Backup issue';
+    title='Last backup did not reach Google Sheets: '+s.err+(s.lastOk?('. Last good backup '+rel(s.lastOk)+'.'):'. No successful backup yet.');
+  } else if (s.lastOk) {
+    color='#1B5E20'; bg='#E8F5E9'; label='✓ Backed up '+rel(s.lastOk);
+    title='Your data was saved to Google Sheets '+rel(s.lastOk)+'.';
+  } else {
+    color='#546E7A'; bg='#ECEFF1'; label='… Backing up';
+    title='Backing up to Google Sheets…';
+  }
+  return React.createElement('div', { title:title, style:{ display:'flex', alignItems:'center', fontSize:11, fontWeight:700, color:color, background:bg, padding:'5px 10px', borderRadius:14, marginRight:8, whiteSpace:'nowrap' } }, label);
+}
 function Topbar({ active, onToggleSidebar }) {
   const isHome = active === 'home';
   const titles = {
@@ -2531,6 +2558,7 @@ function Topbar({ active, onToggleSidebar }) {
         : React.createElement("div", { className:"tb-title" }, titles[active] || active)
     ),
     React.createElement("div", { className:"tb-right" },
+      React.createElement(SyncStatusBadge, null),
       /* ── Branch Toggle ── */
       React.createElement("div", { style:{ position:'relative', marginRight:6 } },
         React.createElement("div", {
@@ -9733,6 +9761,18 @@ function kbdcUnionMergeById(localRows, remoteRows) {
 // polling every ~30s all day, one call per module adds up to tens of
 // thousands of Apps Script executions a day and risks hitting quota limits;
 // batching keeps it to a small, constant number regardless of module count.
+// Records the outcome of the last backup so the UI can show a live "Backed up
+// to Google Sheet" status — the missing feedback loop that let a stale/broken
+// backup go unnoticed before.
+function kbdcGetSyncStatus(){ try { return JSON.parse(localStorage.getItem('kbdc_sync_status')||'{}'); } catch(e){ return {}; } }
+function kbdcSetSyncStatus(patch){
+  try {
+    var s = kbdcGetSyncStatus();
+    Object.keys(patch||{}).forEach(function(k){ s[k] = patch[k]; });
+    localStorage.setItem('kbdc_sync_status', JSON.stringify(s));
+    window.dispatchEvent(new Event('kbdc-sync-status'));
+  } catch(e){}
+}
 async function kbdcAutoSyncMain() {
   var url = kbdcBackendUrl();
   if (!url) return;
@@ -9875,7 +9915,10 @@ async function kbdcAutoSyncMain() {
     });
     if (blobRows.length) pushPayload['AppData'] = blobRows;
     await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
-  } catch (e) {}
+    kbdcSetSyncStatus({ lastOk: Date.now(), err: '' });
+  } catch (e) {
+    kbdcSetSyncStatus({ err: (e && e.message) ? e.message : 'Backup failed' });
+  }
 }
 async function kbdcAutoSyncInventory() {
   var url = kbdcInvBackendUrl();
