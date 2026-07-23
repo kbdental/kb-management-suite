@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-3';
+var KBDC_APP_VERSION = '2026-07-21-4';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -9731,19 +9731,29 @@ function kbdcMergeStaffByRecency(localRows, remoteRows) {
 // from two devices at once aren't resolved here — that needs real
 // timestamps like Staff has — but new records are never silently lost.
 function kbdcUnionMergeById(localRows, remoteRows) {
-  var localIds = {};
-  localRows.forEach(function(r){ if (r.id) localIds[r.id] = true; });
+  var localById = {};       // id -> the object as placed in `merged`
   var merged = localRows.slice();
+  merged.forEach(function(r){ if (r && r.id) localById[r.id] = r; });
+  function ts(x){ var t = x && x.updatedAt; if (!t) return 0; var n = new Date(t).getTime(); return isNaN(n) ? 0 : n; }
   var localFingerprints = null; // built lazily — only records that lack an id need this
   remoteRows.forEach(function(r){
-    if (r.id) {
-      if (!localIds[r.id]) merged.push(r);
+    if (r && r.id) {
+      var cur = localById[r.id];
+      if (cur === undefined) { merged.push(r); localById[r.id] = r; return; }
+      // Same record on both sides. If either carries an updatedAt stamp, keep
+      // the NEWER edit — this is what lets an attendance check-out, a leave
+      // approval, or an inventory stock change actually propagate instead of a
+      // stale device re-uploading the old version and wiping the update. When
+      // neither has a stamp (append-only records), keep local as before.
+      if (ts(r) > ts(cur)) {
+        var idx = merged.indexOf(cur);
+        if (idx >= 0) merged[idx] = r;
+        localById[r.id] = r;
+      }
       return;
     }
-    // Some record types (Attendance, older records) have no id at all —
-    // falling back to "has no id, so it never matches" would silently drop
-    // every id-less remote record every cycle. Dedupe by exact content
-    // instead, so a genuinely new record still gets folded in.
+    // Some record types have no id at all — dedupe by exact content so a
+    // genuinely new id-less record still gets folded in without duplicating.
     if (!localFingerprints) {
       localFingerprints = {};
       localRows.forEach(function(lr){ localFingerprints[JSON.stringify(lr)] = true; });
@@ -20447,7 +20457,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       );
       if(choice){
         /* Cancel the leave */
-        var updLeaves=(leaves||[]).map(function(l){return l===todayLeave?Object.assign({},l,{status:'cancelled',cancelledAt:new Date().toISOString(),cancelNote:'Employee came in — leave cancelled at check-in'}):l;});
+        var updLeaves=(leaves||[]).map(function(l){return l===todayLeave?Object.assign({},l,{status:'cancelled',cancelledAt:new Date().toISOString(),updatedAt:new Date().toISOString(),cancelNote:'Employee came in — leave cancelled at check-in'}):l;});
         laSaveLeaves(updLeaves);
         showToast('Leave cancelled. Marked as Present.');
       } else {
@@ -20481,11 +20491,11 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       if(exists){
         updated=attendance.map(function(a){
           return (a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp))
-            ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride})
+            ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()})
             :a;
         });
       } else {
-        updated=[...attendance,{id:'att'+Date.now(),staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride}];
+        updated=[...attendance,{id:'att'+Date.now(),staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()}];
       }
       setAttendance(updated);laSaveAtt(updated);
       if(lateTag==='L1') showToast('Checked in. Late arrival — L1 (1st late this month, no deduction)');
@@ -20503,7 +20513,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var ih=parseInt(todayRec.checkIn.split(':')[0]),im=parseInt(todayRec.checkIn.split(':')[1]);
       var oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]);
       var hours=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;
-      var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp))?{...a,checkOut:t,hours:hours,locOut:loc}:a;});
+      var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp))?{...a,checkOut:t,hours:hours,locOut:loc,updatedAt:new Date().toISOString()}:a;});
       setAttendance(updated);laSaveAtt(updated);
     });
   }
@@ -20562,8 +20572,8 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     setNewPin1('');setNewPin2('');setShowChangPin(false);setPinError('');
     showToast('Admin PIN updated successfully');
   }
-  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null}];}setAttendance(upd);laSaveAtt(upd);});}
-  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc}:a;});setAttendance(upd);laSaveAtt(upd);});}
+  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);});}
+  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);});}
 
   var SC=['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#37474F','#AD1457'];
   function doAssign(n,id){laAssignShift(n,id);setShiftMap(function(p){var nx=Object.assign({},p);if(id)nx[n]=id;else delete nx[n];return nx;});showToast('Shift saved',true);}
@@ -21021,18 +21031,24 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
   const bLeaves=leaves.filter(function(l){return activeBranch==='All Branches'||l.branch===activeBranch;});
   const statusFiltered=filter==='all'?bLeaves:bLeaves.filter(function(l){return l.status===filter;});
   const searched=search?statusFiltered.filter(function(l){return l.staffName.toLowerCase().includes(search.toLowerCase());}):statusFiltered;
-  const forDisplay=appUser?searched.filter(function(l){return l.staffName===appUser.name;}):searched;
+  // The people who report to the currently logged-in employee (their team).
+  // Only a person's own reporting manager (or the owner) may approve/reject
+  // their leave — so a regular staff member sees just their own leave status,
+  // while a manager also sees, and can act on, their team's requests.
+  const myTeam=appUser?staff.filter(function(s){var rn=(s.reportsTo&&s.reportsTo.name)||s.reportingManagerName||'';return rn&&rn===appUser.name&&s.name!==appUser.name;}).map(function(s){return s.name;}):[];
+  const canActOn=function(l){return !appUser||myTeam.indexOf(l.staffName)>=0;};
+  const forDisplay=appUser?searched.filter(function(l){return l.staffName===appUser.name||myTeam.indexOf(l.staffName)>=0;}):searched;
   const totalPages=Math.max(1,Math.ceil(forDisplay.length/PAGE_SZ));
   const paged=forDisplay.slice((page-1)*PAGE_SZ,page*PAGE_SZ);
 
   useEffect(function(){setPage(1);},[filter,search]);
 
   function doApprove(id,comment){
-    var u=leaves.map(function(l){return l.id===id?Object.assign({},l,{status:'approved',hrComment:comment||'',approvedAt:new Date().toISOString()}):l;});
+    var u=leaves.map(function(l){return l.id===id?Object.assign({},l,{status:'approved',hrComment:comment||'',approvedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}):l;});
     setLeaves(u);laSaveLeaves(u);setApproveModal(null);setApproveComment('');showToast('Leave approved',true);
   }
   function doReject(id,reason){
-    var u=leaves.map(function(l){return l.id===id?Object.assign({},l,{status:'rejected',rejectReason:reason,rejectedAt:new Date().toISOString()}):l;});
+    var u=leaves.map(function(l){return l.id===id?Object.assign({},l,{status:'rejected',rejectReason:reason,rejectedAt:new Date().toISOString(),updatedAt:new Date().toISOString()}):l;});
     setLeaves(u);laSaveLeaves(u);setRejectModal(null);setRejectReason('');showToast('Leave rejected');
   }
   function submitApply(){
@@ -21040,7 +21056,7 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
     var isH=applyForm.halfDay!=='none';
     var days=isH?0.5:(applyForm.to&&applyForm.to>=applyForm.from?laDays(applyForm.from,applyForm.to):1);
     var to=isH?applyForm.from:(applyForm.to||applyForm.from);
-    var nl={id:'L'+Date.now(),staffName:applyForm.staffName,type:applyForm.type,halfDay:applyForm.halfDay,from:applyForm.from,to:to,days:days,reason:applyForm.reason,status:'pending',applied:LA_TODAY,branch:activeBranch};
+    var nl={id:'L'+Date.now(),staffName:applyForm.staffName,type:applyForm.type,halfDay:applyForm.halfDay,from:applyForm.from,to:to,days:days,reason:applyForm.reason,status:'pending',applied:LA_TODAY,branch:activeBranch,updatedAt:new Date().toISOString()};
     var u=[...leaves,nl];setLeaves(u);laSaveLeaves(u);
     setShowApply(false);setSuccess('Leave request submitted!');setTimeout(function(){setSuccess('');},3000);
     setApplyForm({staffName:appUser?appUser.name:'',type:'Casual Leave',halfDay:'none',from:'',to:'',reason:''});
@@ -21333,16 +21349,16 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
                 ),
                 /* Actions */
                 React.createElement('td',null,
-                  l.status==='pending'&&!appUser
+                  l.status==='pending'&&canActOn(l)
                   ?React.createElement('div',{style:{display:'flex',gap:6}},
                     React.createElement('button',{onClick:function(){setApproveModal(l.id);setApproveComment('');},title:'Approve',style:{width:28,height:28,borderRadius:6,background:'#E8F5E9',border:'1px solid #C8E6C9',color:'#2E7D32',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Poppins',sans-serif"}},'\u2713'),
                     React.createElement('button',{onClick:function(){setRejectModal(l.id);setRejectReason('');},title:'Reject',style:{width:28,height:28,borderRadius:6,background:'#FFEBEE',border:'1px solid #FFCDD2',color:'#C62828',fontSize:14,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Poppins',sans-serif"}},'\u2717')
                   )
-                  :l.status==='approved'&&!appUser
+                  :l.status==='approved'&&canActOn(l)
                   ?React.createElement('button',{
                     onClick:function(){
                       if(!window.confirm('Cancel approval for '+l.staffName+"'s "+l.type+'? This will mark the leave as cancelled.'))return;
-                      var u=leaves.map(function(x){return x.id===l.id?Object.assign({},x,{status:'cancelled',cancelledAt:new Date().toISOString(),cancelNote:'Approval cancelled by HR'}):x;});
+                      var u=leaves.map(function(x){return x.id===l.id?Object.assign({},x,{status:'cancelled',cancelledAt:new Date().toISOString(),updatedAt:new Date().toISOString(),cancelNote:'Approval cancelled by HR'}):x;});
                       setLeaves(u);laSaveLeaves(u);showToast('Leave approval cancelled');
                     },
                     title:'Cancel approval',
