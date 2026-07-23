@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-5';
+var KBDC_APP_VERSION = '2026-07-21-6';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -2235,6 +2235,23 @@ function CalendarPicker({
 var KBDC_SESSION_KEY='kbdc_suite_session';
 var KBDC_APP_LIST=[{id:'tasks',label:'Task Management'},{id:'leave',label:'Leave & Attendance'},{id:'inv',label:'Inventory'},{id:'idea',label:'Idea Board'},{id:'form',label:'Form Builder'},{id:'ach',label:'Achievers Club'},{id:'hradmin',label:'HR Admin'},{id:'financial',label:'Financial'},{id:'nabh',label:'NABH'},{id:'myteam',label:'My Team'},{id:'settings',label:'Settings'}];
 var KBDC_OWNER_ROLES=['OWN','MDD','CLD','ADH','MGR'];
+// Banks available for salary setup & transfer. Used as a pick-list on the
+// employee Bank Details form; a clinic can still type any bank not listed.
+// A salary is auto-held (never disbursed by mistake) when the employee is no
+// longer an active payee — exited, suspended, absconded, or explicitly on the
+// absconders list. The owner can still hold anyone manually on top of this.
+function prAutoHold(s){
+  try{
+    if(!s) return false;
+    var st=String(s.empStatus||'').toLowerCase();
+    if(st==='exited'||st==='suspended'||st==='absconded'||st==='absconding'||st==='terminated') return true;
+    if(s.active===false) return true;
+    var abs=JSON.parse(localStorage.getItem('kbdc_hr_absconders')||'[]');
+    if(Array.isArray(abs)&&s.name&&abs.some(function(a){var n=(a&&(a.name||a.staffName))||a;return n&&String(n).toLowerCase()===String(s.name).toLowerCase();})) return true;
+  }catch(e){}
+  return false;
+}
+var KBDC_BANKS=['State Bank of India','Punjab National Bank','Bank of Baroda','Canara Bank','Union Bank of India','Bank of India','Indian Bank','Central Bank of India','Indian Overseas Bank','UCO Bank','Bank of Maharashtra','Punjab & Sind Bank','HDFC Bank','ICICI Bank','Axis Bank','Kotak Mahindra Bank','IndusInd Bank','Yes Bank','IDFC First Bank','Federal Bank','RBL Bank','Bandhan Bank','IDBI Bank','South Indian Bank','Karur Vysya Bank','City Union Bank','DCB Bank','Dhanlaxmi Bank','Jammu & Kashmir Bank','Karnataka Bank','Tamilnad Mercantile Bank','CSB Bank','AU Small Finance Bank','Equitas Small Finance Bank','Ujjivan Small Finance Bank','Airtel Payments Bank','India Post Payments Bank','Paytm Payments Bank','Fino Payments Bank','HSBC Bank','Citibank','Standard Chartered Bank','DBS Bank India','Saraswat Co-operative Bank'];
 var KBDC_ALL_IDS=KBDC_APP_LIST.map(function(a){return a.id;});
 function kbdcGetSession(){try{return JSON.parse(localStorage.getItem(KBDC_SESSION_KEY)||'null');}catch(e){return null;}}
 function kbdcSaveSession(s){try{localStorage.setItem(KBDC_SESSION_KEY,JSON.stringify(s));}catch(e){}}
@@ -14435,11 +14452,14 @@ function FinancialPage() {
       var c=prCalc(s,prCurYear,prCurMonth+1);
       var sal=prSalaries[s.id||s.name]||{};
       return Object.assign({id:s.id,name:s.name,empCode:s.empCode||'',dept:c.dept,
-        hold:!!(sal.onHold),status:'draft'},c);
+        hold:!!(sal.onHold)||prAutoHold(s),status:'draft'},c);
     });
     var liveTotalGross=liveEmps.reduce(function(a,e2){return a+e2.gross;},0);
     var liveTotalDed  =liveEmps.reduce(function(a,e2){return a+e2.totalDed;},0);
-    var liveNetDisb   =liveEmps.reduce(function(a,e2){return a+e2.net;},0);
+    // Net Disbursement is what actually goes out — held salaries are excluded so
+    // an absconding/exited employee is never paid by mistake.
+    var liveNetDisb   =liveEmps.filter(function(e2){return !e2.hold;}).reduce(function(a,e2){return a+e2.net;},0);
+    var liveHeldAmt   =liveEmps.filter(function(e2){return e2.hold;}).reduce(function(a,e2){return a+e2.net;},0);
     var liveHoldCount =liveEmps.filter(function(e2){return e2.hold;}).length;
 
     /* \u2500\u2500 Run Payroll computation \u2500\u2500 */
@@ -14447,14 +14467,14 @@ function FinancialPage() {
       var allStaff=getStaff();
       var computed=allStaff.map(function(s){
         var c=prCalc(s,prCurYear,prCurMonth+1);
-        return Object.assign({id:s.id,name:s.name,empCode:s.empCode||'',dept:c.dept},c,{status:'processed',hold:!!(prSalaries[s.id||s.name]||{}).onHold});
+        return Object.assign({id:s.id,name:s.name,empCode:s.empCode||'',dept:c.dept},c,{status:'processed',hold:!!(prSalaries[s.id||s.name]||{}).onHold||prAutoHold(s)});
       });
       var run={
         status:'review',year:prCurYear,month:prCurMonth,
         createdAt:new Date().toISOString(),employees:computed,
         totalGross:computed.reduce(function(a,emp){return a+emp.gross;},0),
         totalDed:computed.reduce(function(a,emp){return a+emp.totalDed;},0),
-        netDisbursement:computed.reduce(function(a,emp){return a+emp.net;},0),
+        netDisbursement:computed.filter(function(emp){return !emp.hold;}).reduce(function(a,emp){return a+emp.net;},0),
         empCount:computed.length,
         holdCount:computed.filter(function(emp){return emp.hold;}).length
       };
@@ -14863,7 +14883,7 @@ function FinancialPage() {
                     e('td',{style:{padding:'10px 12px',textAlign:'right'}},isEdit?e('input',{type:'number',defaultValue:sal.tds||'',id:'pr_tds_'+(s.id||s.name),placeholder:'TDS',style:{width:80,padding:'5px 6px',border:'1.5px solid #DDE3F0',borderRadius:6,fontSize:12,outline:'none',textAlign:'right'}}):e('span',{style:{color:'#546E7A'}},sal.tds?'\u20b9'+fmt(sal.tds):'\u2014')),
                     e('td',{style:{padding:'10px 12px',textAlign:'right',fontWeight:700,color:hasCTC?'#2E7D32':'#D1D5DB'}},hasCTC?fmtK(bk.net):'\u2014'),
                     e('td',{style:{padding:'10px 12px',textAlign:'center'}},e('div',{style:{display:'flex',gap:6,justifyContent:'center'}},[['PF','pfExempt'],['ESI','esiExempt'],['PT','ptExempt']].map(function(ex){return e('label',{key:ex[0],style:{display:'flex',flexDirection:'column',alignItems:'center',gap:2,cursor:'pointer',fontSize:9,color:'#78909C'}},ex[0],e('input',{type:'checkbox',checked:!!(prSalaries[s.id||s.name]||{})[ex[1]],onChange:function(ev){var p={};p[ex[1]]=ev.target.checked;saveSalary(s.id||s.name,p);},style:{cursor:'pointer',width:13,height:13}}));}))),
-                    e('td',{style:{padding:'10px 12px',textAlign:'center'}},e('input',{type:'checkbox',checked:!!(prSalaries[s.id||s.name]||{}).onHold,onChange:function(ev){saveSalary(s.id||s.name,{onHold:ev.target.checked});},style:{cursor:'pointer',width:13,height:13}})),
+                    e('td',{style:{padding:'10px 12px',textAlign:'center'}},(function(){var auto=prAutoHold(s);return e('div',{style:{display:'flex',flexDirection:'column',alignItems:'center',gap:2}},e('input',{type:'checkbox',checked:!!(prSalaries[s.id||s.name]||{}).onHold||auto,disabled:auto,title:auto?'Salary auto-held — employee is not active (exited / suspended / absconded). They will not be paid.':'Hold this salary (will not be disbursed)',onChange:function(ev){saveSalary(s.id||s.name,{onHold:ev.target.checked});},style:{cursor:auto?'not-allowed':'pointer',width:13,height:13}}),auto?e('span',{style:{fontSize:8,color:'#C62828',fontWeight:700}},'AUTO'):null);})()),
                     e('td',{style:{padding:'10px 12px',whiteSpace:'nowrap'}},isEdit?e('div',{style:{display:'flex',gap:5}},e('button',{onClick:function(){var ce=document.getElementById('pr_ctc_'+(s.id||s.name));var te=document.getElementById('pr_tds_'+(s.id||s.name));saveSalary(s.id||s.name,{basic:parseFloat(ce&&ce.value)||0,ctc:parseFloat(ce&&ce.value)||0,tds:parseFloat(te&&te.value)||0});setPrSalEdit(null);toast('Saved',true);},style:{padding:'6px 12px',background:'#1A237E',color:'#fff',border:'none',borderRadius:7,cursor:'pointer',fontSize:12,fontWeight:600}},'Save'),e('button',{onClick:function(){setPrSalEdit(null);},style:{padding:'6px 8px',background:'#F5F6FA',color:'#546E7A',border:'1px solid #DDE3F0',borderRadius:7,cursor:'pointer',fontSize:12}},'x')):e('button',{onClick:function(){setPrSalEdit(s.id||s.name);},style:{padding:'6px 12px',background:'#E3F2FD',color:'#1565C0',border:'none',borderRadius:7,cursor:'pointer',fontSize:11.5,fontWeight:600}},'✏️ Edit'))
                   );
                 })
@@ -16405,7 +16425,10 @@ function HRAdminPage() {
 
           React.createElement('div', { style:secStyle }, '🏦 Bank Details'),
           React.createElement('div', { style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:6} },
-            React.createElement('div',{key:'bankName'},React.createElement('label',{style:lStyle},'Bank Name'),React.createElement('input',{type:'text',value:empForm.bankName||'',onChange:e=>setF('bankName',e.target.value),style:iStyle})),
+            React.createElement('div',{key:'bankName'},React.createElement('label',{style:lStyle},'Bank Name'),
+              React.createElement('input',{type:'text',list:'kbdc-bank-list',value:empForm.bankName||'',onChange:e=>setF('bankName',e.target.value),placeholder:'Select or type bank',style:iStyle}),
+              React.createElement('datalist',{id:'kbdc-bank-list'},KBDC_BANKS.map(function(bk){return React.createElement('option',{key:bk,value:bk});}))
+            ),
             React.createElement('div',{key:'bankBranch'},React.createElement('label',{style:lStyle},'Branch'),React.createElement('input',{type:'text',value:empForm.bankBranch||'',onChange:e=>setF('bankBranch',e.target.value),placeholder:'Branch name / city',style:iStyle})),
             React.createElement('div',{key:'accountType'},React.createElement('label',{style:lStyle},'Account Type'),
               React.createElement('select',{value:empForm.accountType||'Saving',onChange:e=>setF('accountType',e.target.value),style:iStyle},
