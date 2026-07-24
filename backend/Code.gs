@@ -131,6 +131,25 @@ function respond(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
+/**
+ * Run this ONCE from the Apps Script editor to grant Google Drive access.
+ *
+ * Deploying a new version does NOT re-ask for permissions — Google only shows
+ * the permission screen when you RUN a function here in the editor. So if
+ * document uploads fail with "You do not have permission to call
+ * DriveApp...", open this project, pick "authorizeDrive" from the function
+ * dropdown at the top, click Run, and approve everything Google asks
+ * (including "See, edit, create and delete Google Drive files"). After that,
+ * uploads from the app will work. This also creates the two head folders.
+ */
+function authorizeDrive() {
+  var emp = getOrCreateFolder('Employees');
+  var con = getOrCreateFolder('Consultants');
+  return 'Drive access is working. Folders ready: ' +
+    emp.getName() + ' (' + emp.getId() + '), ' +
+    con.getName() + ' (' + con.getId() + ')';
+}
+
 // ── Google Drive document storage ──
 function sanitizeFolderName(name) {
   return String(name || 'Unassigned').replace(/[\\\/:*?"<>|]/g, '_').trim().slice(0, 120) || 'Unassigned';
