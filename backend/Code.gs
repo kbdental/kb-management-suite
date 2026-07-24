@@ -89,6 +89,34 @@ function doPost(e) {
       });
       return respond({ ok: true, data: data });
     }
+    if (action === 'uploadDoc') {
+      // Saves an uploaded file into Google Drive under:
+      //   Employees / <Employee or Consultant name> / <file>
+      // and returns a link. Requires the one-time Drive authorisation prompt
+      // that appears when this deployment is (re)authorised.
+      var head = getOrCreateFolder('Employees');
+      var who = sanitizeFolderName(body.employee || 'Unassigned');
+      var empFolder = getOrCreateChildFolder(head, who);
+      var fileData = body.fileData || '';
+      var bytes = Utilities.base64Decode(fileData);
+      var blob = Utilities.newBlob(bytes, body.mimeType || 'application/octet-stream', body.fileName || ('document_' + Date.now()));
+      var file = empFolder.createFile(blob);
+      return respond({ ok: true, fileId: file.getId(), url: file.getUrl(), name: file.getName(), folder: who });
+    }
+    if (action === 'listDocs') {
+      var head2 = getOrCreateFolder('Employees');
+      var empFolder2 = getChildFolder(head2, sanitizeFolderName(body.employee || ''));
+      var files = [];
+      if (empFolder2) {
+        var it = empFolder2.getFiles();
+        while (it.hasNext()) { var f = it.next(); files.push({ id: f.getId(), name: f.getName(), url: f.getUrl() }); }
+      }
+      return respond({ ok: true, files: files });
+    }
+    if (action === 'deleteDoc') {
+      try { DriveApp.getFileById(body.fileId).setTrashed(true); return respond({ ok: true }); }
+      catch (e) { return respond({ ok: false, error: e.message }); }
+    }
     return respond({ ok: false, error: 'Unknown action: ' + action });
   } catch (err) {
     return respond({ ok: false, error: err.message });
@@ -101,6 +129,23 @@ function doGet(e) {
 
 function respond(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ── Google Drive document storage ──
+function sanitizeFolderName(name) {
+  return String(name || 'Unassigned').replace(/[\\\/:*?"<>|]/g, '_').trim().slice(0, 120) || 'Unassigned';
+}
+function getOrCreateFolder(name) {
+  var it = DriveApp.getFoldersByName(name);
+  return it.hasNext() ? it.next() : DriveApp.createFolder(name);
+}
+function getOrCreateChildFolder(parent, name) {
+  var it = parent.getFoldersByName(name);
+  return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+function getChildFolder(parent, name) {
+  var it = parent.getFoldersByName(name);
+  return it.hasNext() ? it.next() : null;
 }
 
 function sanitizeSheetName(name) {

@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-22-1';
+var KBDC_APP_VERSION = '2026-07-22-2';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -9587,6 +9587,24 @@ async function kbdcBackendReqAt(u, sheet, action, payload) {
 }
 async function kbdcBackendReq(sheet, action, payload) { return kbdcBackendReqAt(kbdcBackendUrl(), sheet, action, payload); }
 async function kbdcInvBackendReq(sheet, action, payload) { return kbdcBackendReqAt(kbdcInvBackendUrl(), sheet, action, payload); }
+// Uploads a real file to Google Drive via the backend, into
+// Employees / <person> / <file>, and returns { url, fileId, name }. Used for
+// staff & consultant document storage.
+function kbdcUploadDocToDrive(personName, file) {
+  return new Promise(function(resolve, reject) {
+    if (!file) { reject(new Error('No file selected')); return; }
+    if (file.size > 25 * 1024 * 1024) { reject(new Error('File is larger than 25 MB — please upload a smaller file.')); return; }
+    var reader = new FileReader();
+    reader.onload = function() {
+      var b64 = String(reader.result || '').split(',')[1] || '';
+      kbdcBackendReq('_docs', 'uploadDoc', { employee: personName || 'Unassigned', fileName: file.name, mimeType: file.type || 'application/octet-stream', fileData: b64 })
+        .then(function(res) { if (res && res.ok) resolve(res); else reject(new Error((res && res.error) || 'Upload failed')); })
+        .catch(reject);
+    };
+    reader.onerror = function() { reject(new Error('Could not read the file')); };
+    reader.readAsDataURL(file);
+  });
+}
 
 function kbdcAchieversRows() {
   var d = {};
@@ -16155,6 +16173,8 @@ function HRAdminPage() {
     const [addDocForm, setAddDocForm] = useState(false);
     const [addEvtForm, setAddEvtForm] = useState(false);
     const [docForm, setDocForm] = useState({docType:'',fileName:'',notes:'',status:'Uploaded'});
+    const [docFile, setDocFile] = useState(null);
+    const [docUploading, setDocUploading] = useState(false);
     const [evtForm, setEvtForm] = useState({phase:'during',date:'',title:'',description:'',icon:'📌'});
     const [statusFilter, setStatusFilter] = useState('All');
     // ── Consultants (visiting specialists) ──
@@ -16524,12 +16544,25 @@ function HRAdminPage() {
       const DOC_TYPES = ['Offer Letter','Employment Agreement','ID Proof (Aadhaar/PAN)','Qualification Certificates','Mark Sheets','Experience Letter','Relieving Letter','Promotion Letter','Appraisal Letter','Training Certificate','Warning Letter','Show Cause Notice','Resignation Letter','Full & Final Settlement','Medical Fitness Certificate','Other'];
       const statusColor = { Uploaded:[C.greenLt,C.green], Pending:['#FFF3E0',C.orange], Expired:[C.redLt,C.red] };
 
-      const addDoc = () => {
+      const addDoc = async () => {
         if (!docForm.docType) return;
-        const newDoc = {...docForm, id:'doc'+Date.now(), empId, uploadDate: new Date().toISOString()};
+        let driveUrl='', fileId='', fileName=docForm.fileName;
+        if (docFile) {
+          setDocUploading(true);
+          try {
+            const res = await kbdcUploadDocToDrive(dirProfile.name, docFile);
+            driveUrl = res.url||''; fileId = res.fileId||''; fileName = res.name||docFile.name;
+          } catch(e) {
+            setDocUploading(false);
+            alert('File upload to Google Drive failed:\n'+e.message+'\n\nIf this is the first time, the backend needs to be re-deployed with Drive access (I can give you the steps).');
+            return;
+          }
+          setDocUploading(false);
+        }
+        const newDoc = {...docForm, fileName:fileName, driveUrl:driveUrl, fileId:fileId, id:'doc'+Date.now(), empId, uploadDate: new Date().toISOString()};
         const updated = {...dirDocs, [empId]: [...empDocsArr, newDoc]};
-        saveDirDocs(updated); setAddDocForm(false); setDocForm({docType:'',fileName:'',notes:'',status:'Uploaded'});
-        showToast('Document added');
+        saveDirDocs(updated); setAddDocForm(false); setDocForm({docType:'',fileName:'',notes:'',status:'Uploaded'}); setDocFile(null);
+        showToast(driveUrl?'Document uploaded to Drive':'Document added');
       };
       const deleteDoc = (docId) => {
         const updated = {...dirDocs, [empId]: empDocsArr.filter(d=>d.id!==docId)};
@@ -16652,9 +16685,15 @@ function HRAdminPage() {
                   React.createElement('input', { type:'text', value:docForm.notes, onChange:e=>setDocForm(f=>({...f,notes:e.target.value})), placeholder:'Optional notes', style:inp })
                 )
               ),
+              React.createElement('div', { style:{marginBottom:12} },
+                React.createElement('label', { style:{...lbl} }, "📎 Upload File (saved to this employee's Google Drive folder)"),
+                React.createElement('input', { type:'file', onChange:e=>{ const f=e.target.files&&e.target.files[0]; setDocFile(f||null); if(f&&!docForm.fileName) setDocForm(ff=>({...ff,fileName:f.name})); }, style:{...inp,padding:'7px 8px'} }),
+                docFile && React.createElement('div',{style:{fontSize:10.5,color:C.green,marginTop:4,fontWeight:600}},'Selected: '+docFile.name+' ('+Math.round(docFile.size/1024)+' KB)'),
+                !docFile && React.createElement('div',{style:{fontSize:10,color:C.grey,marginTop:4}},'Optional — without a file this just records the document name.')
+              ),
               React.createElement('div', { style:{display:'flex',gap:8,justifyContent:'flex-end'} },
-                React.createElement('button', { onClick:()=>setAddDocForm(false), style:{...btn(C.white,C.grey,C.border),padding:'6px 14px'} }, 'Cancel'),
-                React.createElement('button', { onClick:addDoc, style:{...btn(),padding:'6px 16px'} }, '✓ Attach')
+                React.createElement('button', { onClick:()=>{setAddDocForm(false);setDocFile(null);}, style:{...btn(C.white,C.grey,C.border),padding:'6px 14px'} }, 'Cancel'),
+                React.createElement('button', { onClick:addDoc, disabled:docUploading, style:{...btn(),padding:'6px 16px',opacity:docUploading?0.6:1,cursor:docUploading?'wait':'pointer'} }, docUploading?'⏳ Uploading…':'✓ Attach')
               )
             ),
             empDocsArr.length===0 && !addDocForm
@@ -16672,6 +16711,7 @@ function HRAdminPage() {
                           (d.fileName?d.fileName+' · ':'')+'Added: '+fdt(d.uploadDate)+(d.notes?' · '+d.notes:'')
                         )
                       ),
+                      d.driveUrl && React.createElement('a',{href:d.driveUrl,target:'_blank',rel:'noopener noreferrer',style:{...badge(C.greenLt,C.green),fontSize:10,whiteSpace:'nowrap',padding:'4px 11px',textDecoration:'none',fontWeight:700,flexShrink:0}},'📎 Open'),
                       React.createElement('span',{style:{...badge(...(statusColor[d.status]||[C.blueLt,C.blue])),fontSize:10,whiteSpace:'nowrap',padding:'3px 10px'}},d.status),
                       React.createElement('button',{onClick:()=>deleteDoc(d.id),style:{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:15,padding:'0 4px',flexShrink:0}},'×')
                     )
