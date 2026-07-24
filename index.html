@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-7';
+var KBDC_APP_VERSION = '2026-07-21-8';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -21071,17 +21071,19 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
     });
     laSaveAlloc(na);try{kbdcAudit('leave-allocation-changed','clinic-wide');}catch(e){}setShowAllocEdit(false);showToast('Leave allocation saved',true);
   }
-  const pendingLeaves=leaves.filter(function(l){return l.status==='pending'&&(activeBranch==='All Branches'||l.branch===activeBranch);});
+  // People who report to the logged-in employee (their team). Only a person's
+  // OWN reporting manager — or the owner — may approve/reject their leave.
+  const myTeam=appUser?staff.filter(function(s){var rn=(s.reportsTo&&s.reportsTo.name)||s.reportingManagerName||'';return rn&&rn===appUser.name&&s.name!==appUser.name;}).map(function(s){return s.name;}):[];
+  const canActOn=function(l){return !appUser||myTeam.indexOf(l.staffName)>=0;};
+  const canApproveAny=!appUser||myTeam.length>0;
+  // Pending approvals: a regular employee is nobody's manager, so this is empty
+  // for them (they cannot approve/reject any leave — not even their own); a
+  // manager sees only their team's; the owner sees all.
+  const pendingLeaves=leaves.filter(function(l){return l.status==='pending'&&(activeBranch==='All Branches'||l.branch===activeBranch)&&canActOn(l);});
 
   const bLeaves=leaves.filter(function(l){return activeBranch==='All Branches'||l.branch===activeBranch;});
   const statusFiltered=filter==='all'?bLeaves:bLeaves.filter(function(l){return l.status===filter;});
   const searched=search?statusFiltered.filter(function(l){return l.staffName.toLowerCase().includes(search.toLowerCase());}):statusFiltered;
-  // The people who report to the currently logged-in employee (their team).
-  // Only a person's own reporting manager (or the owner) may approve/reject
-  // their leave — so a regular staff member sees just their own leave status,
-  // while a manager also sees, and can act on, their team's requests.
-  const myTeam=appUser?staff.filter(function(s){var rn=(s.reportsTo&&s.reportsTo.name)||s.reportingManagerName||'';return rn&&rn===appUser.name&&s.name!==appUser.name;}).map(function(s){return s.name;}):[];
-  const canActOn=function(l){return !appUser||myTeam.indexOf(l.staffName)>=0;};
   const forDisplay=appUser?searched.filter(function(l){return l.staffName===appUser.name||myTeam.indexOf(l.staffName)>=0;}):searched;
   const totalPages=Math.max(1,Math.ceil(forDisplay.length/PAGE_SZ));
   const paged=forDisplay.slice((page-1)*PAGE_SZ,page*PAGE_SZ);
@@ -21278,16 +21280,17 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
         )
       ),
 
-      /* Pending Approvals */
-      React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:14}},
+      /* Pending Approvals \u2014 only shown to the owner or a reporting manager;
+         a regular employee never sees an approve/reject control. */
+      canApproveAny&&React.createElement('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:14}},
         React.createElement('div',{style:{fontSize:13,fontWeight:700,color:'#1A237E'}},'Pending Approvals'),
         pendingLeaves.length>0&&React.createElement('span',{style:{background:'#FFF3E0',color:'#E65100',fontSize:10.5,fontWeight:700,padding:'3px 11px',borderRadius:12}},pendingLeaves.length+' pending')
       ),
-      pendingLeaves.length===0&&React.createElement('div',{className:'la-empty'},
+      canApproveAny&&pendingLeaves.length===0&&React.createElement('div',{className:'la-empty'},
         React.createElement('div',{style:{fontSize:28,marginBottom:8}},'\uD83C\uDF89'),
         React.createElement('div',{style:{fontSize:12}},'No pending approvals \u2014 all caught up!')
       ),
-      React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(310px,1fr))',gap:12}},
+      canApproveAny&&React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(310px,1fr))',gap:12}},
         pendingLeaves.map(function(l){
           var clr=empColor(l.staffName);
           var dept=empDept(l.staffName);
