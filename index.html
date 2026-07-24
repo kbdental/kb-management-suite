@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-8';
+var KBDC_APP_VERSION = '2026-07-21-9';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -21412,6 +21412,16 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
                     title:'Cancel approval',
                     style:{padding:'4px 11px',borderRadius:6,background:'#FFF3E0',border:'1px solid #FFCC80',color:'#E65100',fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif",whiteSpace:'nowrap'}
                   },'\u2715 Cancel Approval')
+                  :(appUser&&l.staffName===appUser.name&&(l.status==='pending'||l.status==='approved'))
+                  ?React.createElement('button',{
+                    onClick:function(){
+                      if(!window.confirm('Cancel your '+l.type+' request'+((l.from===l.to||!l.to)?'':' ('+laFmtDate(l.from)+' \u2013 '+laFmtDate(l.to)+')')+'?\n\nThis will withdraw the request'+(l.status==='approved'?' and add the days back to your balance.':'.'))) return;
+                      var u=leaves.map(function(x){return x.id===l.id?Object.assign({},x,{status:'cancelled',cancelledAt:new Date().toISOString(),updatedAt:new Date().toISOString(),cancelNote:'Cancelled by employee'}):x;});
+                      setLeaves(u);laSaveLeaves(u);showToast('Leave request cancelled');
+                    },
+                    title:'Cancel my leave request',
+                    style:{padding:'4px 11px',borderRadius:6,background:'#FFF3E0',border:'1px solid #FFCC80',color:'#E65100',fontSize:11,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif",whiteSpace:'nowrap'}
+                  },'\u2715 Cancel Request')
                   :React.createElement('span',{style:{color:'#90A4AE',fontSize:11}},'\u2014')
                 )
               );
