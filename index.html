@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-9';
+var KBDC_APP_VERSION = '2026-07-22-1';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -2251,6 +2251,10 @@ function prAutoHold(s){
   }catch(e){}
   return false;
 }
+// Consultants = visiting / external specialists (not payroll employees). Kept
+// in their own list so they don't mix into staff, attendance or payroll.
+function hrGetConsultants(){ try{ var a=JSON.parse(localStorage.getItem('kbdc_hr_consultants')||'[]'); return Array.isArray(a)?a:[]; }catch(e){ return []; } }
+function hrSaveConsultants(a){ try{ localStorage.setItem('kbdc_hr_consultants',JSON.stringify(a)); }catch(e){} }
 var KBDC_BANKS=['State Bank of India','Punjab National Bank','Bank of Baroda','Canara Bank','Union Bank of India','Bank of India','Indian Bank','Central Bank of India','Indian Overseas Bank','UCO Bank','Bank of Maharashtra','Punjab & Sind Bank','HDFC Bank','ICICI Bank','Axis Bank','Kotak Mahindra Bank','IndusInd Bank','Yes Bank','IDFC First Bank','Federal Bank','RBL Bank','Bandhan Bank','IDBI Bank','South Indian Bank','Karur Vysya Bank','City Union Bank','DCB Bank','Dhanlaxmi Bank','Jammu & Kashmir Bank','Karnataka Bank','Tamilnad Mercantile Bank','CSB Bank','AU Small Finance Bank','Equitas Small Finance Bank','Ujjivan Small Finance Bank','Airtel Payments Bank','India Post Payments Bank','Paytm Payments Bank','Fino Payments Bank','HSBC Bank','Citibank','Standard Chartered Bank','DBS Bank India','Saraswat Co-operative Bank'];
 var KBDC_ALL_IDS=KBDC_APP_LIST.map(function(a){return a.id;});
 function kbdcGetSession(){try{return JSON.parse(localStorage.getItem(KBDC_SESSION_KEY)||'null');}catch(e){return null;}}
@@ -9640,6 +9644,7 @@ var KBDC_BACKEND_MODULES = [
   { id:'taskcompletions', label:'Task Completions Log',  sheet:'TaskCompletions',    localKey:'kbdc_task_log', get: function(){ return kbdcLsArray('kbdc_task_log'); } },
   { id:'leaves',      label:'Leave Requests',           sheet:'LeaveRequests',      localKey:'kbdc_la_leaves', get: function(){ return kbdcLsArray('kbdc_la_leaves'); } },
   { id:'holidays',    label:'Holidays',                 sheet:'Holidays',           localKey:'kbdc_la_holidays', get: function(){ return kbdcLsArray('kbdc_la_holidays'); } },
+  { id:'consultants', label:'Consultants',              sheet:'Consultants',        localKey:'kbdc_hr_consultants', get: function(){ return kbdcLsArray('kbdc_hr_consultants'); } },
   { id:'attendance',  label:'Attendance',               sheet:'Attendance',         localKey:'kbdc_la_attendance', get: function(){ return kbdcLsArray('kbdc_la_attendance'); } },
   { id:'leavealloc',  label:'Leave Allocations',        sheet:'LeaveAllocations',   get: kbdcAllocRows },
   { id:'appraisals',  label:'Appraisals',               sheet:'Appraisals',         get: kbdcAppraisalRows },
@@ -16152,6 +16157,28 @@ function HRAdminPage() {
     const [docForm, setDocForm] = useState({docType:'',fileName:'',notes:'',status:'Uploaded'});
     const [evtForm, setEvtForm] = useState({phase:'during',date:'',title:'',description:'',icon:'📌'});
     const [statusFilter, setStatusFilter] = useState('All');
+    // ── Consultants (visiting specialists) ──
+    const consultBlank = { id:'', name:'', specialization:'', qualification:'', phone:'', email:'', regNo:'', visitingDays:'', fee:'', bankName:'', bankAccount:'', ifsc:'', notes:'', active:true };
+    const [consultants, setConsultants] = useState(()=>hrGetConsultants());
+    const [showConsultForm, setShowConsultForm] = useState(false);
+    const [consultEditId, setConsultEditId] = useState(null);
+    const [consultForm, setConsultForm] = useState(consultBlank);
+    useEffect(function(){
+      function onSync(){ setConsultants(hrGetConsultants()); }
+      window.addEventListener('kbdc-modules-sync', onSync);
+      return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+    },[]);
+    function setCF(k,v){ setConsultForm(function(p){ var o=Object.assign({},p); o[k]=v; return o; }); }
+    function saveConsult(){
+      if(!consultForm.name.trim()) return;
+      var entry=Object.assign({},consultForm,{id:consultEditId||('CN'+Date.now()),updatedAt:new Date().toISOString()});
+      var list=consultEditId?consultants.map(function(c){return c.id===consultEditId?entry:c;}):[entry].concat(consultants);
+      setConsultants(list); hrSaveConsultants(list);
+      try{ kbdcAudit(consultEditId?'consultant-updated':'consultant-added', entry.name); }catch(e){}
+      setShowConsultForm(false); setConsultEditId(null); setConsultForm(consultBlank);
+    }
+    function editConsult(c){ setConsultForm(Object.assign({},consultBlank,c)); setConsultEditId(c.id); setShowConsultForm(true); }
+    function delConsult(id){ if(!window.confirm('Remove this consultant? This cannot be undone.')) return; var list=consultants.filter(function(c){return c.id!==id;}); setConsultants(list); hrSaveConsultants(list); }
 
     const DIR_DOCS_KEY = 'kbdc_dir_docs';
     const DIR_TL_KEY   = 'kbdc_dir_timeline';
@@ -16472,7 +16499,7 @@ function HRAdminPage() {
 
     // ── Sub-tab header (always visible unless in form/viewEmp) ──
     const subTabBar = React.createElement('div', { style:{display:'flex',gap:4,marginBottom:18,borderBottom:`2px solid ${C.border}`,paddingBottom:0} },
-      [['records','📋 Employee Records'],['directory','👤 Staff Directory']].map(([id,label])=>
+      [['records','📋 Employee Records'],['directory','👤 Staff Directory'],['consultants','🩺 Consultants']].map(([id,label])=>
         React.createElement('button',{key:id,onClick:()=>{setMainTab(id);setDirProfile(null);},style:{padding:'9px 18px',border:'none',borderBottom:mainTab===id?`2px solid ${C.blue}`:'2px solid transparent',background:'none',color:mainTab===id?C.blue:C.grey,fontWeight:mainTab===id?700:500,fontSize:12.5,cursor:'pointer',fontFamily:"'Poppins',sans-serif",marginBottom:-2}},label)
       )
     );
@@ -16736,6 +16763,66 @@ function HRAdminPage() {
                 );
               })
             )
+      );
+    }
+
+    // ── Consultants tab ──
+    if (mainTab==='consultants') {
+      const cSearch = consultants.filter(c => !search || (c.name||'').toLowerCase().includes(search.toLowerCase()) || (c.specialization||'').toLowerCase().includes(search.toLowerCase()));
+      const cLS = { fontSize:11, fontWeight:600, color:C.grey, display:'block', marginBottom:4 };
+      const cIS = { ...inp, width:'100%' };
+      const CF_FIELDS = [['name','Full Name *','Dr. Full Name'],['specialization','Specialization','e.g. Orthodontist'],['qualification','Qualification','e.g. MDS'],['regNo','Registration / License No.',''],['phone','Phone',''],['email','Email',''],['visitingDays','Visiting Days','e.g. Mon, Wed, Fri'],['fee','Consultation Fee','e.g. 1500 or 20%']];
+      return React.createElement('div', null,
+        subTabBar,
+        React.createElement('div', { style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:14,flexWrap:'wrap',gap:8} },
+          React.createElement('div', null,
+            React.createElement('div', { style:{fontSize:14,fontWeight:700,color:C.blueDk} }, '🩺 Consultants'),
+            React.createElement('div', { style:{fontSize:11,color:C.grey,marginTop:2} }, 'Visiting / external specialists — separate from payroll staff · '+consultants.length+' consultant'+(consultants.length!==1?'s':''))
+          ),
+          React.createElement('button', { style:btn(), onClick:()=>{ setConsultForm(consultBlank); setConsultEditId(null); setShowConsultForm(true); } }, '+ Add Consultant')
+        ),
+        React.createElement('input', { style:{...inp,maxWidth:280,marginBottom:14}, placeholder:'🔍 Search name or specialization...', value:search, onChange:e=>setSearch(e.target.value) }),
+        consultants.length===0
+          ? React.createElement('div', { style:{textAlign:'center',padding:'50px 20px',color:C.grey,border:`2px dashed ${C.border}`,borderRadius:12} },
+              React.createElement('div',{style:{fontSize:42,marginBottom:10}},'🩺'),
+              React.createElement('div',{style:{fontSize:13}},'No consultants added yet. Click “+ Add Consultant” to add a visiting specialist.')
+            )
+          : React.createElement('div', { style:{overflowX:'auto'} },
+              React.createElement('table', { style:{width:'100%',borderCollapse:'collapse',fontSize:12.5} },
+                React.createElement('thead', null, React.createElement('tr', { style:{background:C.blueDk} }, ['Name','Specialization','Phone','Visiting Days','Fee','Status','Actions'].map(h=>React.createElement('th',{key:h,style:{padding:'10px 12px',textAlign:'left',fontSize:10,fontWeight:700,color:'#fff',whiteSpace:'nowrap'}},h)))),
+                React.createElement('tbody', null,
+                  cSearch.map(c=>React.createElement('tr',{key:c.id,style:{borderBottom:`1px solid ${C.border}`}},
+                    React.createElement('td',{style:{padding:'10px 12px'}},React.createElement('div',{style:{fontWeight:700,color:C.blueDk}},c.name),c.qualification?React.createElement('div',{style:{fontSize:10.5,color:C.grey}},c.qualification):null),
+                    React.createElement('td',{style:{padding:'10px 12px',color:C.tx}},c.specialization||'—'),
+                    React.createElement('td',{style:{padding:'10px 12px',color:C.tx}},c.phone||'—'),
+                    React.createElement('td',{style:{padding:'10px 12px',color:C.tx}},c.visitingDays||'—'),
+                    React.createElement('td',{style:{padding:'10px 12px',color:C.tx}},c.fee?String(c.fee):'—'),
+                    React.createElement('td',{style:{padding:'10px 12px'}},React.createElement('span',{style:{padding:'3px 10px',borderRadius:20,fontSize:10.5,fontWeight:700,background:c.active!==false?C.greenLt:C.redLt,color:c.active!==false?C.green:C.red}},c.active!==false?'Active':'Inactive')),
+                    React.createElement('td',{style:{padding:'10px 12px',whiteSpace:'nowrap'}},
+                      React.createElement('button',{onClick:()=>editConsult(c),style:{...btn(C.white,C.blue,C.blueLt),padding:'4px 10px',fontSize:11.5,marginRight:5}},'✏️ Edit'),
+                      React.createElement('button',{onClick:()=>delConsult(c.id),style:{...btn(C.white,C.red,'#F5C6CB'),padding:'4px 10px',fontSize:11.5}},'🗑 Delete')
+                    )
+                  ))
+                )
+              )
+            ),
+        showConsultForm && React.createElement('div', { style:{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:9999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'30px 16px'}, onClick:()=>setShowConsultForm(false) },
+          React.createElement('div', { style:{background:'#fff',borderRadius:14,padding:'22px 24px',width:640,maxWidth:'96vw'}, onClick:e=>e.stopPropagation() },
+            React.createElement('div', { style:{fontSize:15,fontWeight:700,color:C.blueDk,marginBottom:16} }, consultEditId?'✏️ Edit Consultant':'🩺 Add Consultant'),
+            React.createElement('div', { style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:12,marginBottom:12} },
+              CF_FIELDS.map(([k,l,ph])=>React.createElement('div',{key:k},React.createElement('label',{style:cLS},l),React.createElement('input',{type:'text',value:consultForm[k]||'',onChange:e=>setCF(k,e.target.value),placeholder:ph,style:cIS}))),
+              React.createElement('div',null,React.createElement('label',{style:cLS},'Bank Name'),React.createElement('input',{type:'text',list:'kbdc-bank-list',value:consultForm.bankName||'',onChange:e=>setCF('bankName',e.target.value),placeholder:'Select or type bank',style:cIS})),
+              React.createElement('div',null,React.createElement('label',{style:cLS},'Account No.'),React.createElement('input',{type:'text',value:consultForm.bankAccount||'',onChange:e=>setCF('bankAccount',e.target.value),style:cIS})),
+              React.createElement('div',null,React.createElement('label',{style:cLS},'IFSC Code'),React.createElement('input',{type:'text',value:consultForm.ifsc||'',onChange:e=>setCF('ifsc',e.target.value),style:cIS})),
+              React.createElement('div',{style:{display:'flex',alignItems:'center',gap:8,marginTop:22}},React.createElement('input',{type:'checkbox',checked:consultForm.active!==false,onChange:e=>setCF('active',e.target.checked),style:{width:15,height:15,cursor:'pointer'}}),React.createElement('label',{style:{fontSize:12,color:C.tx,cursor:'pointer'},onClick:()=>setCF('active',!(consultForm.active!==false))},'Active consultant'))
+            ),
+            React.createElement('div', { style:{marginBottom:16} }, React.createElement('label',{style:cLS},'Notes'),React.createElement('textarea',{value:consultForm.notes||'',onChange:e=>setCF('notes',e.target.value),placeholder:'Any extra detail (schedule, terms, etc.)',style:{...cIS,minHeight:60,resize:'vertical'}})),
+            React.createElement('div', { style:{display:'flex',gap:8,justifyContent:'flex-end'} },
+              React.createElement('button',{onClick:()=>setShowConsultForm(false),style:{...btn(C.white,C.grey,C.border),padding:'8px 20px'}},'Cancel'),
+              React.createElement('button',{onClick:saveConsult,style:{...btn(),padding:'8px 22px',fontWeight:600}},consultEditId?'💾 Update Consultant':'✓ Add Consultant')
+            )
+          )
+        )
       );
     }
 
