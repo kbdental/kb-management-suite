@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-22-2';
+var KBDC_APP_VERSION = '2026-07-22-3';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -9590,14 +9590,14 @@ async function kbdcInvBackendReq(sheet, action, payload) { return kbdcBackendReq
 // Uploads a real file to Google Drive via the backend, into
 // Employees / <person> / <file>, and returns { url, fileId, name }. Used for
 // staff & consultant document storage.
-function kbdcUploadDocToDrive(personName, file) {
+function kbdcUploadDocToDrive(personName, file, head) {
   return new Promise(function(resolve, reject) {
     if (!file) { reject(new Error('No file selected')); return; }
     if (file.size > 25 * 1024 * 1024) { reject(new Error('File is larger than 25 MB — please upload a smaller file.')); return; }
     var reader = new FileReader();
     reader.onload = function() {
       var b64 = String(reader.result || '').split(',')[1] || '';
-      kbdcBackendReq('_docs', 'uploadDoc', { employee: personName || 'Unassigned', fileName: file.name, mimeType: file.type || 'application/octet-stream', fileData: b64 })
+      kbdcBackendReq('_docs', 'uploadDoc', { head: head || 'Employees', employee: personName || 'Unassigned', fileName: file.name, mimeType: file.type || 'application/octet-stream', fileData: b64 })
         .then(function(res) { if (res && res.ok) resolve(res); else reject(new Error((res && res.error) || 'Upload failed')); })
         .catch(reject);
     };
@@ -9693,7 +9693,11 @@ var KBDC_BLOB_KEYS = [
   // Raw appraisal + achievers data. Their dedicated tabs (Appraisals /
   // AchieversScores) hold a flattened summary for viewing; these blobs keep the
   // full source so a cleared device can restore them intact.
-  'kbdc_hr_appraisals','kbdc_ach_v1'
+  'kbdc_hr_appraisals','kbdc_ach_v1',
+  // Document links (the actual files live in Google Drive; these keep the
+  // per-employee / per-consultant list of documents and their Drive links so
+  // every device can see and open them).
+  'kbdc_dir_docs','kbdc_consult_docs'
 ];
 function kbdcBlobEmpty(v){
   if (v == null) return true;
@@ -16199,6 +16203,29 @@ function HRAdminPage() {
     }
     function editConsult(c){ setConsultForm(Object.assign({},consultBlank,c)); setConsultEditId(c.id); setShowConsultForm(true); }
     function delConsult(id){ if(!window.confirm('Remove this consultant? This cannot be undone.')) return; var list=consultants.filter(function(c){return c.id!==id;}); setConsultants(list); hrSaveConsultants(list); }
+    // ── Consultant documents (uploaded to Google Drive under Consultants/<name>) ──
+    const [consultDocs, setConsultDocs] = useState(function(){ try{ return JSON.parse(localStorage.getItem('kbdc_consult_docs')||'{}'); }catch(e){ return {}; } });
+    const saveConsultDocs = function(d){ try{ localStorage.setItem('kbdc_consult_docs',JSON.stringify(d)); }catch(e){} setConsultDocs(d); };
+    const [consultDocsFor, setConsultDocsFor] = useState(null);
+    const [cDocFile, setCDocFile] = useState(null);
+    const [cDocType, setCDocType] = useState('');
+    const [cDocUploading, setCDocUploading] = useState(false);
+    async function addConsultDoc(){
+      if(!consultDocsFor) return;
+      let driveUrl='', fileId='', fileName = cDocFile?cDocFile.name:'';
+      if(cDocFile){
+        setCDocUploading(true);
+        try{ const res=await kbdcUploadDocToDrive(consultDocsFor.name, cDocFile, 'Consultants'); driveUrl=res.url||''; fileId=res.fileId||''; fileName=res.name||cDocFile.name; }
+        catch(e){ setCDocUploading(false); alert('File upload to Google Drive failed:\n'+e.message+'\n\nMake sure the main backend has been re-deployed with Drive access.'); return; }
+        setCDocUploading(false);
+      } else if(!cDocType.trim()) { return; }
+      const cid=consultDocsFor.id;
+      const arr=(consultDocs[cid]||[]);
+      const nd={ id:'cdoc'+Date.now(), docType:cDocType||'Document', fileName:fileName, driveUrl:driveUrl, fileId:fileId, uploadDate:new Date().toISOString() };
+      const upd=Object.assign({},consultDocs,{[cid]:[...arr,nd]});
+      saveConsultDocs(upd); setCDocFile(null); setCDocType('');
+    }
+    function delConsultDoc(cid,did){ const arr=(consultDocs[cid]||[]).filter(function(d){return d.id!==did;}); saveConsultDocs(Object.assign({},consultDocs,{[cid]:arr})); }
 
     const DIR_DOCS_KEY = 'kbdc_dir_docs';
     const DIR_TL_KEY   = 'kbdc_dir_timeline';
@@ -16839,6 +16866,7 @@ function HRAdminPage() {
                     React.createElement('td',{style:{padding:'10px 12px',color:C.tx}},c.fee?String(c.fee):'—'),
                     React.createElement('td',{style:{padding:'10px 12px'}},React.createElement('span',{style:{padding:'3px 10px',borderRadius:20,fontSize:10.5,fontWeight:700,background:c.active!==false?C.greenLt:C.redLt,color:c.active!==false?C.green:C.red}},c.active!==false?'Active':'Inactive')),
                     React.createElement('td',{style:{padding:'10px 12px',whiteSpace:'nowrap'}},
+                      React.createElement('button',{onClick:()=>{setConsultDocsFor(c);setCDocFile(null);setCDocType('');},style:{...btn(C.white,'#6A1B9A','#E1BEE7'),padding:'4px 10px',fontSize:11.5,marginRight:5}},'📎 Docs'+((consultDocs[c.id]||[]).length?' ('+(consultDocs[c.id]||[]).length+')':'')),
                       React.createElement('button',{onClick:()=>editConsult(c),style:{...btn(C.white,C.blue,C.blueLt),padding:'4px 10px',fontSize:11.5,marginRight:5}},'✏️ Edit'),
                       React.createElement('button',{onClick:()=>delConsult(c.id),style:{...btn(C.white,C.red,'#F5C6CB'),padding:'4px 10px',fontSize:11.5}},'🗑 Delete')
                     )
@@ -16861,6 +16889,36 @@ function HRAdminPage() {
               React.createElement('button',{onClick:()=>setShowConsultForm(false),style:{...btn(C.white,C.grey,C.border),padding:'8px 20px'}},'Cancel'),
               React.createElement('button',{onClick:saveConsult,style:{...btn(),padding:'8px 22px',fontWeight:600}},consultEditId?'💾 Update Consultant':'✓ Add Consultant')
             )
+          )
+        ),
+        consultDocsFor && React.createElement('div', { style:{position:'fixed',inset:0,background:'rgba(0,0,0,.45)',zIndex:9999,display:'flex',alignItems:'flex-start',justifyContent:'center',overflowY:'auto',padding:'30px 16px'}, onClick:()=>setConsultDocsFor(null) },
+          React.createElement('div', { style:{background:'#fff',borderRadius:14,padding:'22px 24px',width:600,maxWidth:'96vw'}, onClick:e=>e.stopPropagation() },
+            React.createElement('div',{style:{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:6}},
+              React.createElement('div',{style:{fontSize:15,fontWeight:700,color:C.blueDk}},'📎 Documents — '+consultDocsFor.name),
+              React.createElement('button',{onClick:()=>setConsultDocsFor(null),style:{background:'none',border:'none',fontSize:20,cursor:'pointer',color:C.grey,lineHeight:1}},'×')
+            ),
+            React.createElement('div',{style:{fontSize:10.5,color:C.grey,marginBottom:14}},'Saved to Google Drive → Consultants / '+consultDocsFor.name),
+            React.createElement('div',{style:{...card,background:'#FAF5FF',marginBottom:14}},
+              React.createElement('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}},
+                React.createElement('div',null,React.createElement('label',{style:lbl},'Document Type'),React.createElement('input',{type:'text',value:cDocType,onChange:e=>setCDocType(e.target.value),placeholder:'e.g. Agreement, Registration',style:inp})),
+                React.createElement('div',null,React.createElement('label',{style:lbl},'File'),React.createElement('input',{type:'file',onChange:e=>{const f=e.target.files&&e.target.files[0];setCDocFile(f||null);},style:{...inp,padding:'6px 8px'}}))
+              ),
+              cDocFile&&React.createElement('div',{style:{fontSize:10.5,color:C.green,fontWeight:600,marginBottom:8}},'Selected: '+cDocFile.name+' ('+Math.round(cDocFile.size/1024)+' KB)'),
+              React.createElement('button',{onClick:addConsultDoc,disabled:cDocUploading,style:{...btn(),padding:'6px 16px',opacity:cDocUploading?0.6:1,cursor:cDocUploading?'wait':'pointer'}},cDocUploading?'⏳ Uploading…':'✓ Upload Document')
+            ),
+            (consultDocs[consultDocsFor.id]||[]).length===0
+              ? React.createElement('div',{style:{textAlign:'center',padding:'24px',color:C.grey,border:`2px dashed ${C.border}`,borderRadius:10}},'No documents yet.')
+              : React.createElement('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+                  (consultDocs[consultDocsFor.id]||[]).map(d=>React.createElement('div',{key:d.id,style:{...card,display:'flex',alignItems:'center',gap:12,padding:'10px 14px'}},
+                    React.createElement('div',{style:{width:34,height:34,borderRadius:8,background:C.blueLt,display:'flex',alignItems:'center',justifyContent:'center',fontSize:15,flexShrink:0}},'📄'),
+                    React.createElement('div',{style:{flex:1,minWidth:0}},
+                      React.createElement('div',{style:{fontSize:13,fontWeight:600,color:C.tx}},d.docType),
+                      React.createElement('div',{style:{fontSize:11,color:C.grey,marginTop:2}},(d.fileName?d.fileName+' · ':'')+'Added: '+fdt(d.uploadDate))
+                    ),
+                    d.driveUrl&&React.createElement('a',{href:d.driveUrl,target:'_blank',rel:'noopener noreferrer',style:{...badge(C.greenLt,C.green),fontSize:10,padding:'4px 11px',textDecoration:'none',fontWeight:700}},'📎 Open'),
+                    React.createElement('button',{onClick:()=>delConsultDoc(consultDocsFor.id,d.id),style:{background:'none',border:'none',color:C.red,cursor:'pointer',fontSize:15,padding:'0 4px'}},'×')
+                  ))
+                )
           )
         )
       );

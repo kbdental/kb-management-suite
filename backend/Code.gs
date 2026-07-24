@@ -94,7 +94,7 @@ function doPost(e) {
       //   Employees / <Employee or Consultant name> / <file>
       // and returns a link. Requires the one-time Drive authorisation prompt
       // that appears when this deployment is (re)authorised.
-      var head = getOrCreateFolder('Employees');
+      var head = getOrCreateFolder(sanitizeFolderName(body.head || 'Employees'));
       var who = sanitizeFolderName(body.employee || 'Unassigned');
       var empFolder = getOrCreateChildFolder(head, who);
       var fileData = body.fileData || '';
@@ -104,7 +104,7 @@ function doPost(e) {
       return respond({ ok: true, fileId: file.getId(), url: file.getUrl(), name: file.getName(), folder: who });
     }
     if (action === 'listDocs') {
-      var head2 = getOrCreateFolder('Employees');
+      var head2 = getOrCreateFolder(sanitizeFolderName(body.head || 'Employees'));
       var empFolder2 = getChildFolder(head2, sanitizeFolderName(body.employee || ''));
       var files = [];
       if (empFolder2) {
