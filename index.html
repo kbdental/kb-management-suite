@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-22-3';
+var KBDC_APP_VERSION = '2026-07-24-1';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -9697,7 +9697,7 @@ var KBDC_BLOB_KEYS = [
   // Document links (the actual files live in Google Drive; these keep the
   // per-employee / per-consultant list of documents and their Drive links so
   // every device can see and open them).
-  'kbdc_dir_docs','kbdc_consult_docs'
+  'kbdc_dir_docs','kbdc_consult_docs','kbdc_hr_docs'
 ];
 function kbdcBlobEmpty(v){
   if (v == null) return true;
@@ -17046,6 +17046,8 @@ function HRAdminPage() {
   function DocsAndPolicies() {
     const [subTab, setSubTab] = useState('staffdocs');
     const [selStaff, setSelStaff] = useState(staff[0]?.id||null);
+    const consultants = hrGetConsultants();
+    const [selConsult, setSelConsult] = useState(consultants[0]?.id||null);
     const DOC_TYPES = [
           // Identity & Personal
           'Aadhaar Card','PAN Card','Passport','Voter ID / Driving Licence',
@@ -17075,6 +17077,7 @@ function HRAdminPage() {
       // Sub tabs
       React.createElement('div', { style:{display:'flex',gap:6,marginBottom:16} },
         React.createElement('button', { style:pill(subTab==='staffdocs'), onClick:()=>setSubTab('staffdocs') }, '👤 Staff Documents'),
+        React.createElement('button', { style:pill(subTab==='consultdocs'), onClick:()=>setSubTab('consultdocs') }, '🩺 Consultant Documents'),
         React.createElement('button', { style:pill(subTab==='policies'), onClick:()=>setSubTab('policies') }, '📋 Clinic Policies'),
         React.createElement('button', { style:pill(subTab==='gendocs'), onClick:()=>setSubTab('gendocs') }, '📁 General Documents'),
         React.createElement('button', { style:pill(subTab==='compliance',C.red), onClick:()=>setSubTab('compliance') }, '⚖️ Compliance')
@@ -17169,6 +17172,7 @@ function HRAdminPage() {
                       dl !== null && React.createElement('span', { style:{display:'inline-block',padding:'2px 9px',borderRadius:99,fontSize:10,fontWeight:700,background:dl<=0?C.redLt:dl<=30?'#FFF3E0':C.greenLt,color:dl<=0?C.red:dl<=30?C.orange:C.green} },
                         dl<=0?'Expired':dl+'d left'
                       ),
+                      doc.driveUrl && React.createElement('a', { href:doc.driveUrl, target:'_blank', rel:'noopener noreferrer', style:{...badge(C.greenLt,C.green),fontSize:10,padding:'4px 11px',textDecoration:'none',fontWeight:700} }, '📎 Open'),
                       React.createElement('button', { style:{...btn(C.white,C.red,'#FFCDD2'),padding:'4px 10px',fontSize:11},
                         onClick:()=>{ if(!confirm('Delete this document?'))return; const list=docs.filter(d=>d.id!==doc.id); saveDocs(list); showToast('Document removed'); }
                       }, '🗑')
@@ -17205,16 +17209,30 @@ function HRAdminPage() {
       ) : null,
 
       // Modals
-      modal?.type==='addDoc' && React.createElement('div', { style:{position:'fixed',inset:0,background:'rgba(26,35,126,.45)',zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'} },
+      modal?.type==='addDoc' && (() => {
+        const isConsult = !!modal.consultantId;
+        const person = isConsult
+          ? (consultants.find(c=>c.id===modal.consultantId) || {})
+          : (staff.find(s=>s.id===modal.staffId) || {});
+        const personName = person.name || (isConsult ? 'Consultant' : 'Employee');
+        const headFolder = isConsult ? 'Consultants' : 'Employees';
+        return React.createElement('div', { style:{position:'fixed',inset:0,background:'rgba(26,35,126,.45)',zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'} },
         React.createElement('div', { style:{background:C.white,borderRadius:14,padding:'26px 28px',width:440,maxWidth:'94vw',boxShadow:'0 16px 48px rgba(0,0,0,.22)',fontFamily:"'Poppins',sans-serif"} },
-          React.createElement('div', { style:{fontSize:14,fontWeight:700,color:C.blueDk,marginBottom:16} }, '📄 Add Document'),
+          React.createElement('div', { style:{fontSize:14,fontWeight:700,color:C.blueDk,marginBottom:4} }, '📄 Add Document'),
+          React.createElement('div', { style:{fontSize:11,color:C.grey,marginBottom:16} }, 'Saved to Google Drive → '+headFolder+' / '+personName),
           (() => {
             let docForm = modal.docForm || { type:'', expiry:'', notes:'', fileName:'' };
+            const uploading = !!modal.uploading;
             return React.createElement('div', null,
               React.createElement('label', { style:lbl }, 'Document Type *'),
               React.createElement('select', { style:{...inp,marginBottom:12}, value:docForm.type||modal.presetType||'',
                 onChange:e=>setModal(m=>({...m,docForm:{...docForm,type:e.target.value}}))
               }, React.createElement('option',{value:''},'-- Select --'), DOC_TYPES.map(t=>React.createElement('option',{key:t,value:t},t))),
+              React.createElement('label', { style:lbl }, 'File (uploaded to Google Drive)'),
+              React.createElement('input', { style:{...inp,marginBottom:6,padding:'6px 8px'}, type:'file',
+                onChange:e=>{ const f=e.target.files&&e.target.files[0]; setModal(m=>({...m,docFile:f||null,docForm:{...docForm,fileName:(f&&f.name)||docForm.fileName||''}})); }
+              }),
+              modal.docFile && React.createElement('div', { style:{fontSize:10.5,color:C.green,fontWeight:600,marginBottom:10} }, 'Selected: '+modal.docFile.name+' ('+Math.round(modal.docFile.size/1024)+' KB)'),
               React.createElement('label', { style:lbl }, 'File Name / Reference'),
               React.createElement('input', { style:{...inp,marginBottom:12}, placeholder:'e.g. Aadhaar_RameshKumar.pdf', value:docForm.fileName||'',
                 onChange:e=>setModal(m=>({...m,docForm:{...docForm,fileName:e.target.value}}))
@@ -17228,18 +17246,27 @@ function HRAdminPage() {
                 onChange:e=>setModal(m=>({...m,docForm:{...docForm,notes:e.target.value}}))
               }),
               React.createElement('div', { style:{display:'flex',gap:8,justifyContent:'flex-end'} },
-                React.createElement('button', { style:btn(C.white,C.grey,C.border), onClick:()=>setModal(null) }, 'Cancel'),
-                React.createElement('button', { style:btn(C.green), onClick:()=>{
+                React.createElement('button', { style:btn(C.white,C.grey,C.border), disabled:uploading, onClick:()=>setModal(null) }, 'Cancel'),
+                React.createElement('button', { style:{...btn(C.green),opacity:uploading?0.6:1,cursor:uploading?'wait':'pointer'}, disabled:uploading, onClick:async ()=>{
                   const df = modal.docForm||{};
                   if(!df.type){ showToast('Select document type',false); return; }
-                  const list = [...docs, {id:uid(), staffId:modal.staffId, type:df.type, fileName:df.fileName||'', expiry:df.expiry||'', notes:df.notes||'', createdAt:new Date().toISOString()}];
-                  saveDocs(list); showToast('Document added'); setModal(null);
-                }}, '✓ Save')
+                  const file = modal.docFile;
+                  let driveUrl='', fileId='', fileName=df.fileName||'';
+                  if(file){
+                    setModal(m=>({...m,uploading:true}));
+                    try{ const res=await kbdcUploadDocToDrive(personName, file, headFolder); driveUrl=res.url||''; fileId=res.fileId||''; fileName=res.name||file.name; }
+                    catch(err){ setModal(m=>({...m,uploading:false})); alert('File upload to Google Drive failed:\n'+err.message+'\n\nMake sure the backend has been re-deployed with Drive access.'); return; }
+                  }
+                  const rec = {id:uid(), type:df.type, fileName:fileName, driveUrl:driveUrl, fileId:fileId, expiry:df.expiry||'', notes:df.notes||'', createdAt:new Date().toISOString()};
+                  if(isConsult) rec.consultantId=modal.consultantId; else rec.staffId=modal.staffId;
+                  saveDocs([...docs, rec]); showToast(file?'Document uploaded':'Document added'); setModal(null);
+                }}, uploading?'⏳ Uploading…':'✓ Save')
               )
             );
           })()
         )
-      ),
+        );
+      })(),
 
       modal?.type==='editPolicy' && React.createElement('div', { style:{position:'fixed',inset:0,background:'rgba(26,35,126,.45)',zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'} },
         React.createElement('div', { style:{background:C.white,borderRadius:14,padding:'26px 28px',width:460,maxWidth:'94vw',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,.22)'} },
@@ -17345,6 +17372,53 @@ function HRAdminPage() {
       })() : null,
 
       subTab==='compliance' ? React.createElement(ComplianceTab, null) : null,
+
+      // ── Consultant Documents tab ──
+      subTab==='consultdocs' ? (() => {
+        const consultDocs = docs.filter(d=>d.consultantId===selConsult);
+        return React.createElement('div', { key:'consultdocs' },
+          React.createElement('div', { style:{...card, marginBottom:14, background:'#FAF5FF', border:'1px solid #E1BEE7'} },
+            React.createElement('div', { style:{fontSize:13,fontWeight:700,color:'#6A1B9A',marginBottom:6} }, '🩺 Consultant / Visiting Doctor Documents'),
+            React.createElement('div', { style:{fontSize:11.5,color:C.grey,lineHeight:1.5} }, 'Upload agreements, registration certificates, KYC and other documents for your visiting consultants. Files are saved to Google Drive under Consultants / <name>.')
+          ),
+          consultants.length===0
+            ? React.createElement('div', { style:{textAlign:'center',padding:24,color:C.grey,background:'#FFF3E0',borderRadius:10,border:'1px solid #FFE082'} },
+                '👆 Add consultants first from Employee Master → 🩺 Consultants, then upload their documents here'
+              )
+            : React.createElement('div', null,
+                React.createElement('div', { style:{display:'flex',gap:8,marginBottom:14,flexWrap:'wrap',alignItems:'center'} },
+                  React.createElement('select', { style:{...inp,maxWidth:280}, value:selConsult||'', onChange:e=>setSelConsult(e.target.value) },
+                    consultants.map(c=>React.createElement('option',{key:c.id,value:c.id},c.name+(c.specialization?' — '+c.specialization:'')))
+                  ),
+                  React.createElement('button', { style:{...btn(),background:'#6A1B9A',borderColor:'#6A1B9A'}, onClick:()=>setModal({type:'addDoc',consultantId:selConsult}) }, '+ Add Document')
+                ),
+                consultDocs.length===0
+                  ? React.createElement('div', { style:{textAlign:'center',padding:24,color:C.grey,border:'2px dashed '+C.border,borderRadius:10} }, 'No documents uploaded yet for this consultant. Click "+ Add Document" to upload.')
+                  : React.createElement('div', { style:{display:'flex',flexDirection:'column',gap:8} },
+                      consultDocs.map(doc => {
+                        const dl = daysLeft(doc.expiry);
+                        return React.createElement('div', { key:doc.id, style:{...card,display:'flex',alignItems:'center',gap:12} },
+                          React.createElement('div', { style:{fontSize:22,width:36,textAlign:'center'} }, '📄'),
+                          React.createElement('div', { style:{flex:1,minWidth:0} },
+                            React.createElement('div', { style:{fontWeight:600,fontSize:13,color:'#6A1B9A'} }, doc.type),
+                            React.createElement('div', { style:{fontSize:11,color:C.grey,marginTop:2} },
+                              (doc.fileName||'No file attached'),
+                              doc.expiry && ' · Expires: '+fdt(doc.expiry)
+                            )
+                          ),
+                          dl !== null && React.createElement('span', { style:{display:'inline-block',padding:'2px 9px',borderRadius:99,fontSize:10,fontWeight:700,background:dl<=0?C.redLt:dl<=30?'#FFF3E0':C.greenLt,color:dl<=0?C.red:dl<=30?C.orange:C.green} },
+                            dl<=0?'Expired':dl+'d left'
+                          ),
+                          doc.driveUrl && React.createElement('a', { href:doc.driveUrl, target:'_blank', rel:'noopener noreferrer', style:{...badge(C.greenLt,C.green),fontSize:10,padding:'4px 11px',textDecoration:'none',fontWeight:700} }, '📎 Open'),
+                          React.createElement('button', { style:{...btn(C.white,C.red,'#FFCDD2'),padding:'4px 10px',fontSize:11},
+                            onClick:()=>{ if(!confirm('Delete this document?'))return; const list=docs.filter(d=>d.id!==doc.id); saveDocs(list); showToast('Document removed'); }
+                          }, '🗑')
+                        );
+                      })
+                    )
+              )
+        );
+      })() : null,
 
       modal?.type==='viewGenDoc' && React.createElement('div', { style:{position:'fixed',inset:0,background:'rgba(26,35,126,.45)',zIndex:500,display:'flex',alignItems:'center',justifyContent:'center'} },
         React.createElement('div', { style:{background:C.white,borderRadius:14,padding:'26px 28px',width:600,maxWidth:'96vw',maxHeight:'90vh',overflowY:'auto',boxShadow:'0 16px 48px rgba(0,0,0,.22)'} },
