@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-21-6';
+var KBDC_APP_VERSION = '2026-07-21-7';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -16239,7 +16239,7 @@ function HRAdminPage() {
         ),
         React.createElement('div', { style:{...card} },
           viewTab==='personal' && React.createElement('div', { style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10} },
-            ...[['📞 Phone',viewEmp.phone||'--'],['✉️ Email',viewEmp.email||'--'],['🎂 Date of Birth',viewEmp.dob||'--'],['⚥ Gender',viewEmp.gender||'--'],['🩸 Blood Group',viewEmp.bloodGroup||'--'],['🆔 Aadhaar',viewEmp.aadhaar?'••••'+viewEmp.aadhaar.slice(-4):'--'],['💳 PAN',viewEmp.pan||'--'],['🏠 Address',viewEmp.address||'--'],['🆘 Emergency',viewEmp.emergencyName?(viewEmp.emergencyName+' ('+viewEmp.emergencyRelation+')'):'--'],['📱 Emg. Phone',viewEmp.emergencyPhone||'--']].map(([l,v])=>
+            ...[['📞 Phone',viewEmp.phone||'--'],['✉️ Email',viewEmp.email||'--'],['🎂 Date of Birth',viewEmp.dob||'--'],['⚥ Gender',viewEmp.gender||'--'],['🩸 Blood Group',viewEmp.bloodGroup||'--'],['🆔 Aadhaar',viewEmp.aadhaar?'••••'+String(viewEmp.aadhaar).slice(-4):'--'],['💳 PAN',viewEmp.pan||'--'],['🏠 Address',viewEmp.address||'--'],['🆘 Emergency',viewEmp.emergencyName?(viewEmp.emergencyName+' ('+viewEmp.emergencyRelation+')'):'--'],['📱 Emg. Phone',viewEmp.emergencyPhone||'--']].map(([l,v])=>
               React.createElement('div',{key:l,style:{background:C.blueLt+'55',borderRadius:8,padding:'8px 12px'}},
                 React.createElement('div',{style:{fontSize:9,color:C.grey,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}},l),
                 React.createElement('div',{style:{fontSize:12,color:C.tx,fontWeight:500}},v)
@@ -16265,7 +16265,7 @@ function HRAdminPage() {
             )
           ),
           viewTab==='bank' && React.createElement('div', { style:{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10} },
-            ...[['Bank Name',viewEmp.bankName||'--'],['Account No.',viewEmp.bankAccount?'••••'+viewEmp.bankAccount.slice(-4):'--'],['IFSC Code',viewEmp.ifsc||'--']].map(([l,v])=>
+            ...[['Bank Name',viewEmp.bankName||'--'],['Account No.',viewEmp.bankAccount?'••••'+String(viewEmp.bankAccount).slice(-4):'--'],['IFSC Code',viewEmp.ifsc||'--']].map(([l,v])=>
               React.createElement('div',{key:l,style:{background:C.blueLt+'55',borderRadius:8,padding:'8px 12px'}},
                 React.createElement('div',{style:{fontSize:9,color:C.grey,fontWeight:700,textTransform:'uppercase',letterSpacing:'.06em',marginBottom:3}},l),
                 React.createElement('div',{style:{fontSize:12,color:C.tx,fontWeight:500}},v)
