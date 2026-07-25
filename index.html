@@ -10683,7 +10683,16 @@ function InventoryPage({ invRole, userName }) {
     // everyone silently getting full Manager access.
     if (ref.current) {
       var __kbdcInvRole = (invRole === 'staff') ? 'staff' : 'admin';
-      var __kbdcInvUser = String(userName || 'Admin').replace(/"/g, '\\"');
+      // Order matters: backslashes first (so the quote-escaping below doesn't
+      // get re-escaped), then quotes (so the name can't close the JS string
+      // early), then '<' (so a name containing a script end-tag can't
+      // prematurely close the enclosing script block in the srcdoc's HTML
+      // parse — that's an HTML-parser-level break, not a JS-string one, so
+      // quote-escaping alone wouldn't stop it).
+      var __kbdcInvUser = String(userName || 'Admin')
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/</g, '\\u003C');
       ref.current.srcdoc = __kbdcInvTpl
         .replace(
           'ROLE = "admin";\n  CURRENT_USER = "Admin";',
@@ -22747,7 +22756,23 @@ function App() {
     // pure friction. Owners see the full admin view (appUser stays null);
     // everyone else gets their own HR record resolved straight from the
     // session, which drives each module's self-service ("my leave", etc.) view.
-    setAppUser(isOwner ? null : kbdcResolveAppUser(session));
+    if (isOwner) {
+      setAppUser(null);
+      setNav(id);
+      return;
+    }
+    var resolved = kbdcResolveAppUser(session);
+    if (!resolved) {
+      // Several modules (Leave & Attendance in particular) treat a null
+      // appUser as "this is the owner/admin, show the unrestricted view" —
+      // for a non-owner that would silently hand out approve-any-leave /
+      // see-everyone rights the moment their HR record can't be found (a
+      // stale sync, a renamed/removed record, etc). Fail closed instead of
+      // guessing: block entry rather than open the module as if unrestricted.
+      alert('Your profile could not be found in HR Admin. Please ask an admin to check your record, then log out and log back in.');
+      return;
+    }
+    setAppUser(resolved);
     setNav(id);
   }
 
