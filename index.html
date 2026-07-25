@@ -22762,7 +22762,11 @@ function App() {
   const access = isOwner ? KBDC_ALL_IDS : (session.appAccess||[]);
   // Manager (full) if they hold 'inv' (or are owner), User (Stock Out only)
   // if they only hold 'invout', otherwise no inventory access at all.
-  const invRole = kbdcHasAppAccess('inv', isOwner, access) ? 'admin' : (access.indexOf('invout')>=0 ? 'staff' : null);
+  // NOTE: deliberately NOT using kbdcHasAppAccess('inv',...) here — that
+  // helper treats 'invout' as sufficient to satisfy 'inv' (so the nav item
+  // and router still open the Inventory screen for Stock-Out-only users),
+  // which would make every invout-only user resolve to 'admin' below.
+  const invRole = (isOwner || access.indexOf('inv')>=0) ? 'admin' : (access.indexOf('invout')>=0 ? 'staff' : null);
 
   function handleNavRequest(id) {
     // Going home or My Apps — always allowed, clear appUser
