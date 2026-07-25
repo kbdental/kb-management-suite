@@ -35,6 +35,9 @@
   .recent h2{font-size:11px;font-weight:700;color:#8A97B4;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
   .rrow{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;padding:8px 0;border-top:1px solid #EEF1F8;color:#4A5876}
   .rrow b{color:#1A2340}
+  .whoami{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#F0F4FF;border-radius:8px;font-size:13px}
+  .whoami b{color:#1A237E}
+  .linkbtn{width:auto;margin:0;padding:0;background:none;color:#8A97B4;font-size:11px;font-weight:600;text-decoration:underline;cursor:pointer}
 </style>
 </head>
 <body>
@@ -45,11 +48,24 @@
       <p>K.B. Dental Clinic — record an item you have taken out</p>
     </div>
     <div class="body" id="body">
-      <div class="loading" id="loading">Loading item list…</div>
+      <div class="loading" id="loading">Loading staff list…</div>
+
+      <div id="login" style="display:none">
+        <label for="loginName">Your Name</label>
+        <select id="loginName"><option value="">-- Select your name --</option></select>
+
+        <label for="loginPin">Your PIN</label>
+        <input id="loginPin" type="password" inputmode="numeric" maxlength="6" placeholder="4-6 digit PIN" autocomplete="off">
+
+        <button id="loginBtn">Unlock</button>
+        <div class="msg" id="loginMsg"></div>
+      </div>
+
       <div id="form" style="display:none">
-        <label for="who">Your Name</label>
-        <select id="who"><option value="">-- Select your name --</option></select>
-        <input id="whoText" style="display:none;margin-top:8px" placeholder="Type your name">
+        <div class="whoami">
+          <span>Logged in as <b id="whoName"></b></span>
+          <button class="linkbtn" id="switchUser" type="button">Not you?</button>
+        </div>
 
         <label for="item">Item</label>
         <select id="item"><option value="">-- Select item --</option></select>
@@ -79,11 +95,21 @@
 </div>
 
 <script>
-// ─── Config (same backend + security key the main app uses) ──────────────
+// ─── Config (same backend + shared-secret token the main app uses) ───────
+// This page is a static file — anything in it, including this token, ships
+// to whoever loads the page and can always be read from "view source". It
+// is not a real secret and shouldn't be treated as one: it only cuts down
+// on drive-by/bot traffic hitting the Apps Script URL, nothing more. The
+// actual access control is the name+PIN check below, checked against each
+// employee's own HR record (same PIN they use to log into the main app).
+// If this token is ever rotated, update it here, in the main app's
+// Settings → Data Backend, and in the Apps Script API_TOKEN Script
+// Property — all three have to match.
 var INV_BACKEND_URL  = 'https://script.google.com/macros/s/AKfycbw5XgC4jJWR3W7fdyLFKYYkd3fZyIeL3xbfzfSy3f_nmuOKLhP0rYjwLq_9ttQ8tjxRrA/exec';
 var MAIN_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbxfxWxPM4kk4Fa242Ewj2T9ktPsn3irBZjAxhWHCaEZkA0CG1ULBZED7PZWVD22cyDO/exec';
 var API_TOKEN = 'kbdc-live-g01_zGKPi54vzk2zzKey7UST';
 var OUT_SHEET = 'StaffStockOut';
+var STAFF_SHEET = 'StaffFull'; // must match the sheet name the main app pushes HR staff to
 
 // Content-Type MUST be text/plain — application/json triggers a CORS preflight
 // that Apps Script Web Apps don't answer, which blocks the request.
@@ -95,12 +121,88 @@ function api(url, action, payload){
 function esc(v){ return String(v==null?'':v); }
 function byId(id){ return document.getElementById(id); }
 
-var ITEMS = [], STAFF = [], MYRECENT = [];
+// The main app JSON-stringifies array/object fields (like appAccess) before
+// writing them to a Sheet cell, so they round-trip as JSON-looking strings
+// instead of silently becoming inert text. Mirrors kbdcUnflattenRow().
+function unflattenRow(obj){
+  var out = {};
+  Object.keys(obj||{}).forEach(function(k){
+    var v = obj[k];
+    if (typeof v === 'string' && v.length > 1 && (v.charAt(0)==='[' || v.charAt(0)==='{')) {
+      try { out[k] = JSON.parse(v); return; } catch(e){}
+    }
+    out[k] = v;
+  });
+  return out;
+}
+function isOwnerDesignation(emp){
+  return emp && (emp.designation==='Owner'||emp.designation==='Medical Director'||emp.designation==='Clinical Director'||emp.designation==='Admin Head'||emp.isOwner===true);
+}
+function hasInventoryAccess(emp){
+  if (isOwnerDesignation(emp)) return true;
+  var a = emp.appAccess;
+  if (Array.isArray(a)) return a.indexOf('inv')>=0 || a.indexOf('invout')>=0;
+  return false;
+}
 
+var ITEMS = [], ALL_STAFF = [], CURRENT_EMP = null, MYRECENT = [];
+
+// ─── Simple per-device login throttle — mirrors the main app's: 5 wrong
+// PINs locks this device out for 60 seconds. A correct PIN always clears it.
+function lockRemaining(){ try{ var u=parseInt(localStorage.getItem('kbdc_so_lock_until')||'0',10); var r=u-Date.now(); return r>0?Math.ceil(r/1000):0; }catch(e){ return 0; } }
+function noteFail(){ try{ var fc=parseInt(localStorage.getItem('kbdc_so_fail_count')||'0',10)+1; if(fc>=5){ localStorage.setItem('kbdc_so_lock_until', String(Date.now()+60000)); localStorage.setItem('kbdc_so_fail_count','0'); return true; } localStorage.setItem('kbdc_so_fail_count', String(fc)); return false; }catch(e){ return false; } }
+function noteSuccess(){ try{ localStorage.removeItem('kbdc_so_fail_count'); localStorage.removeItem('kbdc_so_lock_until'); }catch(e){} }
+
+function fillLoginNames(){
+  var sel = byId('loginName');
+  ALL_STAFF.forEach(function(s){
+    var o = document.createElement('option'); o.value=s.name; o.textContent=s.name; sel.appendChild(o);
+  });
+}
+
+function doLogin(){
+  var msg = byId('loginMsg');
+  var lock = lockRemaining();
+  if (lock>0){ msg.textContent = 'Too many wrong attempts. Please wait '+lock+' second'+(lock===1?'':'s')+'.'; msg.className='msg show bad'; return; }
+  var name = byId('loginName').value;
+  var pin = byId('loginPin').value;
+  if (!name){ msg.textContent = 'Please select your name.'; msg.className='msg show bad'; return; }
+  if (!pin || pin.length<4){ msg.textContent = 'PIN must be at least 4 digits.'; msg.className='msg show bad'; return; }
+  var emp = ALL_STAFF.find(function(s){ return s.name===name && s.pin!=null && String(s.pin)===String(pin); });
+  if (!emp){
+    var locked = noteFail();
+    msg.textContent = locked ? 'Too many wrong attempts. Locked for 60 seconds.' : 'Incorrect PIN.';
+    msg.className='msg show bad';
+    byId('loginPin').value='';
+    return;
+  }
+  if (!hasInventoryAccess(emp)){
+    msg.textContent = "You don't have Inventory access. Ask an admin to grant it in HR Admin.";
+    msg.className='msg show bad';
+    return;
+  }
+  noteSuccess();
+  CURRENT_EMP = emp;
+  byId('whoName').textContent = emp.name;
+  byId('login').style.display = 'none';
+  byId('form').style.display = 'block';
+  loadItemsThenShowForm();
+}
+
+function switchUser(){
+  CURRENT_EMP = null;
+  byId('loginPin').value = '';
+  byId('loginMsg').className = 'msg';
+  byId('form').style.display = 'none';
+  byId('login').style.display = 'block';
+}
+
+var ITEMS_LOADED = false;
 function stockClass(s){ if(s<=0) return 'out'; if(s<=5) return 'low'; return 'ok'; }
 
 function fillItems(){
   var sel = byId('item');
+  sel.innerHTML = '<option value="">-- Select item --</option>';
   ITEMS.forEach(function(it){
     var o = document.createElement('option');
     o.value = it.name; o.textContent = it.name + '  (stock: ' + it.stock + ')';
@@ -110,13 +212,6 @@ function fillItems(){
     sel.style.display='none'; byId('itemText').style.display='block';
   }
 }
-function fillStaff(){
-  var sel = byId('who');
-  STAFF.forEach(function(n){
-    var o = document.createElement('option'); o.value=n; o.textContent=n; sel.appendChild(o);
-  });
-  if(!STAFF.length){ sel.style.display='none'; byId('whoText').style.display='block'; }
-}
 
 byId('item').addEventListener('change', function(){
   var it = ITEMS.find(function(x){ return x.name===byId('item').value; });
@@ -125,7 +220,6 @@ byId('item').addEventListener('change', function(){
   else { h.textContent=''; }
 });
 
-function currentName(){ return (byId('who').style.display==='none') ? byId('whoText').value.trim() : byId('who').value; }
 function currentItem(){ return (byId('item').style.display==='none') ? byId('itemText').value.trim() : byId('item').value; }
 
 function showMsg(text, good){
@@ -142,8 +236,9 @@ function renderRecent(){
 }
 
 function submit(){
-  var name = currentName(), item = currentItem(), qty = parseInt(byId('qty').value,10);
-  if(!name){ showMsg('Please select or enter your name.', false); return; }
+  var name = CURRENT_EMP ? CURRENT_EMP.name : '';
+  var item = currentItem(), qty = parseInt(byId('qty').value,10);
+  if(!name){ showMsg('Session expired — please log in again.', false); switchUser(); return; }
   if(!item){ showMsg('Please select or enter the item.', false); return; }
   if(!qty || qty<1){ showMsg('Please enter a valid quantity.', false); return; }
 
@@ -180,19 +275,31 @@ function submit(){
   });
 }
 
-// ─── Load ───────────────────────────────────────────────────────────────
-Promise.all([
-  api(INV_BACKEND_URL, 'getData', { sheet:'InventoryItems' }).then(function(r){ return (r&&r.rows)||[]; }).catch(function(){ return []; }),
-  api(MAIN_BACKEND_URL, 'getData', { sheet:'Staff' }).then(function(r){ return (r&&r.rows)||[]; }).catch(function(){ return []; })
-]).then(function(out){
-  ITEMS = (out[0]||[]).map(function(r){ return { name:String(r.name||''), cat:String(r.cat||''), uom:String(r.uom||''), stock:Number(r.stock)||0 }; }).filter(function(x){ return x.name; });
-  STAFF = (out[1]||[]).map(function(r){ return String(r.name||''); }).filter(Boolean).sort();
-  fillItems(); fillStaff();
-  byId('loading').style.display='none'; byId('form').style.display='block';
-  byId('submit').addEventListener('click', submit);
-}).catch(function(e){
-  byId('loading').textContent = 'Could not load. Please refresh. ('+e.message+')';
-});
+function loadItemsThenShowForm(){
+  if (ITEMS_LOADED) return;
+  api(INV_BACKEND_URL, 'getData', { sheet:'InventoryItems' }).then(function(r){ return (r&&r.rows)||[]; }).catch(function(){ return []; })
+    .then(function(rows){
+      ITEMS = (rows||[]).map(function(r){ return { name:String(r.name||''), cat:String(r.cat||''), uom:String(r.uom||''), stock:Number(r.stock)||0 }; }).filter(function(x){ return x.name; });
+      ITEMS_LOADED = true;
+      fillItems();
+    });
+}
+
+// ─── Load staff list (name + PIN + access only — no item/stock data yet,
+// that only loads after a successful PIN check) ───────────────────────────
+api(MAIN_BACKEND_URL, 'getData', { sheet: STAFF_SHEET }).then(function(r){ return (r&&r.rows)||[]; }).catch(function(){ return []; })
+  .then(function(rows){
+    ALL_STAFF = (rows||[]).map(unflattenRow).filter(function(s){ return s.active!==false && s.name && s.name!=='—'; });
+    fillLoginNames();
+    byId('loading').style.display='none';
+    byId('login').style.display='block';
+    byId('loginBtn').addEventListener('click', doLogin);
+    byId('loginPin').addEventListener('keydown', function(e){ if(e.key==='Enter') doLogin(); });
+    byId('switchUser').addEventListener('click', switchUser);
+    byId('submit').addEventListener('click', submit);
+  }).catch(function(e){
+    byId('loading').textContent = 'Could not load. Please refresh. ('+e.message+')';
+  });
 </script>
 </body>
 </html>
