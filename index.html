@@ -16290,7 +16290,15 @@ function HRAdminPage() {
       const upd=Object.assign({},consultDocs,{[cid]:[...arr,nd]});
       saveConsultDocs(upd); setCDocFile(null); setCDocType('');
     }
-    function delConsultDoc(cid,did){ const arr=(consultDocs[cid]||[]).filter(function(d){return d.id!==did;}); saveConsultDocs(Object.assign({},consultDocs,{[cid]:arr})); }
+    async function delConsultDoc(cid,did){
+      var doc=(consultDocs[cid]||[]).find(function(d){return d.id===did;});
+      if(doc && doc.fileId){
+        try{ var __r=await kbdcBackendReq('_docs','deleteDoc',{fileId:doc.fileId}); if(!__r||!__r.ok) showToast('Removed from list, but could not delete from Drive: '+((__r&&__r.error)||'unknown error'), false); }
+        catch(e){ showToast('Removed from list, but could not delete from Drive: '+e.message, false); }
+      }
+      const arr=(consultDocs[cid]||[]).filter(function(d){return d.id!==did;});
+      saveConsultDocs(Object.assign({},consultDocs,{[cid]:arr}));
+    }
 
     const DIR_DOCS_KEY = 'kbdc_dir_docs';
     const DIR_TL_KEY   = 'kbdc_dir_timeline';
@@ -16656,9 +16664,16 @@ function HRAdminPage() {
         saveDirDocs(updated); setAddDocForm(false); setDocForm({docType:'',fileName:'',notes:'',status:'Uploaded'}); setDocFile(null);
         showToast(driveUrl?'Document uploaded to Drive':'Document added');
       };
-      const deleteDoc = (docId) => {
+      const deleteDoc = async (docId) => {
+        const doc = empDocsArr.find(d=>d.id===docId);
+        let driveErr = '';
+        if (doc && doc.fileId) {
+          try { const r = await kbdcBackendReq('_docs','deleteDoc',{fileId:doc.fileId}); if (!r || !r.ok) driveErr = (r && r.error) || 'unknown error'; }
+          catch(e) { driveErr = e.message; }
+        }
         const updated = {...dirDocs, [empId]: empDocsArr.filter(d=>d.id!==docId)};
-        saveDirDocs(updated); showToast('Document removed');
+        saveDirDocs(updated);
+        showToast(driveErr ? ('Removed from list, but could not delete from Drive: '+driveErr) : 'Document removed', !driveErr);
       };
       const addEvent = () => {
         if (!evtForm.title.trim()) return;
@@ -17394,7 +17409,12 @@ function HRAdminPage() {
                       onClick:()=>setModal({type:'viewGenDoc',doc:d})
                     }, '📝 View / Edit'),
                     React.createElement('button', { style:{...btn(C.white,C.red,'#FFCDD2'),padding:'4px 10px',fontSize:11},
-                      onClick:()=>{ if(!confirm('Delete this document?'))return; const list=genDocs.filter(x=>x.id!==d.id); saveGenDocs(list); showToast('Document removed'); }
+                      onClick:()=>{ if(!confirm('Delete this document?'))return; (async()=>{
+                        let driveErr='';
+                        if(d.fileId){ try{ const r=await kbdcBackendReq('_docs','deleteDoc',{fileId:d.fileId}); if(!r||!r.ok) driveErr=(r&&r.error)||'unknown error'; } catch(e){ driveErr=e.message; } }
+                        const list=genDocs.filter(x=>x.id!==d.id); saveGenDocs(list);
+                        showToast(driveErr ? ('Removed from list, but could not delete from Drive: '+driveErr) : 'Document removed', !driveErr);
+                      })(); }
                     }, '🗑 Remove')
                   )
                 ))
