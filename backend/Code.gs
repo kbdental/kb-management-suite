@@ -221,8 +221,13 @@ function kbdcRowKey_(row) {
     // Covers Tasks (role+task) and TaskCompletions (role+task+date).
     return 'rt:' + row.roleCode + '|' + row.taskCode + (row.date !== undefined ? '|' + row.date : '');
   }
-  if (row.name !== undefined && row.category !== undefined) {
-    return 'nc:' + row.name + '|' + row.category; // inventory item catalog
+  // Name+category identity, matching the client's kbdcMergeInvItemsByNameCat()
+  // exactly — the field is `cat` (NOT `category`), trimmed and lowercased.
+  // Rows that miss this fall through to the content-hash branch below, where
+  // any edit reads as a brand-new record, so the old row is never replaced.
+  var cat = (row.cat !== undefined) ? row.cat : row.category;
+  if (row.name !== undefined && cat !== undefined) {
+    return 'nc:' + String(row.name).trim().toLowerCase() + '|' + String(cat).trim().toLowerCase();
   }
   return 'c:' + JSON.stringify(row);
 }
