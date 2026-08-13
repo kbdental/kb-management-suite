@@ -224,7 +224,7 @@ body{background:#F5F6FA}
 .tl-timetabs{display:flex;gap:4px;padding:8px 15px;background:#fff;border-bottom:1px solid #E8EAF6;flex-shrink:0;overflow-x:auto}
 .tl-ttab{padding:4px 12px;border-radius:14px;font-size:11px;font-weight:500;cursor:pointer;border:1px solid #DDE;background:#fff;color:#546E7A;white-space:nowrap;transition:all .15s}
 .tl-ttab.on{background:#1357A6;color:#fff;border-color:#1357A6}
-.tl-body{flex:1;overflow-y:auto}
+.tl-body{flex:1;overflow-y:auto;min-height:0}
 .tl-section{padding:0 15px}
 .tl-sec-lbl{font-size:9.5px;font-weight:700;color:#90A4AE;letter-spacing:.1em;text-transform:uppercase;padding:10px 0 6px;border-bottom:1px solid #ECEFF1;margin-bottom:2px}
 .task-row{display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid #F5F5F5;cursor:pointer}
@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-08-1';
+var KBDC_APP_VERSION = '2026-08-13-1';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -3893,7 +3893,8 @@ function TaskListView({
       display: 'flex',
       flexDirection: 'column',
       flex: 1,
-      overflow: 'hidden'
+      overflow: 'hidden',
+      minHeight: 0
     }
   }, /*#__PURE__*/React.createElement("div", {
     className: "tl-header"
@@ -4205,11 +4206,20 @@ function kbdcSyncRoleEmployeesFromHR() {
     Object.keys(grouped).forEach(function(code) {
       var existing = [];
       try { existing = JSON.parse(localStorage.getItem('kbdc_role_emp_' + code) || '[]'); } catch(e){}
+      var hrNames = {};
       var merged = grouped[code].map(function(newEmp) {
+        hrNames[newEmp.name] = true;
         var ex = existing.find(function(e){ return e.name === newEmp.name; });
         return ex ? Object.assign({}, newEmp, { pin: ex.pin || newEmp.pin }) : newEmp;
       });
-      localStorage.setItem('kbdc_role_emp_' + code, JSON.stringify(merged));
+      // Keep employees added manually in Task Management ("+ Add Another
+      // Employee") whose name has no matching HR Admin record for this role.
+      // This used to run every app load and unconditionally replace the list
+      // with only what's derivable from HR, so a manually-added name would
+      // survive only until the next page load — which looked like "adding a
+      // name against a role doesn't save."
+      var manual = existing.filter(function(e){ return !hrNames[e.name]; });
+      localStorage.setItem('kbdc_role_emp_' + code, JSON.stringify(merged.concat(manual)));
     });
   } catch(e) { console.warn('kbdcSyncRoleEmployeesFromHR error:', e); }
 }
@@ -4229,12 +4239,14 @@ function EmployeePickerModal({ role, employees, onSelect, onBack }) {
     const updated = [...list, emp];
     setRoleEmployees(role.code, updated);
     setList(updated);
+    try{ kbdcAutoSyncMain(); }catch(e){}
     setNewName(''); setNewPin(''); setShowAdd(false);
   };
   const handleDelete = (id) => {
     const updated = list.filter(e => e.id !== id);
     setRoleEmployees(role.code, updated);
     setList(updated);
+    try{ kbdcAutoSyncMain(); }catch(e){}
   };
   return React.createElement('div', { style:{ position:'fixed',inset:0,background:'rgba(0,0,0,.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:9999 } },
     React.createElement('div', { style:{ background:'#fff',borderRadius:16,width:340,maxHeight:'80vh',overflow:'hidden',display:'flex',flexDirection:'column',boxShadow:'0 10px 40px rgba(0,0,0,.25)' } },
@@ -9691,6 +9703,7 @@ var KBDC_BACKEND_MODULES = [
   { id:'staff',       label:'Staff / Employees',        sheet:'Staff',              get: function(){ return sharedStaffGet().map(function(s){ return { id:s.id, name:s.name, role:s.role||s.designation, email:s.email, mobile:s.mobile||s.phone, accessLevel:s.accessLevel, department:s.dept||s.group, status:s.s, joined:s.joined, reportsTo:(s.reportsTo&&s.reportsTo.name)||s.reportingManagerName||'' }; }); } },
   { id:'tasks',       label:'Task Lists & Completion',  sheet:'Tasks',              get: function(){ return kbdcScanPrefixed('kbdc_tasks_').map(function(t){ return { roleCode:t.sourceKey, taskCode:t.code, taskEn:t.en, taskHi:t.hi, frequency:t.freq, done:t.done }; }); } },
   { id:'taskcompletions', label:'Task Completions Log',  sheet:'TaskCompletions',    localKey:'kbdc_task_log', get: function(){ return kbdcLsArray('kbdc_task_log'); } },
+  { id:'roleemp',     label:'Role Employee Assignments', sheet:'RoleEmployees',      get: function(){ return kbdcScanPrefixed('kbdc_role_emp_').map(function(e){ return { roleCode:e.sourceKey, id:e.id, name:e.name, pin:e.pin, branch:e.branch }; }); } },
   { id:'leaves',      label:'Leave Requests',           sheet:'LeaveRequests',      localKey:'kbdc_la_leaves', get: function(){ return kbdcLsArray('kbdc_la_leaves'); } },
   { id:'holidays',    label:'Holidays',                 sheet:'Holidays',           localKey:'kbdc_la_holidays', get: function(){ return kbdcLsArray('kbdc_la_holidays'); } },
   { id:'consultants', label:'Consultants',              sheet:'Consultants',        localKey:'kbdc_hr_consultants', get: function(){ return kbdcLsArray('kbdc_hr_consultants'); } },
@@ -9774,6 +9787,15 @@ function kbdcTasksRowsToByRole(rows) {
     byRole[code].push({ code: r.taskCode, en: r.taskEn, hi: r.taskHi, freq: r.frequency, done: r.done === true || r.done === 'true' });
   });
   return byRole;
+}
+function kbdcRoleEmpRowsToByCode(rows) {
+  var byCode = {};
+  (rows || []).forEach(function(r) {
+    var code = r.roleCode; if (!code) return;
+    if (!byCode[code]) byCode[code] = [];
+    byCode[code].push({ id: r.id, name: r.name, pin: r.pin, branch: r.branch });
+  });
+  return byCode;
 }
 async function kbdcBackendReqBatch(url, action, payload) {
   return kbdcBackendReqAt(url, null, action, payload);
@@ -9913,12 +9935,38 @@ async function kbdcAutoSyncMain() {
       var nextT = JSON.stringify(byRole[code]);
       if (localStorage.getItem('kbdc_tasks_' + code) !== nextT) { localStorage.setItem('kbdc_tasks_' + code, nextT); tasksChanged = true; }
     });
+    // Union merge (by id), not a blind adopt-remote — marking a task done
+    // triggers an immediate sync (see toggleTaskDone), and that sync's own
+    // pull can easily fetch a snapshot from just before this completion was
+    // pushed. Blindly replacing kbdc_task_log with that stale remote list
+    // would erase the very completion the user just recorded — which is
+    // what "task completions aren't saving to Google Sheets" looked like.
     var remoteLogRows = remote['TaskCompletions'] || [];
     if (remoteLogRows.length) {
-      var nextLog = JSON.stringify(remoteLogRows);
+      var localLog = kbdcLsArray('kbdc_task_log');
+      var mergedLog = kbdcUnionMergeById(localLog, remoteLogRows);
+      var nextLog = JSON.stringify(mergedLog);
       if (localStorage.getItem('kbdc_task_log') !== nextLog) { localStorage.setItem('kbdc_task_log', nextLog); tasksChanged = true; }
     }
     if (tasksChanged) window.dispatchEvent(new Event('kbdc-tasks-sync'));
+
+    // ---- Role Employee Assignments: per-role UNION merge (by id), not a
+    // blind "adopt remote" — an employee added right here, moments ago
+    // (the immediate sync after "+ Add Another Employee" triggers a pull
+    // before its own push reaches the backend) must not be erased by a
+    // remote snapshot that predates it. This is what makes a manually added
+    // employee actually survive and show up on other devices — it used to
+    // be local-only. ----
+    var byRoleEmp = kbdcRoleEmpRowsToByCode(remote['RoleEmployees'] || []);
+    var roleEmpChanged = false;
+    Object.keys(byRoleEmp).forEach(function(code) {
+      var localList = [];
+      try { localList = JSON.parse(localStorage.getItem('kbdc_role_emp_' + code) || '[]'); } catch(e){}
+      var mergedList = kbdcUnionMergeById(localList, byRoleEmp[code]);
+      var nextR = JSON.stringify(mergedList);
+      if (localStorage.getItem('kbdc_role_emp_' + code) !== nextR) { localStorage.setItem('kbdc_role_emp_' + code, nextR); roleEmpChanged = true; }
+    });
+    if (roleEmpChanged) window.dispatchEvent(new Event('kbdc-tasks-sync'));
 
     // ---- Generic flat-array modules (Attendance, Leaves, Payroll, Claims,
     // Advances, Ideas, Assets, Onboarding, Separations, Trainings) — union
