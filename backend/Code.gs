@@ -58,7 +58,7 @@ function doPost(e) {
     if (action === 'saveAll') {
       var sheetName = sanitizeSheetName(body.sheet || 'Data');
       var rows = body.rows || [];
-      withWriteLock_(function() { saveAllRows(sheetName, rows); });
+      saveAllRows(sheetName, rows);
       return respond({ ok: true, saved: rows.length });
     }
     if (action === 'getData') {
@@ -69,16 +69,18 @@ function doPost(e) {
       // Pushes many sheets in one Apps Script execution instead of one
       // execution per module — several devices polling every ~30s all day
       // would otherwise add up to tens of thousands of executions and risk
-      // hitting quota limits.
+      // hitting quota limits. Each sheet's own write is locked individually
+      // (inside saveAllRows) rather than locking the whole batch — a device
+      // writing Attendance and a device writing Tasks at the same moment
+      // don't touch the same sheet, so there's no reason to make one wait
+      // on the other.
       var modules = body.modules || {};
       var savedCounts = {};
-      withWriteLock_(function() {
-        Object.keys(modules).forEach(function(name) {
-          var sn = sanitizeSheetName(name);
-          var mrows = modules[name] || [];
-          saveAllRows(sn, mrows);
-          savedCounts[name] = mrows.length;
-        });
+      Object.keys(modules).forEach(function(name) {
+        var sn = sanitizeSheetName(name);
+        var mrows = modules[name] || [];
+        saveAllRows(sn, mrows);
+        savedCounts[name] = mrows.length;
       });
       return respond({ ok: true, saved: savedCounts });
     }
@@ -267,8 +269,20 @@ function kbdcMergeRows_(existingRows, incomingRows) {
   return order.map(function(k) { return merged[k]; });
 }
 
-/** Merges the given rows into a tab's contents (see kbdcMergeRows_) and rewrites it. */
+/**
+ * Merges the given rows into a tab's contents (see kbdcMergeRows_) and
+ * rewrites it. Locked (see withWriteLock_) so two nearly-simultaneous calls
+ * can't both read the sheet's old content before either has written — that
+ * gap is exactly what would let one push's merge silently miss the other's
+ * update. Apps Script's LockService has no per-sheet/named lock, only a
+ * single script-wide one, so this is scoped as tightly as possible (just
+ * this one sheet's read-merge-write) rather than held across a whole
+ * multi-sheet saveBatch call, to keep other devices' waits short.
+ */
 function saveAllRows(sheetName, rows) {
+  withWriteLock_(function() { saveAllRowsLocked_(sheetName, rows); });
+}
+function saveAllRowsLocked_(sheetName, rows) {
   var sheet = getOrCreateSheet(sheetName);
   var existingRows = readAllRows(sheetName);
   var mergedRows = kbdcMergeRows_(existingRows, rows || []);
