@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-07-24-1';
+var KBDC_APP_VERSION = '2026-08-08-1';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -20887,6 +20887,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
         updated=[...attendance,{id:'att'+Date.now(),staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()}];
       }
       setAttendance(updated);laSaveAtt(updated);
+      try{ kbdcAutoSyncMain(); }catch(e){}
       if(lateTag==='L1') showToast('Checked in. Late arrival — L1 (1st late this month, no deduction)');
       else if(lateTag==='L2') showToast('Checked in. Late arrival — L2 (2nd late this month, no deduction)');
       else if(lateTag==='late-ded') showToast('Checked in. 3rd+ late this month — counts as half-day deduction');
@@ -20904,6 +20905,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var hours=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;
       var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp))?{...a,checkOut:t,hours:hours,locOut:loc,updatedAt:new Date().toISOString()}:a;});
       setAttendance(updated);laSaveAtt(updated);
+      try{ kbdcAutoSyncMain(); }catch(e){}
     });
   }
 
@@ -20961,8 +20963,8 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     setNewPin1('');setNewPin2('');setShowChangPin(false);setPinError('');
     showToast('Admin PIN updated successfully');
   }
-  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);});}
-  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);});}
+  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
+  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
 
   var SC=['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#37474F','#AD1457'];
   function doAssign(n,id){laAssignShift(n,id);setShiftMap(function(p){var nx=Object.assign({},p);if(id)nx[n]=id;else delete nx[n];return nx;});showToast('Shift saved',true);}
