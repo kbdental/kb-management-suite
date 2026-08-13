@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-13-5';
+var KBDC_APP_VERSION = '2026-08-13-6';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -10160,8 +10160,17 @@ async function kbdcAutoSyncInventory() {
       var rows = m.get().map(kbdcFlattenRow);
       if (rows.length) pushPayload[m.sheet] = rows;
     });
-    await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
-  } catch (e) {}
+    var invRes = await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
+    // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
+    // kbdcBackendReqAt does not treat as an error. Combined with the empty
+    // catch below, an Inventory push that the backend actually rejected
+    // (script lock timeout, quota, a bad token) looked exactly like success —
+    // so stock entries silently never reached the Sheet with nothing anywhere
+    // to show for it. Surface it instead.
+    if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
+  } catch (e) {
+    kbdcSetSyncStatus({ err: 'Inventory: ' + ((e && e.message) ? e.message : 'sync failed') });
+  }
 }
 async function kbdcAutoSyncCycle() {
   await kbdcAutoSyncMain();

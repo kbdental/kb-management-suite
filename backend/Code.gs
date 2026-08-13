@@ -274,33 +274,14 @@ function kbdcMergeRows_(existingRows, incomingRows) {
   return order.map(function(k) { return merged[k]; });
 }
 
-/**
- * Merges the given rows into a tab's contents (see kbdcMergeRows_) and
- * rewrites it. Locked (see withWriteLock_) so two nearly-simultaneous calls
- * can't both read the sheet's old content before either has written — that
- * gap is exactly what would let one push's merge silently miss the other's
- * update. Apps Script's LockService has no per-sheet/named lock, only a
- * single script-wide one, so this is scoped as tightly as possible (just
- * this one sheet's read-merge-write) rather than held across a whole
- * multi-sheet saveBatch call, to keep other devices' waits short.
- */
-function saveAllRows(sheetName, rows) {
-  withWriteLock_(function() { saveAllRowsLocked_(sheetName, rows); });
-}
-function saveAllRowsLocked_(sheetName, rows) {
-  var sheet = getOrCreateSheet(sheetName);
+/** Builds the exact cell matrix a push would write, or null if there is nothing. */
+function kbdcBuildSheetData_(sheetName, rows) {
   var existingRows = readAllRows(sheetName);
   var mergedRows = kbdcMergeRows_(existingRows, rows || []);
+  if (!mergedRows.length) return null;
 
-  sheet.clearContents();
-
-  if (!mergedRows.length) {
-    sheet.getRange(1, 1).setValue('No data yet — nothing has been pushed from this module.');
-    return;
-  }
-
-  // Build the column list from every key seen across all rows, in first-seen order,
-  // since different records in the same module can have slightly different fields.
+  // Column list from every key seen across all rows, in first-seen order,
+  // since records in the same module can have slightly different fields.
   var headers = [];
   var seen = {};
   mergedRows.forEach(function(row) {
@@ -316,17 +297,77 @@ function saveAllRowsLocked_(sheetName, rows) {
       return (v === undefined || v === null) ? '' : v;
     }));
   });
+  return { headers: headers, data: data };
+}
 
-  var range = sheet.getRange(1, 1, data.length, headers.length);
+/** True when the sheet already holds exactly what we were about to write. */
+function kbdcMatrixEqual_(sheet, data) {
+  var cur = sheet.getDataRange().getValues();
+  if (cur.length !== data.length) return false;
+  for (var i = 0; i < data.length; i++) {
+    if (cur[i].length !== data[i].length) return false;
+    for (var j = 0; j < data[i].length; j++) {
+      var a = cur[i][j], b = data[i][j];
+      a = (a === undefined || a === null) ? '' : String(a);
+      b = (b === undefined || b === null) ? '' : String(b);
+      if (a !== b) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Merges the given rows into a tab (see kbdcMergeRows_) and rewrites it.
+ *
+ * Fast path first, deliberately OUTSIDE the lock: if this push would not
+ * change a single cell, skip the lock and the write entirely. The great
+ * majority of pushes are exactly that — several devices re-sending identical
+ * data every 30 seconds — and doing a full clear+rewrite for each of them is
+ * what made syncing slow. Worse, every one of those pointless writes was
+ * holding the script-wide lock, so devices queued behind each other until
+ * waitLock timed out; that threw, the response came back ok:false, and the
+ * client silently discarded it — which is how real transactions ended up
+ * never reaching the Sheet at all.
+ *
+ * The fast path is only an optimisation and cannot cause a lost update: when
+ * anything HAS changed we still take the lock and redo the read-merge-write
+ * authoritatively inside it.
+ */
+function saveAllRows(sheetName, rows) {
+  var sheet = getOrCreateSheet(sheetName);
+  var plan = kbdcBuildSheetData_(sheetName, rows);
+  if (plan && kbdcMatrixEqual_(sheet, plan.data)) return;
+  withWriteLock_(function() { saveAllRowsLocked_(sheetName, rows); });
+}
+
+function saveAllRowsLocked_(sheetName, rows) {
+  var sheet = getOrCreateSheet(sheetName);
+  var wasEmpty = sheet.getLastRow() === 0;
+  var plan = kbdcBuildSheetData_(sheetName, rows);
+
+  if (!plan) {
+    if (!wasEmpty) {
+      sheet.clearContents();
+      sheet.getRange(1, 1).setValue('No data yet — nothing has been pushed from this module.');
+    }
+    return;
+  }
+  if (kbdcMatrixEqual_(sheet, plan.data)) return; // re-check under the lock
+
+  sheet.clearContents();
+  var range = sheet.getRange(1, 1, plan.data.length, plan.headers.length);
   // Force plain-text formatting before writing, so a numeric-looking value
   // (a PIN like "0000", an employee code, a phone number with a leading
   // zero) is never silently turned into a real number and lose its exact
   // form — Sheets applies its "smart" number detection based on the cell's
   // format at write time, so this has to be set before setValues().
   range.setNumberFormat('@');
-  range.setValues(data);
+  range.setValues(plan.data);
   sheet.setFrozenRows(1);
-  sheet.autoResizeColumns(1, headers.length);
+  // autoResizeColumns is expensive and was running on every single push.
+  // Column widths persist, so sizing them once when the tab is first
+  // populated is enough.
+  if (wasEmpty) sheet.autoResizeColumns(1, plan.headers.length);
 }
 
 /** Reads a tab back as an array of objects, keyed by its header row. */
