@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-13-1';
+var KBDC_APP_VERSION = '2026-08-13-2';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -9926,13 +9926,28 @@ async function kbdcAutoSyncMain() {
       }
     }
 
-    // ---- Tasks: per-role pull-merge — only touches roles present in the
-    // pulled data, so an empty/unready Sheet can never wipe real local
-    // task lists ----
+    // ---- Tasks: per-role UNION merge (by taskCode), not a blind
+    // adopt-remote — marking a task done triggers an immediate sync, and
+    // that sync's own pull can fetch a Tasks snapshot from just before this
+    // completion was pushed. Blindly replacing kbdc_tasks_<code> with that
+    // stale remote list would flip the just-toggled checkbox back off,
+    // which is exactly what "clicking a task done un-clicks itself" was.
+    // kbdcUnionMergeById needs an `id` field; task rows are keyed by `code`
+    // instead, so map to/from a synthetic id for the merge only. Neither
+    // side carries an updatedAt for individual tasks, so on a genuine
+    // conflict kbdcUnionMergeById's documented default applies: local wins
+    // — which is what protects the fresh toggle. ----
     var byRole = kbdcTasksRowsToByRole(remote['Tasks'] || []);
     var tasksChanged = false;
     Object.keys(byRole).forEach(function(code) {
-      var nextT = JSON.stringify(byRole[code]);
+      var localTasks = [];
+      try { localTasks = JSON.parse(localStorage.getItem('kbdc_tasks_' + code) || '[]'); } catch(e){}
+      var localWithId = localTasks.map(function(t){ return Object.assign({}, t, { id: t.code }); });
+      var remoteWithId = byRole[code].map(function(t){ return Object.assign({}, t, { id: t.code }); });
+      var mergedTasks = kbdcUnionMergeById(localWithId, remoteWithId).map(function(t){
+        var c = Object.assign({}, t); delete c.id; return c;
+      });
+      var nextT = JSON.stringify(mergedTasks);
       if (localStorage.getItem('kbdc_tasks_' + code) !== nextT) { localStorage.setItem('kbdc_tasks_' + code, nextT); tasksChanged = true; }
     });
     // Union merge (by id), not a blind adopt-remote — marking a task done
