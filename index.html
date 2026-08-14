@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-14-4';
+var KBDC_APP_VERSION = '2026-08-14-5';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -4280,7 +4280,16 @@ function EmployeePickerModal({ role, employees, onSelect, onBack }) {
   const [newBranch, setNewBranch] = useState(() => getActiveBranch());
   const [list, setList] = useState(employees);
   const activeBranch = getActiveBranch();
-  const filteredList = list.filter(e => !e.branch || e.branch === activeBranch || activeBranch === 'All Branches');
+  // The role card counts employees via getRoleEmployees() with no branch
+  // filter, but this picker used to hide anyone whose branch did not equal
+  // the device's current active branch. So a name showed on the card and was
+  // then missing once the card was opened, and because the active branch can
+  // differ between sessions the same device showed a name one time and not
+  // the next — "names show and suddenly disappear after reopening the app".
+  // Hiding them also strands those staff: they cannot select themselves to do
+  // their tasks. Show exactly who the card counts. Each row still displays its
+  // own branch underneath the name, so the information is not lost.
+  const filteredList = list;
   const handleAdd = () => {
     if (!newName.trim() || newPin.length < 4) return;
     const emp = { id: role.code + '-' + Date.now(), name: newName.trim(), pin: newPin, branch: newBranch };
