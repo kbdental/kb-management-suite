@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-13-8';
+var KBDC_APP_VERSION = '2026-08-14-1';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -20677,6 +20677,25 @@ function useLA_Clock() {
 }
 
 /* ── Dashboard sub-page ── */
+// Attendance rows are tied to a person by staff id or by name. Both were
+// exact === comparisons, so a record whose staffName differed only by
+// surrounding whitespace or letter case — easy to introduce by editing a
+// name in HR Admin, or by a record written before a staff id changed —
+// silently failed to match, and that employee showed as Absent on the
+// dashboard despite having checked in on their own device. Compare on a
+// trimmed, case-insensitive basis, with the id taking precedence when both
+// sides actually have one. This cannot merge two different people: names
+// that collide case-insensitively would have collided before too, and a
+// matching id still wins first.
+function kbdcAttMatches(rec, id, name) {
+  if (!rec) return false;
+  var rid = String(rec.staffId == null ? '' : rec.staffId).trim();
+  var wid = String(id == null ? '' : id).trim();
+  if (rid && wid && rid === wid) return true;
+  var rn = String(rec.staffName || '').trim().toLowerCase();
+  var wn = String(name || '').trim().toLowerCase();
+  return !!rn && rn === wn;
+}
 function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser }) {
   const shifts = laGetShifts();
   const bStaff = staff.filter(function(s){return activeBranch==='All Branches'||!s.branch||s.branch===activeBranch||(s.group===activeBranch);});
@@ -20694,7 +20713,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
 
   /* Late arrivals today */
   const lateStaff = bStaff.filter(function(s){
-    var rec=todayAtt.find(function(a){return a.staffId===s.id||a.staffName===s.name;});
+    var rec=todayAtt.find(function(a){return kbdcAttMatches(a,s.id,s.name);});
     if(!rec||!rec.checkIn)return false;
     var sh=laGetStaffShift(s.name,shifts);
     return sh&&laMinLate(rec.checkIn,sh.start)>0;
@@ -20702,7 +20721,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
 
   /* Overtime today — only if >1hr past shift end */
   var otStaff = bStaff.filter(function(s){
-    var rec=todayAtt.find(function(a){return a.staffId===s.id||a.staffName===s.name;});
+    var rec=todayAtt.find(function(a){return kbdcAttMatches(a,s.id,s.name);});
     if(!rec||!rec.checkOut)return false;
     var sh=laGetStaffShift(s.name,shifts);
     return sh&&laMinOT(rec.checkOut,sh.end)>0;
@@ -20737,7 +20756,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
         ),
         bStaff.length===0 && React.createElement('div',{className:'la-empty',style:{padding:16,fontSize:11}},'Add staff in My Team to track attendance.'),
         bStaff.map(s=>{
-          const rec = todayAtt.find(a=>a.staffId===s.id||a.staffName===s.name);
+          const rec = todayAtt.find(a=>kbdcAttMatches(a,s.id,s.name));
           const onLv = leaves.find(l=>l.staffName===s.name&&l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY);
           let pill='lp-red', pillTxt='Absent';
           if(onLv){ pill='lp-blue'; pillTxt='On Leave'; }
@@ -20917,8 +20936,8 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
   const empObj = pickerStaff.find(s=>s.name===selectedEmp);
   const sid = empObj?(empObj.id||empObj.name):selectedEmp;
   const todayAtt = attendance.filter(a=>a.date===LA_TODAY);
-  const todayRec = attendance.find(a=>a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp));
-  const myAtt = attendance.filter(a=>a.staffId===sid||a.staffName===selectedEmp);
+  const todayRec = attendance.find(a=>a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)));
+  const myAtt = attendance.filter(a=>kbdcAttMatches(a,sid,selectedEmp));
 
   function pickEmp(name){
     setSelectedEmp(name);
@@ -20989,11 +21008,11 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       }
 
       var leaveOverride=todayLeave?true:undefined;
-      var exists=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp);});
+      var exists=attendance.find(function(a){return a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp));});
       var updated;
       if(exists){
         updated=attendance.map(function(a){
-          return (a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp))
+          return (a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
             ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()})
             :a;
         });
@@ -21017,7 +21036,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var ih=parseInt(todayRec.checkIn.split(':')[0]),im=parseInt(todayRec.checkIn.split(':')[1]);
       var oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]);
       var hours=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;
-      var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sid||a.staffName===selectedEmp))?{...a,checkOut:t,hours:hours,locOut:loc,updatedAt:new Date().toISOString()}:a;});
+      var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))?{...a,checkOut:t,hours:hours,locOut:loc,updatedAt:new Date().toISOString()}:a;});
       setAttendance(updated);laSaveAtt(updated);
       try{ kbdcAutoSyncMain(); }catch(e){}
     });
@@ -21151,7 +21170,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
           filteredStaff.length===0
             ? React.createElement('tr',null,React.createElement('td',{colSpan:11,style:{textAlign:'center',color:'#90A4AE',padding:20}},'No staff found.'))
             : filteredStaff.map(function(s,i){
-                var ssid=s.id||s.name,rec=todayAtt.find(function(a){return a.staffId===ssid||a.staffName===s.name;}),color=s.c||s.color||LA_AV_COLORS[i%LA_AV_COLORS.length],inits=s.i||laInits(s.name),isLoad=locLoadingAdm[ssid],mOk=hasMoodFor(s.name),mEntry=getMoodFor(s.name);
+                var ssid=s.id||s.name,rec=todayAtt.find(function(a){return kbdcAttMatches(a,ssid,s.name);}),color=s.c||s.color||LA_AV_COLORS[i%LA_AV_COLORS.length],inits=s.i||laInits(s.name),isLoad=locLoadingAdm[ssid],mOk=hasMoodFor(s.name),mEntry=getMoodFor(s.name);
                 var mDef=mEntry?MOODS.find(function(x){return x.key===mEntry.mood;}):null;
                 var sPill='lp-red',sTxt='Absent';
                 if(rec&&rec.checkIn&&!rec.checkOut){sPill='lp-orange';sTxt='Active';}
