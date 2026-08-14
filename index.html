@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-14-3';
+var KBDC_APP_VERSION = '2026-08-14-4';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -20757,6 +20757,35 @@ function kbdcAttMatches(rec, id, name) {
   var wn = String(name || '').trim().toLowerCase();
   return !!rn && rn === wn;
 }
+// Two devices can each create their own attendance row for the same person
+// on the same day, whenever they have not yet synced with each other: the
+// clock-in path only reuses an existing row it can already see, otherwise it
+// creates one with a fresh id. Both rows then survive the id-keyed merge, and
+// a plain .find() returns whichever happens to sit first — which differs per
+// device because merge order differs. That is exactly how the same employee
+// read Present on one system and Absent on another on the same day.
+//
+// Fold every row for that person into a single view instead: earliest
+// check-in, latest check-out, other fields from the most recently updated
+// row. Every device then reaches the same answer regardless of ordering.
+function kbdcPickAtt(list, id, name, date) {
+  var m = [];
+  (list || []).forEach(function(a){
+    if (date && a.date !== date) return;
+    if (kbdcAttMatches(a, id, name)) m.push(a);
+  });
+  if (!m.length) return null;
+  if (m.length === 1) return m[0];
+  var best = m.slice().sort(function(a, b){
+    return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''));
+  })[0];
+  var out = Object.assign({}, best);
+  m.forEach(function(a){
+    if (a.checkIn  && (!out.checkIn  || a.checkIn  < out.checkIn))  out.checkIn  = a.checkIn;
+    if (a.checkOut && (!out.checkOut || a.checkOut > out.checkOut)) out.checkOut = a.checkOut;
+  });
+  return out;
+}
 function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser }) {
   const shifts = laGetShifts();
   const bStaff = staff.filter(function(s){return activeBranch==='All Branches'||!s.branch||s.branch===activeBranch||(s.group===activeBranch);});
@@ -20774,7 +20803,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
 
   /* Late arrivals today */
   const lateStaff = bStaff.filter(function(s){
-    var rec=todayAtt.find(function(a){return kbdcAttMatches(a,s.id,s.name);});
+    var rec=kbdcPickAtt(todayAtt,s.id,s.name);
     if(!rec||!rec.checkIn)return false;
     var sh=laGetStaffShift(s.name,shifts);
     return sh&&laMinLate(rec.checkIn,sh.start)>0;
@@ -20782,7 +20811,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
 
   /* Overtime today — only if >1hr past shift end */
   var otStaff = bStaff.filter(function(s){
-    var rec=todayAtt.find(function(a){return kbdcAttMatches(a,s.id,s.name);});
+    var rec=kbdcPickAtt(todayAtt,s.id,s.name);
     if(!rec||!rec.checkOut)return false;
     var sh=laGetStaffShift(s.name,shifts);
     return sh&&laMinOT(rec.checkOut,sh.end)>0;
@@ -20817,7 +20846,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
         ),
         bStaff.length===0 && React.createElement('div',{className:'la-empty',style:{padding:16,fontSize:11}},'Add staff in My Team to track attendance.'),
         bStaff.map(s=>{
-          const rec = todayAtt.find(a=>kbdcAttMatches(a,s.id,s.name));
+          const rec = kbdcPickAtt(todayAtt,s.id,s.name);
           const onLv = leaves.find(l=>l.staffName===s.name&&l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY);
           let pill='lp-red', pillTxt='Absent';
           if(onLv){ pill='lp-blue'; pillTxt='On Leave'; }
@@ -20997,7 +21026,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
   const empObj = pickerStaff.find(s=>s.name===selectedEmp);
   const sid = empObj?(empObj.id||empObj.name):selectedEmp;
   const todayAtt = attendance.filter(a=>a.date===LA_TODAY);
-  const todayRec = attendance.find(a=>a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)));
+  const todayRec = kbdcPickAtt(attendance,sid,selectedEmp,LA_TODAY);
   const myAtt = attendance.filter(a=>kbdcAttMatches(a,sid,selectedEmp));
 
   function pickEmp(name){
@@ -21231,7 +21260,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
           filteredStaff.length===0
             ? React.createElement('tr',null,React.createElement('td',{colSpan:11,style:{textAlign:'center',color:'#90A4AE',padding:20}},'No staff found.'))
             : filteredStaff.map(function(s,i){
-                var ssid=s.id||s.name,rec=todayAtt.find(function(a){return kbdcAttMatches(a,ssid,s.name);}),color=s.c||s.color||LA_AV_COLORS[i%LA_AV_COLORS.length],inits=s.i||laInits(s.name),isLoad=locLoadingAdm[ssid],mOk=hasMoodFor(s.name),mEntry=getMoodFor(s.name);
+                var ssid=s.id||s.name,rec=kbdcPickAtt(todayAtt,ssid,s.name),color=s.c||s.color||LA_AV_COLORS[i%LA_AV_COLORS.length],inits=s.i||laInits(s.name),isLoad=locLoadingAdm[ssid],mOk=hasMoodFor(s.name),mEntry=getMoodFor(s.name);
                 var mDef=mEntry?MOODS.find(function(x){return x.key===mEntry.mood;}):null;
                 var sPill='lp-red',sTxt='Absent';
                 if(rec&&rec.checkIn&&!rec.checkOut){sPill='lp-orange';sTxt='Active';}
