@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-14-1';
+var KBDC_APP_VERSION = '2026-08-14-2';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -3167,11 +3167,59 @@ function TaskDashboard() {
 
 /* ── Task List View (after PIN) ── */
 /* ── Per-role task helpers ── */
+// A task's `done` flag used to persist forever. Nothing ever reset it, and
+// doneAt was written by toggleTaskDone but read nowhere — so yesterday's
+// completions stayed ticked, staff could not mark today's work, and the
+// dashboard kept reporting a percentage earned on a previous day.
+//
+// Completion is now scoped to the period the task actually recurs in: a
+// Daily task counts as done only if it was completed today, a Weekly one
+// only within the current week, and so on. A task marked done but carrying
+// no doneAt at all (every record created before this existed) cannot be
+// placed in time, so it is treated as stale and cleared — which is what
+// makes today markable again.
+function kbdcTaskPeriodKey(freq, d) {
+  if (!d) return '';
+  var dt = new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  var y = dt.getFullYear();
+  switch (String(freq || 'Daily')) {
+    case 'Weekly':
+      var t = new Date(y, dt.getMonth(), dt.getDate());
+      t.setDate(t.getDate() - ((t.getDay() + 6) % 7)); // back to Monday
+      return 'W' + t.getFullYear() + '-' + (t.getMonth() + 1) + '-' + t.getDate();
+    case 'Monthly':   return 'M' + y + '-' + (dt.getMonth() + 1);
+    case 'Quarterly': return 'Q' + y + '-' + Math.floor(dt.getMonth() / 3);
+    case 'Annual':    return 'Y' + y;
+    default:          return 'D' + y + '-' + (dt.getMonth() + 1) + '-' + dt.getDate();
+  }
+}
+// Returns the rolled-over list, or null when nothing needed clearing.
+function kbdcRolloverTasks(tasks) {
+  var now = new Date(), changed = false;
+  var out = (tasks || []).map(function(t) {
+    if (!t || !t.done) return t;
+    var cur = kbdcTaskPeriodKey(t.freq, now);
+    var was = kbdcTaskPeriodKey(t.freq, t.doneAt);
+    if (was && was === cur) return t; // genuinely completed in the current period
+    changed = true;
+    return Object.assign({}, t, { done: false, doneAt: null });
+  });
+  return changed ? out : null;
+}
 function getRoleTasks(code) {
   try {
     var saved = localStorage.getItem('kbdc_tasks_' + code);
-    if (saved) return JSON.parse(saved).map(function(t){ return Object.assign({done:false}, t); });
-    return [];
+    if (!saved) return [];
+    var tasks = JSON.parse(saved).map(function(t){ return Object.assign({done:false}, t); });
+    // Persist the rollover rather than only displaying it, so the Sheet, the
+    // dashboard and every other device agree on what is outstanding today.
+    var rolled = kbdcRolloverTasks(tasks);
+    if (rolled) {
+      try { localStorage.setItem('kbdc_tasks_' + code, JSON.stringify(rolled)); } catch(e) {}
+      return rolled;
+    }
+    return tasks;
   } catch(e) { return []; }
 }
 function setRoleTasks(code, tasks) {
