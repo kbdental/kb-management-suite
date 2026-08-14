@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-14-2';
+var KBDC_APP_VERSION = '2026-08-14-3';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -4543,12 +4543,14 @@ function ManagerDashboard({
   const [staffNames, setStaffNames] = useState({});
   /* Initialize roles from ROLE_CARDS + HR Admin — persisted in localStorage */
   const [roles, setRoles] = useState(function() {
-    /* Try saved roles first */
-    try {
-      var saved = JSON.parse(localStorage.getItem('kbdc_mgr_roles') || '[]');
-      if (saved.length > 0) return saved;
-    } catch(e) {}
-    /* Build from ROLE_CARDS + custom roles from Settings Master Data */
+    /* Saved roles used to be returned here and nothing else was consulted, so
+       once anything had been saved a role added later in Settings -> Master
+       Data could never appear in this list — leaving no way to set its name
+       and PIN. Saved entries are still authoritative for roles they already
+       cover (they carry the name/PIN edits made here), but the derived list
+       is always rebuilt too and anything missing is appended. */
+    var saved = [];
+    try { saved = JSON.parse(localStorage.getItem('kbdc_mgr_roles') || '[]'); } catch(e) {}
     kbdcSyncRoleEmployeesFromHR();
     var ALL = [].concat(ROLE_CARDS.clinical, ROLE_CARDS.admin, ROLE_CARDS.mgmt, ROLE_CARDS.lab);
     var baseRoles = ALL.map(function(r) {
@@ -4566,7 +4568,18 @@ function ManagerDashboard({
     customs.forEach(function(r) {
       baseRoles.push({ code: r.code, label: r.label, name: r.label, c: r.c, emp: '—', pin: '', group: 'Custom' });
     });
-    return baseRoles;
+    if (!saved.length) return baseRoles;
+    /* Merge: keep every saved role exactly as it is (its name/PIN were set
+       here), then append any derived role the saved list has no entry for —
+       which is how a newly added Master Data role finally shows up. */
+    var seen = {};
+    saved.forEach(function(r){ if (r && r.code) seen[r.code] = true; });
+    var merged = saved.slice();
+    baseRoles.forEach(function(r){ if (r && r.code && !seen[r.code]) { merged.push(r); seen[r.code] = true; } });
+    if (merged.length !== saved.length) {
+      try { localStorage.setItem('kbdc_mgr_roles', JSON.stringify(merged)); } catch(e) {}
+    }
+    return merged;
   });
   const addRole = function(newRole) {
     setRoles(function(r) {
