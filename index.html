@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-13-7';
+var KBDC_APP_VERSION = '2026-08-13-8';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -10082,7 +10082,15 @@ async function kbdcAutoSyncMain() {
       if (v != null) blobRows.push({ key: k, value: v, updatedAt: new Date().toISOString() });
     });
     if (blobRows.length) pushPayload['AppData'] = blobRows;
-    await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
+    var mainRes = await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
+    // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
+    // kbdcBackendReqAt does not treat as an error — so without this check a
+    // push the backend actually REJECTED (script lock timeout, quota, a bad
+    // token) fell straight through to the green "Backed up just now" badge
+    // below. That is how an employee's attendance could sit on their own
+    // phone, looking saved and backed up, while never reaching the Sheet or
+    // the admin dashboard. Same check the Inventory sync already does.
+    if (mainRes && mainRes.ok === false) throw new Error(mainRes.error || 'Backup was rejected by the backend');
     kbdcSetSyncStatus({ lastOk: Date.now(), err: '' });
   } catch (e) {
     kbdcSetSyncStatus({ err: (e && e.message) ? e.message : 'Backup failed' });
