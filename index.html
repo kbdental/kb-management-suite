@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-18-3';
+var KBDC_APP_VERSION = '2026-08-18-5';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -4538,11 +4538,54 @@ function getCustomRoleCards() {
 }
 
 /* ── Manager Dashboard ── */
+// Activity, History and Report all read the same completion log. None of them
+// was ever wired to it: those tabs rendered fixed strings over an empty array
+// literal, so no amount of real work by staff could appear there. Defined at
+// module scope because HistoryTab is a separate component from ManagerDashboard.
+function kbdcLog(){ try { return JSON.parse(localStorage.getItem('kbdc_task_log') || '[]'); } catch(e) { return []; } }
+// The row templates expect an avatar/colour/name shape, not the raw log fields.
+function kbdcLogRow(r){
+  var nm = String(r.staffName || '').trim();
+  var initials = nm ? nm.split(/\s+/).map(function(w){ return w[0] || ''; }).join('').slice(0,2).toUpperCase() : '--';
+  return {
+    av: initials,
+    c: '#1357A6',
+    name: (r.taskEn || r.taskCode || 'Task') + (nm ? '  \u2014  ' + nm : ''),
+    code: r.taskCode || '',
+    time: r.time || '',
+    date: r.date || '',
+    roleCode: r.roleCode || '',
+    staffName: nm
+  };
+}
+// The filters that say "staff" must offer staff, not roles. Take everyone on
+// the roster plus anyone who appears in the log, so a person who has since
+// been deactivated can still be looked up in their own history.
+function kbdcLogStaffNames(){
+  var seen = {}, out = [];
+  function add(n){ n = String(n||'').trim(); if(!n || seen[n.toLowerCase()]) return; seen[n.toLowerCase()]=1; out.push(n); }
+  try { sharedStaffGet().forEach(function(m){ if (m && m.active !== false) add(m.name); }); } catch(e) {}
+  kbdcLog().forEach(function(r){ add(r.staffName); });
+  return out.sort(function(a,b){ return a.localeCompare(b); });
+}
+// One filter, used by History and Report alike.
+function kbdcLogFilter(from, to, staff){
+  return kbdcLog().filter(function(r){
+    var day = String(r.date||'').slice(0,10);
+    if (from && day < from) return false;
+    if (to && day > to) return false;
+    if (staff && String(r.staffName||'').trim().toLowerCase() !== String(staff).trim().toLowerCase()) return false;
+    return true;
+  });
+}
 function ManagerDashboard({
   onExit
 }) {
   const [stab, setStab] = useState('Overview');
   const [editStaff, setEditStaff] = useState(null);
+  const [mgrNotes, setMgrNotes] = useState(function(){ try { return JSON.parse(localStorage.getItem('kbdc_mgr_notes') || '[]'); } catch(e){ return []; } });
+  const [mgrNoteStaff, setMgrNoteStaff] = useState('');
+  const [mgrNotePrio, setMgrNotePrio] = useState('');
   const [mgrRptFrom, setMgrRptFrom] = useState('');
   const [mgrRptTo, setMgrRptTo] = useState('');
   const [mgrRptStaff, setMgrRptStaff] = useState('');
@@ -4624,7 +4667,7 @@ function ManagerDashboard({
       fontSize: 10.5,
       color: 'rgba(255,255,255,.5)'
     }
-  }, "Wednesday, 22 April"))), /*#__PURE__*/React.createElement("div", {
+  }, new Date().toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long' })))), /*#__PURE__*/React.createElement("div", {
     className: "mgr-hd-btns"
   }, /*#__PURE__*/React.createElement("button", {
     className: "mgr-btn mgr-btn-sync",
@@ -4702,7 +4745,12 @@ function ManagerDashboard({
       color: '#1A237E',
       marginBottom: 10
     }
-  }, "RECENT ACTIVITY (0)"), [].map((a, i) => /*#__PURE__*/React.createElement("div", {
+  }, (function(){ var L = kbdcLog(); return "RECENT ACTIVITY (" + L.length + ")"; })()),
+     (function(){
+       return kbdcLog().slice().sort(function(x,y){
+         return String((y.date||'')+(y.time||'')).localeCompare(String((x.date||'')+(x.time||'')));
+       }).slice(0, 30).map(kbdcLogRow);
+     })().map((a, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: "act-item"
   }, /*#__PURE__*/React.createElement("div", {
@@ -4784,28 +4832,87 @@ function ManagerDashboard({
   }, /*#__PURE__*/React.createElement("span", {
     className: "notes-title"
   }, "Admin Notes"), /*#__PURE__*/React.createElement("button", {
-    className: "btn-add-note"
+    className: "btn-add-note",
+    onClick: () => {
+      // This button carried no onClick at all, so a note could never be added.
+      var txt = window.prompt('Note:');
+      if (!txt || !txt.trim()) return;
+      var who = window.prompt('About which staff member? (leave blank for a general task note)') || '';
+      var prio = String(window.prompt('Priority — high, normal or low?', 'normal') || 'normal').trim().toLowerCase();
+      if (['high','normal','low'].indexOf(prio) < 0) prio = 'normal';
+      var note = { id: 'n' + Date.now(), text: txt.trim(), staffName: who.trim(),
+                   kind: who.trim() ? 'staff' : 'task', priority: prio,
+                   date: new Date().toISOString() };
+      var next = [note].concat(mgrNotes);
+      setMgrNotes(next);
+      try { localStorage.setItem('kbdc_mgr_notes', JSON.stringify(next)); } catch(e) {}
+    }
   }, "+ Add Note")), /*#__PURE__*/React.createElement("div", {
     className: "notes-filters"
   }, /*#__PURE__*/React.createElement("select", {
-    className: "hist-sel"
-  }, /*#__PURE__*/React.createElement("option", null, "All staff")), /*#__PURE__*/React.createElement("select", {
-    className: "hist-sel"
-  }, /*#__PURE__*/React.createElement("option", null, "All priorities"))), /*#__PURE__*/React.createElement("div", {
-    className: "notes-grid"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "notes-panel"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "notes-panel-title"
-  }, "Staff (0)"), /*#__PURE__*/React.createElement("div", {
-    className: "notes-empty"
-  }, "No staff notes yet.")), /*#__PURE__*/React.createElement("div", {
-    className: "notes-panel"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "notes-panel-title"
-  }, "Tasks (0)"), /*#__PURE__*/React.createElement("div", {
-    className: "notes-empty"
-  }, "No task notes yet.")))), stab === 'Report' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "hist-sel",
+    value: mgrNoteStaff,
+    onChange: e => setMgrNoteStaff(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", { value: '' }, "All staff"),
+     kbdcLogStaffNames().map(n => /*#__PURE__*/React.createElement("option", { key: n, value: n }, n))
+  ), /*#__PURE__*/React.createElement("select", {
+    className: "hist-sel",
+    value: mgrNotePrio,
+    onChange: e => setMgrNotePrio(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", { value: '' }, "All priorities"),
+     ['high','normal','low'].map(p => /*#__PURE__*/React.createElement("option", { key: p, value: p }, p.charAt(0).toUpperCase() + p.slice(1)))
+  )), (function(){
+    // These panels used to be hardcoded "Staff (0)" / "Tasks (0)" over a fixed
+    // "No notes yet" line, so a note the owner added was never shown back.
+    var shown = mgrNotes.filter(function(n){
+      if (mgrNoteStaff && String(n.staffName||'').trim().toLowerCase() !== mgrNoteStaff.trim().toLowerCase()) return false;
+      if (mgrNotePrio && String(n.priority||'normal').toLowerCase() !== mgrNotePrio) return false;
+      return true;
+    });
+    var staffNotes = shown.filter(function(n){ return n.kind === 'staff'; });
+    var taskNotes  = shown.filter(function(n){ return n.kind !== 'staff'; });
+    function delNote(id){
+      if (!confirm('Delete this note?')) return;
+      var next = mgrNotes.filter(function(n){ return n.id !== id; });
+      setMgrNotes(next);
+      try { localStorage.setItem('kbdc_mgr_notes', JSON.stringify(next)); } catch(e) {}
+    }
+    var prioColour = { high: '#C62828', normal: '#1357A6', low: '#78909C' };
+    function panel(title, list, emptyMsg){
+      return /*#__PURE__*/React.createElement("div", { className: "notes-panel" },
+        /*#__PURE__*/React.createElement("div", { className: "notes-panel-title" }, title + " (" + list.length + ")"),
+        list.length === 0
+          ? /*#__PURE__*/React.createElement("div", { className: "notes-empty" }, emptyMsg)
+          : list.map(function(n){
+              return /*#__PURE__*/React.createElement("div", {
+                key: n.id,
+                style: { display:'flex', alignItems:'flex-start', gap:8, padding:'8px 0', borderBottom:'1px solid #F5F5F5' }
+              },
+                /*#__PURE__*/React.createElement("span", {
+                  style: { flexShrink:0, marginTop:2, fontSize:9, fontWeight:700, textTransform:'uppercase',
+                           color:'#fff', background: prioColour[String(n.priority||'normal').toLowerCase()] || '#1357A6',
+                           borderRadius:9, padding:'2px 7px' }
+                }, n.priority || 'normal'),
+                /*#__PURE__*/React.createElement("div", { style:{ flex:1, minWidth:0 } },
+                  /*#__PURE__*/React.createElement("div", { style:{ fontSize:12, color:'#37474F', wordBreak:'break-word' } }, n.text),
+                  /*#__PURE__*/React.createElement("div", { style:{ fontSize:10, color:'#90A4AE', marginTop:2 } },
+                    (n.staffName ? n.staffName + '  ·  ' : '') +
+                    new Date(n.date).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' }))
+                ),
+                /*#__PURE__*/React.createElement("button", {
+                  onClick: function(){ delNote(n.id); },
+                  title: 'Delete note',
+                  style: { flexShrink:0, border:'none', background:'none', cursor:'pointer', color:'#B0BEC5', fontSize:14, lineHeight:1 }
+                }, "×")
+              );
+            })
+      );
+    }
+    return /*#__PURE__*/React.createElement("div", { className: "notes-grid" },
+      panel("Staff", staffNotes, "No staff notes yet."),
+      panel("Tasks", taskNotes, "No task notes yet.")
+    );
+  })()), stab === 'Report' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "rpt-controls",
     style: {
       display: 'flex',
@@ -4876,9 +4983,9 @@ function ManagerDashboard({
     className: "hist-sel",
     value: mgrRptStaff,
     onChange: e => setMgrRptStaff(e.target.value)
-  }, /*#__PURE__*/React.createElement("option", { value: '' }, "All staff"), (roles||[]).map(r => /*#__PURE__*/React.createElement("option", {
-    key: r.code, value: r.name
-  }, r.name))), /*#__PURE__*/React.createElement("button", {
+  }, /*#__PURE__*/React.createElement("option", { value: '' }, "All staff"), kbdcLogStaffNames().map(n => /*#__PURE__*/React.createElement("option", {
+    key: n, value: n
+  }, n))), /*#__PURE__*/React.createElement("button", {
     className: "btn-generate",
     onClick: () => { if (mgrRptFrom && mgrRptTo) setMgrRptGenerated(true); else alert('Please select both From and To dates.'); }
   }, "Generate"), mgrRptGenerated && /*#__PURE__*/React.createElement("button", {
@@ -4893,13 +5000,54 @@ function ManagerDashboard({
     style: { background: '#fff', borderRadius: 10, border: '1px solid #E8EAF6', padding: 16 }
   }, /*#__PURE__*/React.createElement("div", { style: { fontSize: 12, fontWeight: 600, color: '#37474F', marginBottom: 12 } },
     "Report: ", mgrRptFrom, " → ", mgrRptTo, mgrRptStaff ? " | " + mgrRptStaff : " | All Staff"),
-  (roles||[]).map(r => /*#__PURE__*/React.createElement("div", {
-    key: r.code,
-    style: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid #F5F5F5' }
-  }, /*#__PURE__*/React.createElement("div", {
-    style: { width: 28, height: 28, borderRadius: '50%', background: r.c, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff', flexShrink: 0 }
-  }, r.code), /*#__PURE__*/React.createElement("div", { style: { flex: 1, fontSize: 12, color: '#37474F' } }, r.name),
-  /*#__PURE__*/React.createElement("div", { style: { fontSize: 11, background: '#E8F5E9', color: '#2E7D32', padding: '2px 8px', borderRadius: 10 } }, "-"))))), stab === 'Staff' && /*#__PURE__*/React.createElement(StaffTab, {
+  (function(){
+    // Every row used to read "-": the report listed roles but never counted a
+    // single completion, and its staff filter changed nothing.
+    var rows = kbdcLogFilter(mgrRptFrom, mgrRptTo, mgrRptStaff);
+    var doneBy = {};
+    rows.forEach(function(r){ var k = r.roleCode || '--'; doneBy[k] = (doneBy[k] || 0) + 1; });
+    // A staff filter means "what did this person do" — only the roles they
+    // actually worked in belong in the report.
+    var list = (roles || []).filter(function(r){ return mgrRptStaff ? doneBy[r.code] : true; });
+    if (!list.length) return /*#__PURE__*/React.createElement("div", { className: "rpt-empty" },
+      "No task completions recorded for this selection.");
+    var totDone = 0, totPend = 0;
+    var body = list.map(function(r){
+      var done = doneBy[r.code] || 0;
+      // Pending is what is outstanding right now for that role, which is the
+      // number the owner acts on; completions are what happened in the range.
+      var pend = mgrRptStaff ? 0 : getRoleTasks(r.code).filter(function(t){ return !t.done; }).length;
+      totDone += done; totPend += pend;
+      var total = done + pend;
+      var pct = total ? Math.round(done / total * 100) : 0;
+      return /*#__PURE__*/React.createElement("div", {
+        key: r.code,
+        style: { display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', borderBottom: '1px solid #F5F5F5' }
+      }, /*#__PURE__*/React.createElement("div", {
+        style: { width: 28, height: 28, borderRadius: '50%', background: r.c, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 700, color: '#fff', flexShrink: 0 }
+      }, r.code), /*#__PURE__*/React.createElement("div", { style: { flex: 1, fontSize: 12, color: '#37474F' } }, r.name),
+      /*#__PURE__*/React.createElement("div", {
+        className: "rpt-done",
+        style: { fontSize: 11, background: '#E8F5E9', color: '#2E7D32', padding: '2px 8px', borderRadius: 10 }
+      }, done + " completed"),
+      !mgrRptStaff && /*#__PURE__*/React.createElement("div", {
+        className: "rpt-pend",
+        style: { fontSize: 11, background: pend ? '#FFF3E0' : '#ECEFF1', color: pend ? '#E65100' : '#78909C', padding: '2px 8px', borderRadius: 10 }
+      }, pend + " pending"),
+      !mgrRptStaff && /*#__PURE__*/React.createElement("div", {
+        style: { fontSize: 11, fontWeight: 700, color: '#1357A6', minWidth: 38, textAlign: 'right' }
+      }, pct + "%"));
+    });
+    var grand = totDone + totPend;
+    return /*#__PURE__*/React.createElement("div", null, body, /*#__PURE__*/React.createElement("div", {
+      className: "rpt-total",
+      style: { display: 'flex', alignItems: 'center', gap: 10, paddingTop: 10, fontSize: 12, fontWeight: 700, color: '#1A237E' }
+    }, /*#__PURE__*/React.createElement("div", { style: { flex: 1 } }, "Total"),
+       /*#__PURE__*/React.createElement("div", null, totDone + " completed"),
+       !mgrRptStaff && /*#__PURE__*/React.createElement("div", null, totPend + " pending"),
+       !mgrRptStaff && /*#__PURE__*/React.createElement("div", { style: { minWidth: 38, textAlign: 'right' } },
+         (grand ? Math.round(totDone / grand * 100) : 0) + "%")));
+  })())), stab === 'Staff' && /*#__PURE__*/React.createElement(StaffTab, {
     editStaff: editStaff,
     setEditStaff: setEditStaff
   }), stab === 'Share' && /*#__PURE__*/React.createElement(ShareTab, {
@@ -5246,20 +5394,27 @@ function AddTaskTab({ roles }) {
 }
 
 function HistoryTab({roles}) {
+  const [mgrHistFrom, setMgrHistFrom] = useState(function(){ var d=new Date(); d.setDate(d.getDate()-7); return d.toISOString().split('T')[0]; });
+  const [mgrHistTo, setMgrHistTo] = useState(function(){ return new Date().toISOString().split('T')[0]; });
+  const [mgrHistStaff, setMgrHistStaff] = useState('');
+
   return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "hist-controls"
   }, /*#__PURE__*/React.createElement("select", {
-    className: "hist-sel"
-  }, /*#__PURE__*/React.createElement("option", null, "All Staff"), (roles||[]).map(r => /*#__PURE__*/React.createElement("option", {
-    key: r.code
-  }, r.name))), /*#__PURE__*/React.createElement("span", {
+    className: "hist-sel",
+    value: mgrHistStaff,
+    onChange: e => setMgrHistStaff(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", { value: "" }, "All Staff"), kbdcLogStaffNames().map(n => /*#__PURE__*/React.createElement("option", {
+    key: n, value: n
+  }, n))), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11
     }
   }, "FROM"), /*#__PURE__*/React.createElement("input", {
     type: "date",
     className: "hist-date-inp",
-    defaultValue: "2026-04-22"
+    value: mgrHistFrom,
+    onChange: e => setMgrHistFrom(e.target.value)
   }), /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 11
@@ -5267,16 +5422,34 @@ function HistoryTab({roles}) {
   }, "TO"), /*#__PURE__*/React.createElement("input", {
     type: "date",
     className: "hist-date-inp",
-    defaultValue: "2026-04-22"
+    value: mgrHistTo,
+    onChange: e => setMgrHistTo(e.target.value)
   }), /*#__PURE__*/React.createElement("button", {
-    className: "hist-reset"
+    className: "hist-reset",
+    onClick: () => {
+      var d = new Date(); d.setDate(d.getDate() - 7);
+      setMgrHistFrom(d.toISOString().split('T')[0]);
+      setMgrHistTo(new Date().toISOString().split('T')[0]);
+      setMgrHistStaff('');
+    }
   }, "Reset")), /*#__PURE__*/React.createElement("div", {
     className: "hist-count"
-  }, "30 task completions in this range across 4 roles"), /*#__PURE__*/React.createElement("div", {
+  }, (function(){
+       var rows = kbdcLogFilter(mgrHistFrom, mgrHistTo, mgrHistStaff);
+       var roleSet = {}; rows.forEach(function(r){ if(r.roleCode) roleSet[r.roleCode]=1; });
+       return rows.length + ' task completion' + (rows.length===1?'':'s') +
+              ' in this range across ' + Object.keys(roleSet).length + ' role' +
+              (Object.keys(roleSet).length===1?'':'s');
+     })()), /*#__PURE__*/React.createElement("div", {
     className: "hist-date-grp"
   }, /*#__PURE__*/React.createElement("div", {
     className: "hist-date-lbl"
-  }, "Wednesday, 22 April 2026"), [].map((r, i) => /*#__PURE__*/React.createElement("div", {
+  }, ''), (function(){
+       var rows = kbdcLogFilter(mgrHistFrom, mgrHistTo, mgrHistStaff).sort(function(x,y){
+         return String((y.date||'')+(y.time||'')).localeCompare(String((x.date||'')+(x.time||'')));
+       });
+       return rows.map(kbdcLogRow);
+     })().map((r, i) => /*#__PURE__*/React.createElement("div", {
     key: i,
     className: "hist-row"
   }, /*#__PURE__*/React.createElement("div", {
