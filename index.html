@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-18-1';
+var KBDC_APP_VERSION = '2026-08-18-2';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -9867,6 +9867,30 @@ function kbdcRoleEmpRowsToByCode(rows) {
   });
   return byCode;
 }
+// A push gets ONE attempt today. If that attempt fails — a script-lock
+// timeout, a momentary network drop, a backend hiccup — the record simply
+// stays on the device and is only retried by the next 30s cycle, which never
+// comes if the person closes the browser right after checking in. That is how
+// an employee's attendance can be marked on their phone and never appear on
+// the Sheet or on anyone else's device, while their colleagues' records
+// arrive fine. Retry a few times with a short backoff before giving up, and
+// treat the backend's own {ok:false} reply as a failure worth retrying.
+async function kbdcBackendReqBatchRetry(url, action, payload, attempts) {
+  var tries = attempts || 3, lastErr;
+  for (var i = 0; i < tries; i++) {
+    try {
+      var res = await kbdcBackendReqBatch(url, action, payload);
+      if (res && res.ok === false) throw new Error(res.error || 'Backend rejected the push');
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (i < tries - 1) {
+        await new Promise(function(r){ setTimeout(r, 700 * Math.pow(2, i)); });
+      }
+    }
+  }
+  throw lastErr;
+}
 async function kbdcBackendReqBatch(url, action, payload) {
   return kbdcBackendReqAt(url, null, action, payload);
 }
@@ -10152,7 +10176,7 @@ async function kbdcAutoSyncMain() {
       if (v != null) blobRows.push({ key: k, value: v, updatedAt: new Date().toISOString() });
     });
     if (blobRows.length) pushPayload['AppData'] = blobRows;
-    var mainRes = await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
+    var mainRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: pushPayload });
     // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
     // kbdcBackendReqAt does not treat as an error — so without this check a
     // push the backend actually REJECTED (script lock timeout, quota, a bad
@@ -10238,7 +10262,7 @@ async function kbdcAutoSyncInventory() {
       var rows = m.get().map(kbdcFlattenRow);
       if (rows.length) pushPayload[m.sheet] = rows;
     });
-    var invRes = await kbdcBackendReqBatch(url, 'saveBatch', { modules: pushPayload });
+    var invRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: pushPayload });
     // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
     // kbdcBackendReqAt does not treat as an error. Combined with the empty
     // catch below, an Inventory push that the backend actually rejected
