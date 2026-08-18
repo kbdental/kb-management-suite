@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-14-5';
+var KBDC_APP_VERSION = '2026-08-18-1';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -20802,7 +20802,29 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
   const presentN = todayAtt.filter(function(a){return a.checkIn;}).length;
   const onLeaveN = leaves.filter(function(l){return l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY&&(activeBranch==='All Branches'||l.branch===activeBranch);}).length;
   const pendingN = leaves.filter(function(l){return l.status==='pending'&&(activeBranch==='All Branches'||l.branch===activeBranch);}).length;
-  const absentN = Math.max(0, bStaff.length - presentN - onLeaveN);
+  // The dashboard had no concept of a non-working day: it contained no
+  // reference to holidays or week-offs at all, so on a declared holiday — or
+  // on a configured week-off — everyone who had simply not checked in was
+  // counted and labelled "Absent", even while the Calendar correctly showed
+  // the day as a holiday. Nobody is absent on a day they were not due in.
+  const kbdcTodayHoliday = (function(){
+    try {
+      var hs = (typeof laGetHolidays === 'function') ? laGetHolidays() : [];
+      var hit = (hs || []).find(function(h){
+        return String(h && (h.date || h.from) || '').slice(0,10) === LA_TODAY;
+      });
+      return hit ? (hit.name || hit.title || 'Holiday') : '';
+    } catch(e) { return ''; }
+  })();
+  const kbdcTodayWeekOff = (function(){
+    try { return laGetWeekOff().indexOf(new Date(LA_TODAY + 'T00:00:00').getDay()) !== -1; }
+    catch(e) { return false; }
+  })();
+  const kbdcNonWorkingDay = !!kbdcTodayHoliday || kbdcTodayWeekOff;
+  // On a non-working day only genuine absences of people who were expected in
+  // can exist, and nobody is expected in — so the count is zero rather than
+  // "everyone who didn't tap the button".
+  const absentN = kbdcNonWorkingDay ? 0 : Math.max(0, bStaff.length - presentN - onLeaveN);
 
   /* Half day today */
   const halfDayN = leaves.filter(function(l){
@@ -20860,6 +20882,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
           let pill='lp-red', pillTxt='Absent';
           if(onLv){ pill='lp-blue'; pillTxt='On Leave'; }
           else if(rec&&rec.checkIn){ pill='lp-green'; pillTxt='Present'; }
+          else if(kbdcNonWorkingDay){ pill='lp-grey'; pillTxt=kbdcTodayHoliday || 'Week Off'; }
           const color = s.c||s.color||LA_AV_COLORS[0];
           const inits = s.i||laInits(s.name);
           return React.createElement('div',{className:'la-row',key:s.name},
