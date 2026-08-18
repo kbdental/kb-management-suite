@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-18-2';
+var KBDC_APP_VERSION = '2026-08-18-3';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -9771,7 +9771,7 @@ function kbdcAllocRows() {
 
 var KBDC_BACKEND_MODULES = [
   { id:'staff',       label:'Staff / Employees',        sheet:'Staff',              get: function(){ return sharedStaffGet().map(function(s){ return { id:s.id, name:s.name, role:s.role||s.designation, email:s.email, mobile:s.mobile||s.phone, accessLevel:s.accessLevel, department:s.dept||s.group, status:s.s, joined:s.joined, reportsTo:(s.reportsTo&&s.reportsTo.name)||s.reportingManagerName||'' }; }); } },
-  { id:'tasks',       label:'Task Lists & Completion',  sheet:'Tasks',              get: function(){ return kbdcScanPrefixed('kbdc_tasks_').map(function(t){ return { roleCode:t.sourceKey, taskCode:t.code, taskEn:t.en, taskHi:t.hi, frequency:t.freq, done:t.done }; }); } },
+  { id:'tasks',       label:'Task Lists & Completion',  sheet:'Tasks',              get: function(){ return kbdcScanPrefixed('kbdc_tasks_').map(function(t){ return { roleCode:t.sourceKey, taskCode:t.code, taskEn:t.en, taskHi:t.hi, frequency:t.freq, done:t.done, doneAt:t.doneAt||'' }; }); } },
   { id:'taskcompletions', label:'Task Completions Log',  sheet:'TaskCompletions',    localKey:'kbdc_task_log', get: function(){ return kbdcLsArray('kbdc_task_log'); } },
   { id:'roleemp',     label:'Role Employee Assignments', sheet:'RoleEmployees',      get: function(){ return kbdcScanPrefixed('kbdc_role_emp_').map(function(e){ return { roleCode:e.sourceKey, id:e.id, name:e.name, pin:e.pin, branch:e.branch }; }); } },
   { id:'leaves',      label:'Leave Requests',           sheet:'LeaveRequests',      localKey:'kbdc_la_leaves', get: function(){ return kbdcLsArray('kbdc_la_leaves'); } },
@@ -9854,9 +9854,39 @@ function kbdcTasksRowsToByRole(rows) {
   (rows || []).forEach(function(r) {
     var code = r.roleCode; if (!code) return;
     if (!byRole[code]) byRole[code] = [];
-    byRole[code].push({ code: r.taskCode, en: r.taskEn, hi: r.taskHi, freq: r.frequency, done: r.done === true || r.done === 'true' });
+    byRole[code].push({ code: r.taskCode, en: r.taskEn, hi: r.taskHi, freq: r.frequency, done: r.done === true || r.done === 'true', doneAt: r.doneAt || '' });
   });
   return byRole;
+}
+// Merging task lists cannot use the generic union-by-id helper. That helper
+// keeps the LOCAL row when neither side carries an updatedAt, which is right
+// for append-only records but exactly wrong here: a manager's device that has
+// rolled yesterday's completions off would keep its own done:false and
+// discard the employee's fresh done:true, so work marked on one device never
+// showed anywhere else. Completion state follows whichever side has the more
+// recent doneAt; text and frequency fall back to the remote copy when the
+// local row lacks them.
+function kbdcMergeTaskLists(localList, remoteList) {
+  var byCode = {}, order = [];
+  (localList || []).forEach(function(t){
+    if (!t || !t.code) return;
+    if (!(t.code in byCode)) order.push(t.code);
+    byCode[t.code] = t;
+  });
+  (remoteList || []).forEach(function(r){
+    if (!r || !r.code) return;
+    if (!(r.code in byCode)) { order.push(r.code); byCode[r.code] = r; return; }
+    var l = byCode[r.code];
+    var ld = l.doneAt ? new Date(l.doneAt).getTime() : 0;
+    var rd = r.doneAt ? new Date(r.doneAt).getTime() : 0;
+    var out = Object.assign({}, l);
+    if (!out.en && r.en) out.en = r.en;
+    if (!out.hi && r.hi) out.hi = r.hi;
+    if (!out.freq && r.freq) out.freq = r.freq;
+    if (!isNaN(rd) && rd > ld) { out.done = r.done === true || r.done === 'true'; out.doneAt = r.doneAt; }
+    byCode[r.code] = out;
+  });
+  return order.map(function(c){ return byCode[c]; });
 }
 function kbdcRoleEmpRowsToByCode(rows) {
   var byCode = {};
@@ -10036,11 +10066,7 @@ async function kbdcAutoSyncMain() {
     Object.keys(byRole).forEach(function(code) {
       var localTasks = [];
       try { localTasks = JSON.parse(localStorage.getItem('kbdc_tasks_' + code) || '[]'); } catch(e){}
-      var localWithId = localTasks.map(function(t){ return Object.assign({}, t, { id: t.code }); });
-      var remoteWithId = byRole[code].map(function(t){ return Object.assign({}, t, { id: t.code }); });
-      var mergedTasks = kbdcUnionMergeById(localWithId, remoteWithId).map(function(t){
-        var c = Object.assign({}, t); delete c.id; return c;
-      });
+      var mergedTasks = kbdcMergeTaskLists(localTasks, byRole[code]);
       var nextT = JSON.stringify(mergedTasks);
       if (localStorage.getItem('kbdc_tasks_' + code) !== nextT) { localStorage.setItem('kbdc_tasks_' + code, nextT); tasksChanged = true; }
     });
