@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-1';
+var KBDC_APP_VERSION = '2026-08-19-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-1';
@@ -2565,12 +2565,15 @@ function SyncStatusBadge() {
   var color, bg, label, title;
   // An out-of-date Apps Script outranks a green backup: the data may well be
   // saving while the very bug that was just fixed is still live on the server.
-  if (!s.err && s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND) {
+  var staleBackends = [];
+  if (s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Main (' + s.backendVersion + ')');
+  if (s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Inventory (' + s.invBackendVersion + ')');
+  if (!s.err && staleBackends.length) {
     return React.createElement('div', {
-      title: 'The Google Apps Script answering this app reports version ' + s.backendVersion +
-             ', but this app expects ' + KBDC_EXPECTED_BACKEND + '. Open the Sheet → Extensions → ' +
-             'Apps Script, paste the latest backend/Code.gs, then Deploy → Manage deployments → ' +
-             'Edit → New version. Editing the script alone does not update a deployment in use.',
+      title: 'Out of date: ' + staleBackends.join(' and ') + '. This app expects ' +
+             KBDC_EXPECTED_BACKEND + '. Open that Sheet → Extensions → Apps Script, paste the ' +
+             'latest script, then Deploy → Manage deployments → Edit → New version. ' +
+             'Editing the script alone does not update a deployment already in use.',
       style:{ display:'flex', alignItems:'center', fontSize:11, fontWeight:700, color:'#E65100',
               background:'#FFF3E0', padding:'5px 10px', borderRadius:14, marginRight:8, whiteSpace:'nowrap' }
     }, '⚠ Backend needs redeploy');
@@ -10498,6 +10501,9 @@ async function kbdcAutoSyncInventory() {
     // never appeared and the device reported itself healthy.
     var got = await kbdcBackendPullBatch(url, sheetNames, 3);
     var remote = got.data || {};
+    // Inventory is a SECOND, separate Apps Script deployment. Redeploying one
+    // and forgetting the other is easy and looks exactly like a broken fix.
+    kbdcSetSyncStatus({ invBackendVersion: got.version || '(pre-versioning)' });
     // Union merge by id — a stock in/out just recorded locally (not pushed
     // yet) must never be wiped out by an older remote snapshot that hasn't
     // seen it. Field-level qty conflicts on the SAME item id from two
