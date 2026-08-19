@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-9';
+var KBDC_APP_VERSION = '2026-08-19-10';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -2734,6 +2734,19 @@ function SyncDiagnostics({ onClose }) {
                 fontFamily:"'Poppins',sans-serif", fontSize:12, fontWeight:600,
                 cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 } },
         busy ? 'Testing…' : 'Test both connections now'),
+      React.createElement('button', {
+        onClick: function(){
+          // Clears any backoff and tries immediately — so a device that has
+          // been waiting out an error does not have to be reloaded to retry.
+          kbdcSetSyncStatus({ failStreak: 0 });
+          setBusy(true);
+          kbdcAutoSyncCycle().finally(function(){ setBusy(false); setProbes(null); });
+        },
+        disabled: busy,
+        style:{ padding:'8px 14px', background:'#2E7D32', color:'#fff', border:'none',
+                borderRadius:8, fontFamily:"'Poppins',sans-serif", fontSize:12, fontWeight:600,
+                cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 } },
+        busy ? 'Syncing…' : 'Sync now'),
       React.createElement('button', {
         onClick: function(){
           var t = details();
@@ -11055,7 +11068,16 @@ async function kbdcAutoSyncInventory() {
 }
 async function kbdcAutoSyncCycle() {
   await kbdcAutoSyncMain();
-  await kbdcAutoSyncInventory();
+  // Inventory is a SECOND Apps Script project with its own quota, and stock
+  // moves a few times a day rather than a few times a minute. Calling it on
+  // every cycle doubled this clinic's Apps Script usage for almost no benefit.
+  // Stock in/out still syncs instantly when someone actually records it.
+  var n = 0;
+  try {
+    n = (parseInt(localStorage.getItem('kbdc_inv_cycle') || '0', 10) || 0) + 1;
+    localStorage.setItem('kbdc_inv_cycle', String(n));
+  } catch(e) { n = 1; }
+  if (n % 3 === 1) await kbdcAutoSyncInventory();
 }
 
 // --- How often to talk to Google ------------------------------------------
@@ -11071,7 +11093,12 @@ async function kbdcAutoSyncCycle() {
 // while errors persist and snapping straight back on the first success. Work
 // a person actually does — a check-in, a task ticked — still syncs
 // immediately; this only governs the idle polling.
-var KBDC_SYNC_BASE_MS = 60000;
+// Two minutes, not thirty seconds. With change-detection a cycle usually
+// transfers nothing, so the only cost of a longer gap is how quickly one
+// device notices another's work — and anything a person actually does still
+// syncs immediately. Across eight devices this is the difference between
+// ~2,900 Apps Script calls an hour and roughly 300.
+var KBDC_SYNC_BASE_MS = 120000;
 var KBDC_SYNC_MAX_MS  = 600000;
 function kbdcNoteSyncOutcome(okNow) {
   var s = kbdcGetSyncStatus();
