@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-8';
+var KBDC_APP_VERSION = '2026-08-19-9';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -2633,7 +2633,7 @@ async function kbdcProbeBackend(url, label) {
       if (/accounts\.google\.com|sign ?in|authoriz/i.test(txt)) {
         out.result = 'Google returned a sign-in page (HTTP ' + r.status + '). This deployment\'s ' +
                      '"Who has access" is not set to "Anyone". Re-deploy with Who has access: Anyone.';
-      } else if (/too many times|quota|rate|unavailable|try again/i.test(txt)) {
+      } else if (/too many times|quota exceeded|rate limit/i.test(txt)) {
         out.result = 'Google is rate-limiting this script (HTTP ' + r.status + '): too many requests ' +
                      'in a short time across your devices. Not a settings problem — it clears on its own.';
       } else {
@@ -10475,6 +10475,32 @@ var KBDC_HOT_SHEETS = {
  * seconds. On a phone that is both a "Failed to fetch" waiting to happen and
  * roughly 124 MB of mobile data per hour, per staff member.
  */
+/**
+ * Fetches one group of tabs, halving it and retrying if the reply cannot be
+ * had. A reply that is too big to arrive fails the same way as a transient
+ * error, and there is no way to know a tab's size before reading it once — so
+ * discover it by splitting rather than by guessing up front.
+ */
+async function kbdcPullGroup(url, sheets, depth) {
+  depth = depth || 0;
+  try {
+    // Only the first attempt retries. Splitting is for a reply that was too
+    // big to arrive; when the real cause is Google refusing calls, retrying
+    // every half as well turns one failure into a burst — which is the thing
+    // that provoked the refusal. So: split once, shallowly, and let the next
+    // cycle (by then knowing each tab's size) do better.
+    return await kbdcBackendPullBatch(url, sheets, depth ? 1 : 2);
+  } catch (e) {
+    if (sheets.length < 2 || depth >= 1) throw e;
+    var half = Math.ceil(sheets.length / 2);
+    var a = await kbdcPullGroup(url, sheets.slice(0, half), depth + 1);
+    var b = await kbdcPullGroup(url, sheets.slice(half), depth + 1);
+    var merged = {};
+    Object.keys(a.data || {}).forEach(function(k){ merged[k] = a.data[k]; });
+    Object.keys(b.data || {}).forEach(function(k){ merged[k] = b.data[k]; });
+    return { data: merged, version: a.version || b.version };
+  }
+}
 async function kbdcPullSheets(url, names, forceAll) {
   var version = '', stamps = null;
   // Ask what actually moved. One tiny reply; needs backend 2026-08-19-2 or
@@ -10505,21 +10531,24 @@ async function kbdcPullSheets(url, names, forceAll) {
   var groups = [], cur = [], curBytes = 0;
   want.forEach(function(n) {
     var est = sizes[n];
-    // Never measured (this device's first read of that tab) counts as large:
-    // better one extra request than a blind group that turns out to be a
-    // megabyte, which is exactly how the first sync used to fail.
-    if (est === undefined || est > 150000) {
+    // A tab already known to be large is fetched alone. An unmeasured one is
+    // assumed ordinary and grouped: guessing "large" for everything turned the
+    // first sync after an update into a burst of seventeen requests from every
+    // device at once, which is its own way of getting throttled. If a group
+    // does turn out to be too big, kbdcPullGroup below splits it and retries,
+    // so the size is discovered rather than guessed.
+    if (est !== undefined && est > 150000) {
       if (cur.length) { groups.push(cur); cur = []; curBytes = 0; }
       groups.push([n]); return;
     }
-    if (cur.length >= 4 || (curBytes + est) > 150000) { groups.push(cur); cur = []; curBytes = 0; }
-    cur.push(n); curBytes += est;
+    if (cur.length >= 4 || (curBytes + (est || 0)) > 150000) { groups.push(cur); cur = []; curBytes = 0; }
+    cur.push(n); curBytes += (est || 0);
   });
   if (cur.length) groups.push(cur);
 
   var remote = {}, biggest = 0;
   for (var i = 0; i < groups.length; i++) {
-    var got = await kbdcBackendPullBatch(url, groups[i], 2);
+    var got = await kbdcPullGroup(url, groups[i], 0);
     version = got.version || version;
     var data = got.data || {};
     Object.keys(data).forEach(function(k) {
