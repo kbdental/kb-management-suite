@@ -870,20 +870,59 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-4';
+var KBDC_APP_VERSION = '2026-08-19-5';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-1';
+// Keeps every device on the current build.
+//
+// This used to run ONCE per browser session and stop, gated on a
+// sessionStorage flag. Staff keep the app open on their phones all day, so
+// sessionStorage never clears and the check never ran again — a phone could
+// sit on a months-old build indefinitely while the owner's freshly-reloaded
+// laptop looked fine. That is how a fix could be shipped, confirmed working on
+// one machine, and still be entirely absent from the eight phones that
+// actually record attendance.
+//
+// Now it re-checks on a timer, and whenever the app is brought back to the
+// foreground. A visible page is not yanked out from under whoever is using it:
+// it updates the moment the tab is backgrounded instead, which on a phone is
+// almost immediately.
 (function(){
-  if (sessionStorage.getItem('kbdc_version_check_done')) return;
-  sessionStorage.setItem('kbdc_version_check_done','1');
   var base = location.origin + location.pathname;
-  fetch(base, { cache: 'no-store' }).then(function(r){ return r.text(); }).then(function(html){
-    var m = html.match(/KBDC_APP_VERSION = '([^']+)'/);
-    if (m && m[1] && m[1] !== KBDC_APP_VERSION) {
-      location.href = base + '?_v=' + Date.now();
-    }
-  }).catch(function(){});
+  var pending = null;
+
+  function reloadNow(target) {
+    // Loop guard: if reloading did not actually change the version (a stale
+    // CDN copy, say), don't sit in a refresh loop.
+    try {
+      var last = JSON.parse(localStorage.getItem('kbdc_version_reload') || '{}');
+      if (last.target === target && (Date.now() - (last.at || 0)) < 300000) return;
+      localStorage.setItem('kbdc_version_reload', JSON.stringify({ target: target, at: Date.now() }));
+    } catch(e) {}
+    location.replace(base + '?_v=' + Date.now());
+  }
+
+  function check() {
+    fetch(base, { cache: 'no-store' }).then(function(r){ return r.text(); }).then(function(html){
+      var m = html.match(/KBDC_APP_VERSION = '([^']+)'/);
+      if (!m || !m[1] || m[1] === KBDC_APP_VERSION) return;
+      if (document.hidden) reloadNow(m[1]);
+      else pending = m[1];           // update as soon as they put it down
+    }).catch(function(){});
+  }
+
+  document.addEventListener('visibilitychange', function(){
+    // Backgrounded: the moment to update. If a check already spotted a new
+    // build, take it; otherwise look now — check() reloads straight away while
+    // the page is hidden, so a phone that is simply put down comes back
+    // current without waiting for the next timer tick.
+    if (document.hidden) { if (pending) reloadNow(pending); else check(); }
+    else check();                    // back in the foreground — is there a new build?
+  });
+
+  check();
+  setInterval(check, 900000);        // and every 15 minutes regardless
 })();
 </script>
 <div id="root"></div>
