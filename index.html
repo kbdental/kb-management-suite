@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-3';
+var KBDC_APP_VERSION = '2026-08-19-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-1';
@@ -2620,6 +2620,9 @@ function SyncDiagnostics({ onClose }) {
       'Main backend reported: ' + (s.backendVersion || '(not seen yet)'),
       'Inventory backend reported: ' + (s.invBackendVersion || '(not seen yet)'),
       'Last good backup: ' + (s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never'),
+      'Last upload: ' + (s.lastPushBytes != null ? (s.lastPushBytes + ' bytes in ' +
+        (s.lastPushChunks || 0) + ' request(s))') : 'not measured yet'),
+      'Last uploaded tabs: ' + (s.lastPushSheets || '—'),
       'Current error: ' + (s.err || '(none)'),
     ];
     (probes || []).forEach(function(p) {
@@ -2661,6 +2664,12 @@ function SyncDiagnostics({ onClose }) {
     row('Inventory script reported', s.invBackendVersion || 'not seen yet',
         !!s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND),
     row('Last good backup', s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never', !s.lastOk),
+    row('Last upload size', s.lastPushBytes != null
+        ? (Math.round(s.lastPushBytes / 1024) + ' KB in ' + (s.lastPushChunks || 0) +
+           ' request' + ((s.lastPushChunks === 1) ? '' : 's'))
+        : 'not measured yet',
+        (s.lastPushBytes || 0) > 900000),
+    row('Last uploaded', s.lastPushSheets || '—'),
     React.createElement('div', { style:{ display:'flex', gap:8, marginTop:16, flexWrap:'wrap' } },
       React.createElement('button', { onClick:run, disabled:busy,
         style:{ padding:'8px 14px', background:'#1357A6', color:'#fff', border:'none', borderRadius:8,
@@ -10289,6 +10298,62 @@ async function kbdcBackendPullBatch(url, sheetNames, attempts) {
   }
   throw lastErr;
 }
+// --- Keeping the push small -------------------------------------------------
+//
+// Every cycle used to send the ENTIRE database — every task, every attendance
+// row, every completion, plus the settings blobs — in one POST, every 30
+// seconds, from every device. Apps Script answers a web-app POST with a 302 to
+// a short-lived script.googleusercontent.com URL that the browser then fetches;
+// the bigger and slower the call, the more often that second fetch comes back
+// 404. A tiny 'ping' to the very same deployment succeeds while the full push
+// fails — exactly the "HTTP 404 but both connections test fine" symptom.
+// Two changes below: only send what actually changed, and never send one
+// enormous request.
+
+function kbdcHashString(str) {
+  var h = 5381;
+  for (var i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
+  return String(h);
+}
+function kbdcPushSigs() { try { return JSON.parse(localStorage.getItem('kbdc_push_sigs') || '{}'); } catch(e) { return {}; } }
+function kbdcSetPushSigs(s) { try { localStorage.setItem('kbdc_push_sigs', JSON.stringify(s)); } catch(e) {} }
+
+/**
+ * Splits a {sheet: rows} payload into several smaller ones, none larger than
+ * `budget` bytes of JSON. Splitting mid-sheet is safe: the backend merges rows
+ * by key and never deletes what it wasn't sent, so a sheet arriving across two
+ * requests ends up identical to one that arrived in a single request.
+ */
+function kbdcSplitPushChunks(payload, budget) {
+  // Deliberately conservative. Google does not document where a web-app POST
+  // starts failing this way, and the failure is intermittent rather than a
+  // clean limit, so aim well under anything that has been seen to break. The
+  // cost of a smaller budget is a few more requests, and only when something
+  // actually changed.
+  budget = budget || 120000;
+  var chunks = [], cur = {}, curSize = 2, curCount = 0;
+  function flush() { if (curCount) { chunks.push(cur); cur = {}; curSize = 2; curCount = 0; } }
+  Object.keys(payload).forEach(function(sheet) {
+    var rows = payload[sheet] || [];
+    if (!rows.length) return;
+    var i = 0;
+    while (i < rows.length) {
+      var take = [], added = sheet.length + 6;
+      while (i < rows.length) {
+        var rowStr = JSON.stringify(rows[i]);
+        // Always take at least one row, even an oversized one — dropping it
+        // would silently lose data, which is worse than one large request.
+        if (take.length && (curSize + added + rowStr.length + 1) > budget) break;
+        take.push(rows[i]); added += rowStr.length + 1; i++;
+      }
+      cur[sheet] = (cur[sheet] || []).concat(take);
+      curSize += added; curCount += take.length;
+      if (curSize >= budget) flush();
+    }
+  });
+  flush();
+  return chunks;
+}
 async function kbdcBackendReqBatchRetry(url, action, payload, attempts) {
   var tries = attempts || 3, lastErr;
   for (var i = 0; i < tries; i++) {
@@ -10621,16 +10686,49 @@ async function kbdcAutoSyncMain() {
       if (v != null) blobRows.push({ key: k, value: v, updatedAt: new Date().toISOString() });
     });
     if (blobRows.length) pushPayload['AppData'] = blobRows;
-    var mainRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: pushPayload });
-    // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
-    // kbdcBackendReqAt does not treat as an error — so without this check a
-    // push the backend actually REJECTED (script lock timeout, quota, a bad
-    // token) fell straight through to the green "Backed up just now" badge
-    // below. That is how an employee's attendance could sit on their own
-    // phone, looking saved and backed up, while never reaching the Sheet or
-    // the admin dashboard. Same check the Inventory sync already does.
-    if (mainRes && mainRes.ok === false) throw new Error(mainRes.error || 'Backup was rejected by the backend');
-    kbdcSetSyncStatus({ lastOk: Date.now(), err: '' });
+
+    // Send only the tabs whose contents actually changed since the last
+    // successful push. In steady state — several devices re-sending identical
+    // data every 30 seconds — that is nothing at all, and the whole call is
+    // skipped. A full push still goes out every six hours as a safety net, so
+    // a tab someone emptied or edited directly on the Sheet gets restored —
+    // kept infrequent on purpose, because a full push is many small requests
+    // and Apps Script executions are a limited daily quota shared by every
+    // device in the clinic.
+    var prevSigs = kbdcPushSigs();
+    var newSigs = {};
+    var lastFull = parseInt(localStorage.getItem('kbdc_push_full_at') || '0', 10);
+    var forceFull = !lastFull || (Date.now() - lastFull) > 21600000;
+    var changedPayload = {};
+    Object.keys(pushPayload).forEach(function(sheet) {
+      var sig = kbdcHashString(JSON.stringify(pushPayload[sheet]));
+      newSigs[sheet] = sig;
+      if (forceFull || prevSigs[sheet] !== sig) changedPayload[sheet] = pushPayload[sheet];
+    });
+
+    // No explicit budget — kbdcSplitPushChunks owns that decision.
+    var chunks = kbdcSplitPushChunks(changedPayload);
+    var pushedBytes = 0;
+    for (var ci = 0; ci < chunks.length; ci++) {
+      var body = { modules: chunks[ci] };
+      pushedBytes += JSON.stringify(body).length;
+      var mainRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', body);
+      // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
+      // kbdcBackendReqAt does not treat as an error — so without this check a
+      // push the backend actually REJECTED (script lock timeout, quota, a bad
+      // token) fell straight through to the green "Backed up just now" badge
+      // below. That is how an employee's attendance could sit on their own
+      // phone, looking saved and backed up, while never reaching the Sheet or
+      // the admin dashboard. Same check the Inventory sync already does.
+      if (mainRes && mainRes.ok === false) throw new Error(mainRes.error || 'Backup was rejected by the backend');
+    }
+    // Only remember the signatures once every chunk landed, so a failed push
+    // is retried in full next cycle rather than being assumed delivered.
+    kbdcSetPushSigs(newSigs);
+    if (forceFull) { try { localStorage.setItem('kbdc_push_full_at', String(Date.now())); } catch(e) {} }
+    kbdcSetSyncStatus({ lastOk: Date.now(), err: '',
+      lastPushBytes: pushedBytes, lastPushChunks: chunks.length,
+      lastPushSheets: Object.keys(changedPayload).join(', ') || '(nothing changed)' });
   } catch (e) {
     kbdcSetSyncStatus({ err: (e && e.message) ? e.message : 'Backup failed' });
   }
