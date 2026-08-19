@@ -870,7 +870,10 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-18-6';
+var KBDC_APP_VERSION = '2026-08-19-1';
+// The backend/Code.gs version this app is built against. When the deployed
+// Apps Script reports anything else, the badge says so — see SyncStatusBadge.
+var KBDC_EXPECTED_BACKEND = '2026-08-19-1';
 (function(){
   if (sessionStorage.getItem('kbdc_version_check_done')) return;
   sessionStorage.setItem('kbdc_version_check_done','1');
@@ -2560,6 +2563,18 @@ function SyncStatusBadge() {
   var s = kbdcGetSyncStatus();
   var rel = function(ms){ var d=Math.max(0,Math.round((Date.now()-ms)/1000)); if(d<60)return 'just now'; if(d<3600)return Math.floor(d/60)+'m ago'; if(d<86400)return Math.floor(d/3600)+'h ago'; return Math.floor(d/86400)+'d ago'; };
   var color, bg, label, title;
+  // An out-of-date Apps Script outranks a green backup: the data may well be
+  // saving while the very bug that was just fixed is still live on the server.
+  if (!s.err && s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND) {
+    return React.createElement('div', {
+      title: 'The Google Apps Script answering this app reports version ' + s.backendVersion +
+             ', but this app expects ' + KBDC_EXPECTED_BACKEND + '. Open the Sheet → Extensions → ' +
+             'Apps Script, paste the latest backend/Code.gs, then Deploy → Manage deployments → ' +
+             'Edit → New version. Editing the script alone does not update a deployment in use.',
+      style:{ display:'flex', alignItems:'center', fontSize:11, fontWeight:700, color:'#E65100',
+              background:'#FFF3E0', padding:'5px 10px', borderRadius:14, marginRight:8, whiteSpace:'nowrap' }
+    }, '⚠ Backend needs redeploy');
+  }
   if (s.err) {
     color='#B71C1C'; bg='#FFEBEE'; label='⚠ Backup issue';
     title='Last backup did not reach Google Sheets: '+s.err+(s.lastOk?('. Last good backup '+rel(s.lastOk)+'.'):'. No successful backup yet.');
@@ -10088,6 +10103,35 @@ function kbdcRoleEmpRowsToByCode(rows) {
 // the Sheet or on anyone else's device, while their colleagues' records
 // arrive fine. Retry a few times with a short backoff before giving up, and
 // treat the backend's own {ok:false} reply as a failure worth retrying.
+// Reading the Sheet needs exactly the same hardening the push has.
+//
+// Apps Script reports its own failures — script-lock timeout, quota, a bad
+// token, any thrown error — as HTTP 200 with {ok:false} in the body. The pull
+// never checked for that, so a REJECTED read still returned an object, `.data`
+// came back undefined, and the caller fell through to `remote = {}`. Every
+// module then union-merged against an empty Sheet: the device kept only the
+// records it already had locally, showed every other employee as Absent, and
+// still painted a green "Backed up just now". Two devices in the same clinic
+// could sit there all day disagreeing about who came to work, each convinced
+// it was fully backed up. Fail loudly instead, and retry a transient rejection
+// the same way the push does.
+async function kbdcBackendPullBatch(url, sheetNames, attempts) {
+  var tries = attempts || 3, lastErr;
+  for (var i = 0; i < tries; i++) {
+    try {
+      var res = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
+      if (!res || res.ok === false) throw new Error((res && res.error) || 'The Google Sheet could not be read');
+      if (!res.data) throw new Error('The Google Sheet returned no data');
+      return res;
+    } catch (e) {
+      lastErr = e;
+      if (i < tries - 1) {
+        await new Promise(function(r){ setTimeout(r, 700 * Math.pow(2, i)); });
+      }
+    }
+  }
+  throw lastErr;
+}
 async function kbdcBackendReqBatchRetry(url, action, payload, attempts) {
   var tries = attempts || 3, lastErr;
   for (var i = 0; i < tries; i++) {
@@ -10213,8 +10257,43 @@ async function kbdcAutoSyncMain() {
   try {
     var pushMods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
     var sheetNames = ['StaffFull', 'ClinicSettings', 'AppData'].concat(pushMods.map(function(m){ return m.sheet; }));
-    var got = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
+    var got = null, pullErr = null;
+    try { got = await kbdcBackendPullBatch(url, sheetNames, 3); }
+    catch (e) { pullErr = e; }
+
+    if (!got) {
+      // The Sheet could not be read. Merging against an empty remote here is
+      // what made one device show every colleague as Absent while insisting it
+      // was backed up, so don't merge at all. Still push what this device
+      // holds — the backend merges rather than replaces, so this can only add
+      // records, and it stops an employee's check-in being stranded on their
+      // own phone while the read is broken. Then report the failure: the badge
+      // turns red and says the Sheet could not be read.
+      try {
+        var localOnly = {};
+        var lsStaff = kbdcLsArray('kbdc_hr_staff');
+        if (lsStaff.length) localOnly['StaffFull'] = lsStaff.map(kbdcFlattenRow);
+        pushMods.forEach(function(m) {
+          var rows = m.get().map(kbdcFlattenRow);
+          if (rows.length) localOnly[m.sheet] = rows;
+        });
+        if (Object.keys(localOnly).length) {
+          await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: localOnly });
+        }
+      } catch (pushErr) { /* reported as the read failure below — that's the cause */ }
+      kbdcSetSyncStatus({ err: 'Could not read the Google Sheet — ' +
+        ((pullErr && pullErr.message) ? pullErr.message : 'unknown error') +
+        '. Updates from other devices are not showing here.' });
+      return;
+    }
     var remote = got.data || {};
+
+    // Every reply carries the deployed script's version. A missing or older
+    // one means the Apps Script was edited but never re-deployed (Deploy →
+    // Manage deployments → Edit → New version) — the app is fixed while the
+    // backend is still running old code. That has repeatedly looked like "the
+    // fix didn't work"; name it instead of leaving it to guesswork.
+    kbdcSetSyncStatus({ backendVersion: got.version || '(pre-versioning)' });
 
     // ---- Staff: merge-by-recency so a stale device can never clobber a
     // fresher edit made elsewhere (see kbdcMergeStaffByRecency above) ----
@@ -10414,7 +10493,10 @@ async function kbdcAutoSyncInventory() {
     // anywhere else, on any device, no matter how long anyone waited. Pull
     // it in here and fold it into the normal transaction list below.
     sheetNames.push('StaffStockOut');
-    var got = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
+    // Same {ok:false} trap as the main sync: a rejected read used to look like
+    // an empty Inventory sheet, so stock a colleague had just booked in simply
+    // never appeared and the device reported itself healthy.
+    var got = await kbdcBackendPullBatch(url, sheetNames, 3);
     var remote = got.data || {};
     // Union merge by id — a stock in/out just recorded locally (not pushed
     // yet) must never be wiped out by an older remote snapshot that hasn't

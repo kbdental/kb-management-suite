@@ -145,7 +145,25 @@ function doGet(e) {
   return respond({ ok: true, message: 'K.B. Dental backend is running. Send a POST request from the app.' });
 }
 
+/**
+ * Version of THIS script, stamped onto every reply.
+ *
+ * Editing this file does nothing until a NEW deployment version is published
+ * (Deploy → Manage deployments → Edit → New version). That gap has been the
+ * most expensive source of confusion in this project: the app gets fixed, the
+ * deployed script silently stays on old code, and the same bug "comes back"
+ * the next day with no way to tell from the app which code actually answered.
+ * The app compares this string against the version it expects and says so
+ * plainly when the deployed script is out of date.
+ *
+ * Bump this whenever this file changes.
+ */
+var KBDC_BACKEND_VERSION = '2026-08-19-1';
+
 function respond(obj) {
+  if (obj && typeof obj === 'object' && obj.version === undefined) {
+    obj.version = KBDC_BACKEND_VERSION;
+  }
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
