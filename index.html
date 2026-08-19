@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-7';
+var KBDC_APP_VERSION = '2026-08-19-8';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -2624,9 +2624,24 @@ async function kbdcProbeBackend(url, label) {
         out.result = 'OK — version ' + j.version;
       }
     } else if (/<html|<!doctype/i.test(txt)) {
-      out.result = 'Got a web page instead of data (HTTP ' + r.status + '). The deployment\'s ' +
-                   '"Who has access" is almost certainly not set to "Anyone" — Google is returning ' +
-                   'a sign-in page. Re-deploy with Who has access: Anyone.';
+      // Google answers with an HTML page for several very different reasons,
+      // and they must not be conflated. Saying "check Who has access" when the
+      // real cause is throttling sends someone re-deploying a script that was
+      // never misconfigured — the giveaway is that a permissions problem fails
+      // on every device every time, while throttling comes and goes and hits
+      // different devices at different moments.
+      if (/accounts\.google\.com|sign ?in|authoriz/i.test(txt)) {
+        out.result = 'Google returned a sign-in page (HTTP ' + r.status + '). This deployment\'s ' +
+                     '"Who has access" is not set to "Anyone". Re-deploy with Who has access: Anyone.';
+      } else if (/too many times|quota|rate|unavailable|try again/i.test(txt)) {
+        out.result = 'Google is rate-limiting this script (HTTP ' + r.status + '): too many requests ' +
+                     'in a short time across your devices. Not a settings problem — it clears on its own.';
+      } else {
+        out.result = 'Google returned a web page instead of data (HTTP ' + r.status + '). If other ' +
+                     'devices are working right now, this is Google throttling or a temporary error ' +
+                     'and it will clear. If EVERY device fails this way every time, then the ' +
+                     'deployment\'s "Who has access" is not set to "Anyone".';
+      }
     } else {
       out.result = 'Unreadable reply (HTTP ' + r.status + '): ' + String(txt).slice(0, 140);
     }
@@ -10354,7 +10369,7 @@ function kbdcRoleEmpRowsToByCode(rows) {
 // it was fully backed up. Fail loudly instead, and retry a transient rejection
 // the same way the push does.
 async function kbdcBackendPullBatch(url, sheetNames, attempts) {
-  var tries = attempts || 3, lastErr;
+  var tries = attempts || 2, lastErr;
   for (var i = 0; i < tries; i++) {
     try {
       var res = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
@@ -10504,7 +10519,7 @@ async function kbdcPullSheets(url, names, forceAll) {
 
   var remote = {}, biggest = 0;
   for (var i = 0; i < groups.length; i++) {
-    var got = await kbdcBackendPullBatch(url, groups[i], 3);
+    var got = await kbdcBackendPullBatch(url, groups[i], 2);
     version = got.version || version;
     var data = got.data || {};
     Object.keys(data).forEach(function(k) {
@@ -10524,7 +10539,7 @@ async function kbdcPullSheets(url, names, forceAll) {
            usedStamps: !!stamps, fetched: want };
 }
 async function kbdcBackendReqBatchRetry(url, action, payload, attempts) {
-  var tries = attempts || 3, lastErr;
+  var tries = attempts || 2, lastErr;
   for (var i = 0; i < tries; i++) {
     try {
       var res = await kbdcBackendReqBatch(url, action, payload);
@@ -10687,6 +10702,7 @@ async function kbdcAutoSyncMain() {
       kbdcSetSyncStatus({ err: 'Could not read the Google Sheet — ' +
         ((pullErr && pullErr.message) ? pullErr.message : 'unknown error') +
         '. Updates from other devices are not showing here.' });
+      kbdcNoteSyncOutcome(false);
       return;
     }
     var remote = got.data || {};
@@ -10911,8 +10927,10 @@ async function kbdcAutoSyncMain() {
     kbdcSetSyncStatus({ lastOk: Date.now(), err: '',
       lastPushBytes: pushedBytes, lastPushChunks: chunks.length,
       lastPushSheets: Object.keys(changedPayload).join(', ') || '(nothing changed)' });
+    kbdcNoteSyncOutcome(true);
   } catch (e) {
     kbdcSetSyncStatus({ err: (e && e.message) ? e.message : 'Backup failed' });
+    kbdcNoteSyncOutcome(false);
   }
 }
 async function kbdcAutoSyncInventory() {
@@ -10933,7 +10951,7 @@ async function kbdcAutoSyncInventory() {
     // Same {ok:false} trap as the main sync: a rejected read used to look like
     // an empty Inventory sheet, so stock a colleague had just booked in simply
     // never appeared and the device reported itself healthy.
-    var got = await kbdcBackendPullBatch(url, sheetNames, 3);
+    var got = await kbdcBackendPullBatch(url, sheetNames, 2);
     var remote = got.data || {};
     // Inventory is a SECOND, separate Apps Script deployment. Redeploying one
     // and forgetting the other is easy and looks exactly like a broken fix.
@@ -11003,11 +11021,42 @@ async function kbdcAutoSyncInventory() {
     if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
   } catch (e) {
     kbdcSetSyncStatus({ err: 'Inventory: ' + ((e && e.message) ? e.message : 'sync failed') });
+    kbdcNoteSyncOutcome(false);
   }
 }
 async function kbdcAutoSyncCycle() {
   await kbdcAutoSyncMain();
   await kbdcAutoSyncInventory();
+}
+
+// --- How often to talk to Google ------------------------------------------
+//
+// Every device polled both backends every 30 seconds. Across a clinic that is
+// roughly 2,900 Apps Script calls an hour, and when a call failed it was
+// retried three times immediately — so a moment of throttling produced *more*
+// load, which deepened the throttling. That feedback loop is why different
+// devices saw different backends fail at different moments while the same
+// deployment answered other devices perfectly.
+//
+// Steady state is now once a minute, backing off toward every ten minutes
+// while errors persist and snapping straight back on the first success. Work
+// a person actually does — a check-in, a task ticked — still syncs
+// immediately; this only governs the idle polling.
+var KBDC_SYNC_BASE_MS = 60000;
+var KBDC_SYNC_MAX_MS  = 600000;
+function kbdcNoteSyncOutcome(okNow) {
+  var s = kbdcGetSyncStatus();
+  var streak = okNow ? 0 : Math.min((s.failStreak || 0) + 1, 6);
+  if (streak !== (s.failStreak || 0)) kbdcSetSyncStatus({ failStreak: streak });
+  return streak;
+}
+function kbdcNextSyncDelay() {
+  var streak = kbdcGetSyncStatus().failStreak || 0;
+  var base = streak ? Math.min(KBDC_SYNC_BASE_MS * Math.pow(2, streak), KBDC_SYNC_MAX_MS)
+                    : KBDC_SYNC_BASE_MS;
+  // Jitter, so eight devices that all opened the app at 9am don't keep calling
+  // in lockstep for the rest of the day.
+  return Math.round(base * (0.75 + Math.random() * 0.5));
 }
 
 function AppDataTransferPanel() {
@@ -23723,26 +23772,38 @@ function App() {
      so the two don't both poll the same backend at once. */
   React.useEffect(function(){
     if (session) return;
-    kbdcAutoSyncMain();
-    var id = setInterval(kbdcAutoSyncMain, 30000);
-    return function(){ clearInterval(id); };
+    var stopped = false, timer = null;
+    function tick() {
+      kbdcAutoSyncMain().finally(function(){
+        if (!stopped) timer = setTimeout(tick, kbdcNextSyncDelay());
+      });
+    }
+    tick();
+    return function(){ stopped = true; clearTimeout(timer); };
   }, [session]);
 
   React.useEffect(function(){
     if (!session) return;
-    var running = false;
+    // Self-scheduling rather than a fixed interval: the gap widens while
+    // Google is refusing calls and snaps back to normal on the first success,
+    // so a bad patch is not made worse by every device retrying into it.
+    var running = false, stopped = false, timer = null;
     function cycle() {
-      if (running) return;
+      if (running || stopped) return;
       running = true;
-      kbdcAutoSyncCycle().finally(function(){ running = false; });
+      clearTimeout(timer);
+      kbdcAutoSyncCycle().finally(function(){
+        running = false;
+        if (!stopped) timer = setTimeout(cycle, kbdcNextSyncDelay());
+      });
     }
     cycle();
-    var id = setInterval(cycle, 30000);
     function onVis() { if (document.visibilityState === 'visible') cycle(); }
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('focus', cycle);
     return function() {
-      clearInterval(id);
+      stopped = true;
+      clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('focus', cycle);
     };
