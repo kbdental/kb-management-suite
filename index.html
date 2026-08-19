@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-2';
+var KBDC_APP_VERSION = '2026-08-19-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-1';
@@ -2548,11 +2548,156 @@ function saveActiveBranch(b) {
 
 
 
+// Sends one 'ping' to a backend and reports, in plain words, what came back.
+//
+// The point is to tell the common Apps Script misconfigurations apart, since
+// they all surface in the app as the same red badge: a deployment that isn't
+// set to "Anyone" access returns an HTML sign-in page rather than JSON; a
+// deployment that was never re-published returns JSON with no version field;
+// a token mismatch returns {ok:false,'Unauthorized'}; a deleted deployment
+// fails to resolve at all. Guessing between those has cost days.
+async function kbdcProbeBackend(url, label) {
+  var out = { label: label, url: url || '(not set)' };
+  if (!url) { out.result = 'No URL saved for this backend.'; return out; }
+  var t0 = Date.now();
+  try {
+    var body = { action: 'ping' };
+    var tok = kbdcBackendToken(); if (tok) body.token = tok;
+    var r = await fetch(url, { method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) });
+    out.httpStatus = r.status;
+    var txt = await r.text();
+    out.ms = Date.now() - t0;
+    out.raw = String(txt).slice(0, 300);
+    var j = null;
+    try { j = JSON.parse(txt); } catch (e) {}
+    if (j) {
+      out.version = j.version || '';
+      if (j.ok === false) {
+        out.result = 'Rejected by the script: ' + (j.error || 'no reason given');
+      } else if (!j.version) {
+        out.result = 'Reachable, but this script has NO version — it is old code. ' +
+                     'Paste the new script, then Deploy → Manage deployments → Edit → New version.';
+      } else if (j.version !== KBDC_EXPECTED_BACKEND) {
+        out.result = 'Reachable, but running version ' + j.version + ' — this app expects ' +
+                     KBDC_EXPECTED_BACKEND + '. Re-publish a new deployment version.';
+      } else {
+        out.result = 'OK — version ' + j.version;
+      }
+    } else if (/<html|<!doctype/i.test(txt)) {
+      out.result = 'Got a web page instead of data (HTTP ' + r.status + '). The deployment\'s ' +
+                   '"Who has access" is almost certainly not set to "Anyone" — Google is returning ' +
+                   'a sign-in page. Re-deploy with Who has access: Anyone.';
+    } else {
+      out.result = 'Unreadable reply (HTTP ' + r.status + '): ' + String(txt).slice(0, 140);
+    }
+  } catch (e) {
+    out.ms = Date.now() - t0;
+    out.result = 'Could not reach it at all: ' + ((e && e.message) ? e.message : String(e)) +
+                 '. Usually a wrong/expired Web App URL.';
+  }
+  return out;
+}
+
+// Everything needed to diagnose a sync problem, on one screen, without asking
+// a clinic owner to open developer tools.
+function SyncDiagnostics({ onClose }) {
+  const [probes, setProbes] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const s = kbdcGetSyncStatus();
+  const run = async function() {
+    setBusy(true);
+    var res = [];
+    res.push(await kbdcProbeBackend(kbdcBackendUrl(), 'Main backend'));
+    res.push(await kbdcProbeBackend(kbdcInvBackendUrl(), 'Inventory backend'));
+    setProbes(res);
+    setBusy(false);
+  };
+  const details = function() {
+    var lines = [
+      'App version: ' + KBDC_APP_VERSION,
+      'Expects backend: ' + KBDC_EXPECTED_BACKEND,
+      'Main backend reported: ' + (s.backendVersion || '(not seen yet)'),
+      'Inventory backend reported: ' + (s.invBackendVersion || '(not seen yet)'),
+      'Last good backup: ' + (s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never'),
+      'Current error: ' + (s.err || '(none)'),
+    ];
+    (probes || []).forEach(function(p) {
+      lines.push('--- ' + p.label + ' ---');
+      lines.push('URL: ' + p.url);
+      lines.push('Result: ' + p.result);
+      if (p.httpStatus) lines.push('HTTP ' + p.httpStatus + ' in ' + p.ms + 'ms');
+      if (p.raw) lines.push('Raw: ' + p.raw);
+    });
+    return lines.join('\n');
+  };
+  const row = function(k, v, bad) {
+    return React.createElement('div', { key: k, style: { display:'flex', gap:10, padding:'6px 0',
+      borderBottom:'1px solid #F0F0F0', fontSize:12, alignItems:'flex-start' } },
+      React.createElement('div', { style:{ width:170, flexShrink:0, color:'#607D8B', fontWeight:600 } }, k),
+      React.createElement('div', { style:{ flex:1, color: bad ? '#B71C1C' : '#263238', wordBreak:'break-word',
+        userSelect:'text', fontWeight: bad ? 600 : 400 } }, v));
+  };
+  return React.createElement('div', {
+    onClick: onClose,
+    style:{ position:'fixed', inset:0, background:'rgba(0,0,0,.45)', zIndex:9999,
+            display:'flex', alignItems:'center', justifyContent:'center', padding:20 }
+  }, React.createElement('div', {
+    onClick: function(e){ e.stopPropagation(); },
+    style:{ background:'#fff', borderRadius:12, maxWidth:720, width:'100%', maxHeight:'85vh',
+            overflow:'auto', padding:20, boxShadow:'0 12px 40px rgba(0,0,0,.3)' }
+  },
+    React.createElement('div', { style:{ display:'flex', alignItems:'center', marginBottom:14 } },
+      React.createElement('div', { style:{ flex:1, fontSize:15, fontWeight:700, color:'#1A237E' } },
+        'Google Sheet connection'),
+      React.createElement('button', { onClick:onClose, style:{ border:'none', background:'none',
+        fontSize:20, cursor:'pointer', color:'#90A4AE', lineHeight:1 } }, '×')),
+    s.err && React.createElement('div', { style:{ background:'#FFEBEE', color:'#B71C1C', padding:'10px 12px',
+      borderRadius:8, fontSize:12.5, marginBottom:14, userSelect:'text', fontWeight:600 } }, s.err),
+    row('App version', KBDC_APP_VERSION),
+    row('Expects script version', KBDC_EXPECTED_BACKEND),
+    row('Main script reported', s.backendVersion || 'not seen yet',
+        !!s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND),
+    row('Inventory script reported', s.invBackendVersion || 'not seen yet',
+        !!s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND),
+    row('Last good backup', s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never', !s.lastOk),
+    React.createElement('div', { style:{ display:'flex', gap:8, marginTop:16, flexWrap:'wrap' } },
+      React.createElement('button', { onClick:run, disabled:busy,
+        style:{ padding:'8px 14px', background:'#1357A6', color:'#fff', border:'none', borderRadius:8,
+                fontFamily:"'Poppins',sans-serif", fontSize:12, fontWeight:600,
+                cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 } },
+        busy ? 'Testing…' : 'Test both connections now'),
+      React.createElement('button', {
+        onClick: function(){
+          var t = details();
+          if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(t);
+          else window.prompt('Copy this:', t);
+        },
+        style:{ padding:'8px 14px', background:'#fff', color:'#37474F', border:'1px solid #CFD8DC',
+                borderRadius:8, fontFamily:"'Poppins',sans-serif", fontSize:12, cursor:'pointer' } },
+        'Copy details')),
+    probes && React.createElement('div', { style:{ marginTop:16 } },
+      probes.map(function(p){
+        var good = /^OK /.test(p.result);
+        return React.createElement('div', { key:p.label, style:{ marginBottom:12, padding:12,
+          borderRadius:8, background: good ? '#E8F5E9' : '#FFF3E0',
+          border:'1px solid ' + (good ? '#C8E6C9' : '#FFE0B2') } },
+          React.createElement('div', { style:{ fontWeight:700, fontSize:12.5, color:'#1A237E',
+            marginBottom:4 } }, p.label),
+          React.createElement('div', { style:{ fontSize:12, color: good ? '#2E7D32' : '#E65100',
+            userSelect:'text' } }, p.result),
+          React.createElement('div', { style:{ fontSize:10.5, color:'#78909C', marginTop:6,
+            wordBreak:'break-all', userSelect:'text' } }, p.url));
+      }))
+  ));
+}
 // Live "Backed up to Google Sheet" indicator. Reads the outcome recorded by
 // the background sync and shows green (recently saved), amber (a problem —
 // e.g. wrong/absent security key, or a stale device that can't reach the
-// backend), so a broken backup is impossible to miss.
+// backend), so a broken backup is impossible to miss. Click it for the full
+// diagnosis — the tooltip alone meant the actual error was easy to miss.
 function SyncStatusBadge() {
+  const [showDiag, setShowDiag] = useState(false);
   const [, tick] = useState(0);
   useEffect(function(){
     function onStatus(){ tick(function(n){ return n+1; }); }
@@ -2569,14 +2714,16 @@ function SyncStatusBadge() {
   if (s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Main (' + s.backendVersion + ')');
   if (s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Inventory (' + s.invBackendVersion + ')');
   if (!s.err && staleBackends.length) {
-    return React.createElement('div', {
-      title: 'Out of date: ' + staleBackends.join(' and ') + '. This app expects ' +
-             KBDC_EXPECTED_BACKEND + '. Open that Sheet → Extensions → Apps Script, paste the ' +
-             'latest script, then Deploy → Manage deployments → Edit → New version. ' +
-             'Editing the script alone does not update a deployment already in use.',
-      style:{ display:'flex', alignItems:'center', fontSize:11, fontWeight:700, color:'#E65100',
-              background:'#FFF3E0', padding:'5px 10px', borderRadius:14, marginRight:8, whiteSpace:'nowrap' }
-    }, '⚠ Backend needs redeploy');
+    return React.createElement(React.Fragment, null,
+      React.createElement('div', {
+        onClick: function(){ setShowDiag(true); },
+        title: 'Out of date: ' + staleBackends.join(' and ') + '. This app expects ' +
+               KBDC_EXPECTED_BACKEND + '. Click for details.',
+        style:{ display:'flex', alignItems:'center', fontSize:11, fontWeight:700, color:'#E65100',
+                background:'#FFF3E0', padding:'5px 10px', borderRadius:14, marginRight:8,
+                whiteSpace:'nowrap', cursor:'pointer' }
+      }, '⚠ Backend needs redeploy'),
+      showDiag && React.createElement(SyncDiagnostics, { onClose: function(){ setShowDiag(false); } }));
   }
   if (s.err) {
     color='#B71C1C'; bg='#FFEBEE'; label='⚠ Backup issue';
@@ -2588,7 +2735,14 @@ function SyncStatusBadge() {
     color='#546E7A'; bg='#ECEFF1'; label='… Backing up';
     title='Backing up to Google Sheets…';
   }
-  return React.createElement('div', { title:title, style:{ display:'flex', alignItems:'center', fontSize:11, fontWeight:700, color:color, background:bg, padding:'5px 10px', borderRadius:14, marginRight:8, whiteSpace:'nowrap' } }, label);
+  return React.createElement(React.Fragment, null,
+    React.createElement('div', {
+      title: title + '  (click for details)',
+      onClick: function(){ setShowDiag(true); },
+      style:{ display:'flex', alignItems:'center', fontSize:11, fontWeight:700, color:color, background:bg,
+              padding:'5px 10px', borderRadius:14, marginRight:8, whiteSpace:'nowrap', cursor:'pointer' }
+    }, label),
+    showDiag && React.createElement(SyncDiagnostics, { onClose: function(){ setShowDiag(false); } }));
 }
 function Topbar({ active, onToggleSidebar }) {
   const isHome = active === 'home';
