@@ -870,10 +870,10 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-5';
+var KBDC_APP_VERSION = '2026-08-19-6';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
-var KBDC_EXPECTED_BACKEND = '2026-08-19-1';
+var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
 // Keeps every device on the current build.
 //
 // This used to run ONCE per browser session and stop, gated on a
@@ -2709,6 +2709,10 @@ function SyncDiagnostics({ onClose }) {
         : 'not measured yet',
         (s.lastPushBytes || 0) > 900000),
     row('Last uploaded', s.lastPushSheets || '—'),
+    row('Largest download', s.lastPullBytes != null
+        ? (Math.round(s.lastPullBytes / 1024) + ' KB')
+        : 'not measured yet',
+        (s.lastPullBytes || 0) > 500000),
     React.createElement('div', { style:{ display:'flex', gap:8, marginTop:16, flexWrap:'wrap' } },
       React.createElement('button', { onClick:run, disabled:busy,
         style:{ padding:'8px 14px', background:'#1357A6', color:'#fff', border:'none', borderRadius:8,
@@ -10354,6 +10358,22 @@ function kbdcHashString(str) {
   for (var i = 0; i < str.length; i++) h = ((h << 5) + h + str.charCodeAt(i)) | 0;
   return String(h);
 }
+/**
+ * Signature of a tab's rows, independent of the order they happen to be in.
+ *
+ * Several of these row sets are built by scanning localStorage keys, and that
+ * scan order shifts whenever any unrelated key is added — so the identical
+ * data would serialise differently from one cycle to the next and read as
+ * "changed", re-uploading a 280 KB tab every 30 seconds for no reason. Row
+ * order carries no meaning here, so it must not count as a difference.
+ */
+function kbdcRowsSig(rows) {
+  try {
+    var parts = (rows || []).map(function(r){ return JSON.stringify(r); });
+    parts.sort();
+    return kbdcHashString(parts.join(''));
+  } catch(e) { return kbdcHashString(String((rows || []).length)); }
+}
 function kbdcPushSigs() { try { return JSON.parse(localStorage.getItem('kbdc_push_sigs') || '{}'); } catch(e) { return {}; } }
 function kbdcSetPushSigs(s) { try { localStorage.setItem('kbdc_push_sigs', JSON.stringify(s)); } catch(e) {} }
 
@@ -10392,6 +10412,87 @@ function kbdcSplitPushChunks(payload, budget) {
   });
   flush();
   return chunks;
+}
+// Tabs worth re-reading on every 30s cycle. Everything else changes rarely
+// (payroll, assets, onboarding, trainings…) and is re-read occasionally
+// instead — skipping a tab is safe because each one is union-merged by id, so
+// a tab that simply isn't in the reply leaves local data untouched.
+var KBDC_HOT_SHEETS = {
+  StaffFull:1, Tasks:1, TaskCompletions:1, Attendance:1,
+  ClinicSettings:1, RoleEmployees:1, AppData:1, LeaveRequests:1, Holidays:1
+};
+
+/**
+ * Reads the Sheet in small groups instead of one enormous response.
+ *
+ * The push was fixed to stop sending the whole database at once; the pull was
+ * left doing exactly that in the other direction — on a clinic-sized Sheet the
+ * single getBatch reply is over a megabyte, fetched by every device every 30
+ * seconds. On a phone that is both a "Failed to fetch" waiting to happen and
+ * roughly 124 MB of mobile data per hour, per staff member.
+ */
+async function kbdcPullSheets(url, names, forceAll) {
+  var version = '', stamps = null;
+  // Ask what actually moved. One tiny reply; needs backend 2026-08-19-2 or
+  // later, and silently falls back to reading everything on an older one.
+  // Asked for even on a forced full read, so the revisions get recorded and
+  // the NEXT cycle can skip everything — otherwise a full pass is always
+  // followed by a second one that re-downloads the lot.
+  try {
+    var st = await kbdcBackendReqBatch(url, 'getStamps', {});
+    if (st && st.ok !== false && st.stamps) { stamps = st.stamps; version = st.version || ''; }
+  } catch (e) { /* older backend, or a blip — read normally below */ }
+  var prevRevs = {}, sizes = {};
+  try { prevRevs = JSON.parse(localStorage.getItem('kbdc_pull_revs') || '{}'); } catch(e) {}
+  try { sizes = JSON.parse(localStorage.getItem('kbdc_pull_sizes') || '{}'); } catch(e) {}
+
+  var want = names;
+  if (stamps && !forceAll) {
+    want = names.filter(function(n) {
+      // Never read here before, or the Sheet says this tab has changed since.
+      var now = (stamps[n] === undefined) ? 0 : stamps[n];
+      return prevRevs[n] === undefined || String(prevRevs[n]) !== String(now);
+    });
+  }
+
+  // Group the requests by measured size, not by count: one 400 KB tab in a
+  // group of four is exactly what made a reply too big to arrive. Anything
+  // known to be large is fetched on its own.
+  var groups = [], cur = [], curBytes = 0;
+  want.forEach(function(n) {
+    var est = sizes[n];
+    // Never measured (this device's first read of that tab) counts as large:
+    // better one extra request than a blind group that turns out to be a
+    // megabyte, which is exactly how the first sync used to fail.
+    if (est === undefined || est > 150000) {
+      if (cur.length) { groups.push(cur); cur = []; curBytes = 0; }
+      groups.push([n]); return;
+    }
+    if (cur.length >= 4 || (curBytes + est) > 150000) { groups.push(cur); cur = []; curBytes = 0; }
+    cur.push(n); curBytes += est;
+  });
+  if (cur.length) groups.push(cur);
+
+  var remote = {}, biggest = 0;
+  for (var i = 0; i < groups.length; i++) {
+    var got = await kbdcBackendPullBatch(url, groups[i], 3);
+    version = got.version || version;
+    var data = got.data || {};
+    Object.keys(data).forEach(function(k) {
+      remote[k] = data[k];
+      try { sizes[k] = JSON.stringify(data[k]).length; } catch(e) {}
+    });
+    try { var n2 = JSON.stringify(data).length; if (n2 > biggest) biggest = n2; } catch(e) {}
+  }
+  try { localStorage.setItem('kbdc_pull_sizes', JSON.stringify(sizes)); } catch(e) {}
+  // Only record revisions for tabs actually read, so a failure part-way
+  // through means the rest is re-read next cycle rather than assumed current.
+  if (stamps) {
+    want.forEach(function(n) { prevRevs[n] = (stamps[n] === undefined) ? 0 : stamps[n]; });
+    try { localStorage.setItem('kbdc_pull_revs', JSON.stringify(prevRevs)); } catch(e) {}
+  }
+  return { data: remote, version: version, biggestReply: biggest,
+           usedStamps: !!stamps, fetched: want };
 }
 async function kbdcBackendReqBatchRetry(url, action, payload, attempts) {
   var tries = attempts || 3, lastErr;
@@ -10518,8 +10619,20 @@ async function kbdcAutoSyncMain() {
   try {
     var pushMods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
     var sheetNames = ['StaffFull', 'ClinicSettings', 'AppData'].concat(pushMods.map(function(m){ return m.sheet; }));
+    // Read the busy tabs every cycle and the rarely-changing ones every tenth,
+    // in small groups. Omitting a tab is safe — the merges below union by id,
+    // so a tab absent from the reply leaves this device's copy alone.
+    var cycleN = 0;
+    try {
+      cycleN = (parseInt(localStorage.getItem('kbdc_pull_cycle') || '0', 10) || 0) + 1;
+      localStorage.setItem('kbdc_pull_cycle', String(cycleN));
+    } catch(e) { cycleN = 1; }
+    var readEverything = (cycleN % 10 === 1);
+    var sheetsToRead = readEverything ? sheetNames
+      : sheetNames.filter(function(s){ return KBDC_HOT_SHEETS[s]; });
+
     var got = null, pullErr = null;
-    try { got = await kbdcBackendPullBatch(url, sheetNames, 3); }
+    try { got = await kbdcPullSheets(url, sheetsToRead, readEverything); }
     catch (e) { pullErr = e; }
 
     if (!got) {
@@ -10554,7 +10667,8 @@ async function kbdcAutoSyncMain() {
     // Manage deployments → Edit → New version) — the app is fixed while the
     // backend is still running old code. That has repeatedly looked like "the
     // fix didn't work"; name it instead of leaving it to guesswork.
-    kbdcSetSyncStatus({ backendVersion: got.version || '(pre-versioning)' });
+    kbdcSetSyncStatus({ backendVersion: got.version || '(pre-versioning)',
+                        lastPullBytes: got.biggestReply || 0 });
 
     // ---- Staff: merge-by-recency so a stale device can never clobber a
     // fresher edit made elsewhere (see kbdcMergeStaffByRecency above) ----
@@ -10740,7 +10854,7 @@ async function kbdcAutoSyncMain() {
     var forceFull = !lastFull || (Date.now() - lastFull) > 21600000;
     var changedPayload = {};
     Object.keys(pushPayload).forEach(function(sheet) {
-      var sig = kbdcHashString(JSON.stringify(pushPayload[sheet]));
+      var sig = kbdcRowsSig(pushPayload[sheet]);
       newSigs[sheet] = sig;
       if (forceFull || prevSigs[sheet] !== sig) changedPayload[sheet] = pushPayload[sheet];
     });

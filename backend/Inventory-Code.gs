@@ -126,7 +126,7 @@ function doGet(e) {
  *
  * Bump this whenever this file changes.
  */
-var KBDC_INV_BACKEND_VERSION = '2026-08-19-1';
+var KBDC_INV_BACKEND_VERSION = '2026-08-19-2';
 
 function respond(obj) {
   if (obj && typeof obj === 'object' && obj.version === undefined) {

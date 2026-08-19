@@ -98,6 +98,12 @@ function doPost(e) {
       }
       return respond({ ok: true, saved: savedCounts });
     }
+    if (action === 'getStamps') {
+      // Deliberately tiny: one read of the SyncMeta tab, no row data at all.
+      // A device calls this every cycle and only downloads the tabs whose
+      // revision has moved since it last read them.
+      return respond({ ok: true, stamps: kbdcReadRevs_() });
+    }
     if (action === 'getBatch') {
       var sheetNames = body.sheets || [];
       var data = {};
@@ -158,7 +164,7 @@ function doGet(e) {
  *
  * Bump this whenever this file changes.
  */
-var KBDC_BACKEND_VERSION = '2026-08-19-1';
+var KBDC_BACKEND_VERSION = '2026-08-19-2';
 
 function respond(obj) {
   if (obj && typeof obj === 'object' && obj.version === undefined) {
@@ -390,6 +396,7 @@ function saveAllRowsLocked_(sheetName, rows) {
   }
   if (kbdcRowsSame_(plan.mergedRows, plan.existingRows)) return; // re-check under the lock
 
+  kbdcBumpRev_(sheetName); // a real write — let devices know this tab moved
   sheet.clearContents();
   var range = sheet.getRange(1, 1, plan.data.length, plan.headers.length);
   // Force plain-text formatting before writing, so a numeric-looking value
@@ -406,6 +413,49 @@ function saveAllRowsLocked_(sheetName, rows) {
 }
 
 /** Reads a tab back as an array of objects, keyed by its header row. */
+/**
+ * Bumps a per-tab revision number in a small 'SyncMeta' tab, called only when
+ * a write actually changed something.
+ *
+ * Devices used to re-download every tab in full every 30 seconds — on a
+ * clinic-sized Sheet that is over a megabyte per device per cycle, which on a
+ * phone means both roughly 124 MB of mobile data an hour and an outright
+ * "Failed to fetch" when the reply is too big to complete. With these numbers
+ * a device can ask what moved (one tiny read of this tab) and download only
+ * those tabs. Rows are [sheetName, revision].
+ */
+function kbdcBumpRev_(sheetName) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var meta = ss.getSheetByName('SyncMeta');
+    if (!meta) { meta = ss.insertSheet('SyncMeta'); meta.appendRow(['sheet', 'rev']); }
+    var vals = meta.getDataRange().getValues();
+    for (var i = 0; i < vals.length; i++) {
+      if (String(vals[i][0]) === String(sheetName)) {
+        meta.getRange(i + 1, 2).setValue((Number(vals[i][1]) || 0) + 1);
+        return;
+      }
+    }
+    meta.appendRow([sheetName, 1]);
+  } catch (e) {
+    // Never let bookkeeping break a real save. A missed bump only means a
+    // device re-reads that tab on its next full pass.
+  }
+}
+
+/** Current revision of every tab, as one small reply. */
+function kbdcReadRevs_() {
+  var out = {};
+  try {
+    var meta = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('SyncMeta');
+    if (!meta) return out;
+    meta.getDataRange().getValues().forEach(function(r) {
+      if (r[0] && String(r[0]) !== 'sheet') out[String(r[0])] = Number(r[1]) || 0;
+    });
+  } catch (e) {}
+  return out;
+}
+
 function readAllRows(sheetName) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(sheetName);
