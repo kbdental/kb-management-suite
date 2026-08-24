@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-19-10';
+var KBDC_APP_VERSION = '2026-08-24-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -21592,6 +21592,10 @@ function laGetLeaves() { try { return JSON.parse(localStorage.getItem(LA_LEAVE_K
 function laSaveLeaves(a) { try { localStorage.setItem(LA_LEAVE_KEY,JSON.stringify(a)); } catch(e){} }
 function laGetAtt() { try { return JSON.parse(localStorage.getItem(LA_ATT_KEY)||'[]'); } catch(e){ return []; } }
 function laSaveAtt(a) { try { localStorage.setItem(LA_ATT_KEY,JSON.stringify(a)); } catch(e){} }
+/* Re-reads what was just persisted. Needed because check-in now writes the
+   record immediately and then attaches the location a few seconds later — by
+   which point the React state captured at the start of the handler is stale. */
+function laLoadAtt() { try { return JSON.parse(localStorage.getItem(LA_ATT_KEY)||'[]'); } catch(e){ return []; } }
 function laLeaveTagCls(type) {
   if(type==='Sick / Medical Leave'||type==='Medical Leave') return 'lt-green';
   return 'lt-blue';
@@ -21970,8 +21974,38 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     }
 
     setLocLoading(true);setLocStatus('fetching');
+
+    /* Record the check-in NOW, before the location lookup.
+       This used to live entirely inside laFetchLocation().then(), so nothing
+       was written until GPS returned — up to 20 seconds later. A staff member
+       who tapped Check In and then pocketed the phone, locked it, or switched
+       apps never had their attendance saved at all: not to the Sheet, and not
+       even on their own device. They saw the button respond and reasonably
+       assumed they were marked present.
+       Attendance is the record that matters; the location is an extra. Save
+       first, attach the location if and when it arrives. */
+    var _preId = 'att' + Date.now();
+    (function(){
+      var pre, existing = attendance.find(function(a){
+        return a.date===LA_TODAY && kbdcAttMatches(a,sid,selectedEmp); });
+      if (existing) {
+        pre = attendance.map(function(a){
+          return (a.date===LA_TODAY&&kbdcAttMatches(a,sid,selectedEmp))
+            ? Object.assign({},a,{checkIn:t,updatedAt:new Date().toISOString()}) : a; });
+      } else {
+        pre = [...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,
+          checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:null,locOut:null,
+          lateTag:null,lateMin:0,leaveOverride:(todayLeave?true:undefined),updatedAt:new Date().toISOString()}];
+      }
+      setAttendance(pre); laSaveAtt(pre);
+      try{ kbdcAutoSyncMain(); }catch(e){}
+    })();
+
     laFetchLocation().then(function(loc){
       setLocLoading(false);setLocStatus(loc.denied?'denied':'ok');
+      /* Re-read: the pre-save above changed it, and `attendance` here is the
+         value captured when this handler started. */
+      var attendance = laLoadAtt();
 
       /* ── L1/L2 late tagging ── */
       var empShift=laGetStaffShift(selectedEmp, shifts);
@@ -21999,7 +22033,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
             :a;
         });
       } else {
-        updated=[...attendance,{id:'att'+Date.now(),staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()}];
+        updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()}];
       }
       setAttendance(updated);laSaveAtt(updated);
       try{ kbdcAutoSyncMain(); }catch(e){}
@@ -22013,8 +22047,22 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     if(!todayRec||!todayRec.checkIn) return;
     var t=laPad(now.getHours())+':'+laPad(now.getMinutes());
     setLocLoading(true);setLocStatus('fetching');
+
+    /* Same as clockIn: write the check-out immediately, then attach the
+       location. Waiting on GPS first meant walking away lost the record. */
+    (function(){
+      var ih0=parseInt(todayRec.checkIn.split(':')[0]),im0=parseInt(todayRec.checkIn.split(':')[1]);
+      var oh0=parseInt(t.split(':')[0]),om0=parseInt(t.split(':')[1]);
+      var hrs0=Math.round(((oh0*60+om0)-(ih0*60+im0))/60*10)/10;
+      var pre=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
+        ?{...a,checkOut:t,hours:hrs0,updatedAt:new Date().toISOString()}:a;});
+      setAttendance(pre); laSaveAtt(pre);
+      try{ kbdcAutoSyncMain(); }catch(e){}
+    })();
+
     laFetchLocation().then(function(loc){
       setLocLoading(false);setLocStatus(loc.denied?'denied':'ok');
+      var attendance = laLoadAtt();
       var ih=parseInt(todayRec.checkIn.split(':')[0]),im=parseInt(todayRec.checkIn.split(':')[1]);
       var oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]);
       var hours=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;
