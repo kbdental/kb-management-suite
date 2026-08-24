@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-24-1';
+var KBDC_APP_VERSION = '2026-08-24-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -21621,14 +21621,32 @@ function useLA_Clock() {
 // sides actually have one. This cannot merge two different people: names
 // that collide case-insensitively would have collided before too, and a
 // matching id still wins first.
+/* Formatting-only normalisation: case, punctuation, doubled spaces. It must
+   stay EXACT beyond that — this clinic has both a "Suman" and a "Suman
+   Rathor", so anything looser (prefix or first-name matching) would credit one
+   person's attendance to the other. */
+function kbdcNormName(n) {
+  return String(n == null ? '' : n).toLowerCase()
+    .replace(/[^a-z0-9\u0900-\u097F]+/g, ' ').trim().replace(/\s+/g, ' ');
+}
 function kbdcAttMatches(rec, id, name) {
   if (!rec) return false;
   var rid = String(rec.staffId == null ? '' : rec.staffId).trim();
   var wid = String(id == null ? '' : id).trim();
   if (rid && wid && rid === wid) return true;
-  var rn = String(rec.staffName || '').trim().toLowerCase();
-  var wn = String(name || '').trim().toLowerCase();
+  var rn = kbdcNormName(rec.staffName);
+  var wn = kbdcNormName(name);
   return !!rn && rn === wn;
+}
+/* Today's check-ins that belong to nobody on the staff list.
+   A row like this is always a bug — someone tapped Check In and the dashboard
+   silently ignores it, showing them Absent. Surfacing it turns "some people
+   show absent" from a mystery into a name we can act on. */
+function kbdcUnmatchedAtt(todayAtt, staffList) {
+  return (todayAtt || []).filter(function(a){
+    if (!a || !a.checkIn) return false;
+    return !(staffList || []).some(function(s){ return kbdcAttMatches(a, s.id, s.name); });
+  });
 }
 // Two devices can each create their own attendance row for the same person
 // on the same day, whenever they have not yet synced with each other: the
@@ -21740,6 +21758,24 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
           React.createElement('span',{className:'la-panel-link',onClick:()=>setTab('attendance')},'View All →')
         ),
         bStaff.length===0 && React.createElement('div',{className:'la-empty',style:{padding:16,fontSize:11}},'Add staff in My Team to track attendance.'),
+        (function(){
+          /* A check-in that matches nobody on the staff list used to be
+             discarded in silence, and that person simply read as Absent with
+             no way to tell their record was sitting right there. Name it. */
+          var orphans = kbdcUnmatchedAtt(todayAtt, bStaff);
+          if (!orphans.length) return null;
+          return React.createElement('div',{
+            style:{margin:'8px 12px',padding:'9px 11px',background:'#FFF3E0',
+                   border:'1px solid #FFCC80',borderLeft:'4px solid #E65100',
+                   borderRadius:8,fontSize:11,color:'#E65100',lineHeight:1.5}
+          },
+            React.createElement('strong',null,
+              orphans.length+' check-in'+(orphans.length===1?'':'s')+' today match no one on this staff list: '),
+            orphans.map(function(a){ return (a.staffName||'(no name)')+' '+(a.checkIn||''); }).join(', '),
+            '. They are recorded but cannot be shown against a person — usually the name on the ',
+            'record differs from the name in HR Admin, or they belong to another branch.'
+          );
+        })(),
         bStaff.map(s=>{
           const rec = kbdcPickAtt(todayAtt,s.id,s.name);
           const onLv = leaves.find(l=>l.staffName===s.name&&l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY);
