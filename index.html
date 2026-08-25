@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-24-3';
+var KBDC_APP_VERSION = '2026-08-24-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -2749,9 +2749,28 @@ function SyncDiagnostics({ onClose }) {
       if (savedMain && savedMain !== KBDC_DEFAULT_BACKEND_URL) odd.push('Main');
       if (savedInv && savedInv !== KBDC_DEFAULT_INV_BACKEND_URL) odd.push('Inventory');
       if (!odd.length) return null;
-      return row('This device is pinned to',
-        odd.join(' and ') + ' — a URL saved on THIS device, different from the one built into the app. ' +
-        'That is per-device and survives reloads.', true);
+      return React.createElement('div', { key:'pinned', style:{ display:'flex', gap:10, padding:'6px 0',
+          borderBottom:'1px solid #F0F0F0', fontSize:12, alignItems:'flex-start' } },
+        React.createElement('div', { style:{ width:170, flexShrink:0, color:'#607D8B', fontWeight:600 } },
+          'This device is pinned to'),
+        React.createElement('div', { style:{ flex:1, color:'#B71C1C', fontWeight:600, userSelect:'text' } },
+          odd.join(' and ') + ' — a URL saved on THIS device, different from the one built into the app. ' +
+          'That is per-device and survives reloads.',
+          React.createElement('button', {
+            onClick: function(){
+              if (!window.confirm('Use the address built into the app instead of the one saved on this device?')) return;
+              try {
+                localStorage.removeItem('kbdc_backend_url');
+                localStorage.removeItem('kbdc_backend_url_inventory');
+              } catch(e) {}
+              kbdcSetSyncStatus({ failStreak: 0, err: '' });
+              setBusy(true);
+              kbdcAutoSyncCycle().finally(function(){ setBusy(false); setProbes(null); });
+            },
+            style:{ display:'block', marginTop:7, padding:'5px 11px', background:'#B71C1C', color:'#fff',
+                    border:'none', borderRadius:7, fontFamily:"'Poppins',sans-serif", fontSize:11.5,
+                    fontWeight:600, cursor:'pointer' }
+          }, "Use the app's built-in address")));
     })(),
     row('Last upload size', s.lastPushBytes != null
         ? (Math.round(s.lastPushBytes / 1024) + ' KB in ' + (s.lastPushChunks || 0) +
@@ -2782,6 +2801,30 @@ function SyncDiagnostics({ onClose }) {
                 borderRadius:8, fontFamily:"'Poppins',sans-serif", fontSize:12, fontWeight:600,
                 cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 } },
         busy ? 'Syncing…' : 'Sync now'),
+      React.createElement('button', {
+        onClick: function(){
+          if (!window.confirm('Re-upload everything this device holds?\n\n' +
+              'This clears only the notes about what was already sent — no attendance, ' +
+              'tasks or staff data is touched. Use it when a record is on this device but ' +
+              'never reached the Google Sheet.')) return;
+          try {
+            // Forget what we believe was already delivered, so the next push
+            // sends the lot rather than skipping it as unchanged.
+            localStorage.removeItem('kbdc_push_sigs');
+            localStorage.removeItem('kbdc_push_full_at');
+            localStorage.removeItem('kbdc_pull_revs');
+            localStorage.removeItem('kbdc_pull_sizes');
+            localStorage.removeItem('kbdc_pull_cycle');
+          } catch(e) {}
+          kbdcSetSyncStatus({ failStreak: 0, err: '' });
+          setBusy(true);
+          kbdcAutoSyncCycle().finally(function(){ setBusy(false); setProbes(null); });
+        },
+        disabled: busy,
+        style:{ padding:'8px 14px', background:'#E65100', color:'#fff', border:'none',
+                borderRadius:8, fontFamily:"'Poppins',sans-serif", fontSize:12, fontWeight:600,
+                cursor: busy ? 'default' : 'pointer', opacity: busy ? .6 : 1 } },
+        busy ? 'Working…' : 'Re-upload everything'),
       React.createElement('button', {
         onClick: function(){
           var t = details();
