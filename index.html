@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-24-2';
+var KBDC_APP_VERSION = '2026-08-24-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -2679,6 +2679,25 @@ function SyncDiagnostics({ onClose }) {
       'Last uploaded tabs: ' + (s.lastPushSheets || '—'),
       'Current error: ' + (s.err || '(none)'),
     ];
+    // Today's attendance as this device sees it, and who it can be matched to.
+    try {
+      var today = kbdcToday();
+      var att = kbdcLsArray('kbdc_la_attendance').filter(function(a){
+        return String(a && a.date || '').slice(0,10) === today; });
+      var staff = [];
+      try { staff = sharedStaffGet().filter(function(m){ return m && m.active !== false; }); } catch(e) {}
+      lines.push('--- today (' + today + ') on this device ---');
+      lines.push('staff on this device: ' + (staff.map(function(m){ return m.name; }).join(', ') || '(none)'));
+      lines.push('attendance rows today: ' + (att.length || 0));
+      att.forEach(function(a){
+        var matched = staff.some(function(m){ return kbdcAttMatches(a, m.id, m.name); });
+        lines.push('  ' + (a.staffName||'(no name)') + ' | id=' + (a.staffId||'') +
+                   ' | in=' + (a.checkIn||'-') + ' | out=' + (a.checkOut||'-') +
+                   ' | branch=' + (a.branch||'') + (matched ? '' : '  <-- MATCHES NOBODY'));
+      });
+      lines.push('backend URL in use: ' + kbdcBackendUrl());
+      lines.push('built into this app : ' + KBDC_DEFAULT_BACKEND_URL);
+    } catch(e) { lines.push('(could not read local attendance: ' + e.message + ')'); }
     (probes || []).forEach(function(p) {
       lines.push('--- ' + p.label + ' ---');
       lines.push('URL: ' + p.url);
@@ -2718,6 +2737,22 @@ function SyncDiagnostics({ onClose }) {
     row('Inventory script reported', s.invBackendVersion || 'not seen yet',
         !!s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND),
     row('Last good backup', s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never', !s.lastOk),
+    (function(){
+      // A URL saved on this device overrides the one built into the app, and
+      // keeps overriding it forever — including after a "New deployment" gave
+      // the clinic a different address. That fails on one device while every
+      // other device works, which is exactly the shape of this problem.
+      var savedMain = null, savedInv = null;
+      try { savedMain = localStorage.getItem('kbdc_backend_url'); } catch(e) {}
+      try { savedInv = localStorage.getItem('kbdc_backend_url_inventory'); } catch(e) {}
+      var odd = [];
+      if (savedMain && savedMain !== KBDC_DEFAULT_BACKEND_URL) odd.push('Main');
+      if (savedInv && savedInv !== KBDC_DEFAULT_INV_BACKEND_URL) odd.push('Inventory');
+      if (!odd.length) return null;
+      return row('This device is pinned to',
+        odd.join(' and ') + ' — a URL saved on THIS device, different from the one built into the app. ' +
+        'That is per-device and survives reloads.', true);
+    })(),
     row('Last upload size', s.lastPushBytes != null
         ? (Math.round(s.lastPushBytes / 1024) + ' KB in ' + (s.lastPushChunks || 0) +
            ' request' + ((s.lastPushChunks === 1) ? '' : 's'))
