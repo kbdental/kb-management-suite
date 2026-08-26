@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-26-2';
+var KBDC_APP_VERSION = '2026-08-26-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -4946,6 +4946,7 @@ function ManagerDashboard({
   const [editStaff, setEditStaff] = useState(null);
   const [mgrNotes, setMgrNotes] = useState(function(){ try { return JSON.parse(localStorage.getItem('kbdc_mgr_notes') || '[]'); } catch(e){ return []; } });
   const [mgrNoteStaff, setMgrNoteStaff] = useState('');
+  const [mgrPendStaff, setMgrPendStaff] = useState('');
   const [mgrNotePrio, setMgrNotePrio] = useState('');
   const [mgrRptFrom, setMgrRptFrom] = useState('');
   const [mgrRptTo, setMgrRptTo] = useState('');
@@ -5143,21 +5144,45 @@ function ManagerDashboard({
       marginBottom: 10
     }
   }, (function(){
+       var only = mgrPendStaff ? kbdcRolesForStaff(mgrPendStaff, []) : null;
        var n = (roles||[]).reduce(function(s, r){
+         if (only && only.indexOf(r.code) < 0) return s;
          return s + getRoleTasks(r.code).filter(function(t){ return !t.done; }).length; }, 0);
-       return "PENDING TASKS (" + n + " TOTAL)";
-     })()), (function(){
+       return "PENDING TASKS (" + n + (mgrPendStaff ? " FOR " + mgrPendStaff.toUpperCase() : " TOTAL") + ")";
+     })()), /*#__PURE__*/React.createElement("div", {
+    style: { display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { fontSize:11, color:'#546E7A', fontWeight:600 }
+  }, "Show pending for"), /*#__PURE__*/React.createElement("select", {
+    className: "hist-sel",
+    value: mgrPendStaff,
+    onChange: function(e){ setMgrPendStaff(e.target.value); }
+  }, /*#__PURE__*/React.createElement("option", { value: '' }, "Everyone"),
+     kbdcLogStaffNames().map(function(n){
+       return /*#__PURE__*/React.createElement("option", { key:n, value:n }, n); })),
+     mgrPendStaff && /*#__PURE__*/React.createElement("button", {
+       onClick: function(){ setMgrPendStaff(''); },
+       style: { padding:'5px 11px', border:'1px solid #CFD8DC', borderRadius:7, background:'#fff',
+                cursor:'pointer', fontFamily:"'Poppins',sans-serif", fontSize:11.5, color:'#546E7A' }
+     }, "Clear")), (function(){
     // This whole tab was demo data: a fixed "859 TOTAL", three invented roles
     // with invented counts, and the same two made-up CEO tasks repeated under
     // each of them. None of it came from the clinic's actual task lists.
-    var pend = (roles||[]).map(function(r){
+    // Tasks belong to a role, so "this person's pending work" means the
+    // outstanding tasks of the role(s) they hold.
+    var onlyRoles = mgrPendStaff ? kbdcRolesForStaff(mgrPendStaff, []) : null;
+    var pend = (roles||[]).filter(function(r){
+      return !onlyRoles || onlyRoles.indexOf(r.code) >= 0;
+    }).map(function(r){
       return { code: r.code, name: r.name, c: r.c,
                tasks: getRoleTasks(r.code).filter(function(t){ return !t.done; }) };
     }).filter(function(r){ return r.tasks.length; })
       .sort(function(a,b){ return b.tasks.length - a.tasks.length; });
     if (!pend.length) return /*#__PURE__*/React.createElement("div", {
       className: "rpt-empty"
-    }, "Nothing pending — every task on every role is done.");
+    }, mgrPendStaff
+        ? ("Nothing pending for " + mgrPendStaff + ". If that looks wrong, check they are assigned a role under +Roles.")
+        : "Nothing pending — every task on every role is done.");
     return pend.map(function(r, i){
       return /*#__PURE__*/React.createElement("div", {
         key: r.code || i,
