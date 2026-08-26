@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-26-1';
+var KBDC_APP_VERSION = '2026-08-26-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -4894,6 +4894,34 @@ function kbdcLogRow(r){
 // The filters that say "staff" must offer staff, not roles. Take everyone on
 // the roster plus anyone who appears in the log, so a person who has since
 // been deactivated can still be looked up in their own history.
+/* Designation -> role code. Lived inside the Leave & Attendance dashboard;
+   the Report needs the same mapping to work out which roles a person holds. */
+var KBDC_DESIG_CODE = {'Owner':'OWN','Proprietor':'OWN','Medical Director':'MDD','Clinical Director':'CLD','Chief Dental Surgeon':'CDS','Chief Clinical Dentist':'CDS','Clinic Head':'CLH','Associate Dentist':'ASD','Dentist':'ASD','Dental Hygienist':'DHY','Lead Dental Nurse':'LDN','Nurse':'LDN','Dental Assistant':'DAS','Sterilization Technician':'STT','Steril. Technician':'STT','Patient Coordinator':'PTC','Receptionist':'RCP','Front Office Manager':'RCP','Front Office':'RCP','House Keeping':'HSK','Housekeeping Staff':'HSK','Janitor':'HSK','Housekeeping':'HSK','Practice Manager':'PRM','MIS Officer':'MIS','MIS':'MIS','Inventory Officer':'INO','Admin Head':'ADH','Admin':'ADH','Accounts Manager':'ACM','Accountant':'ACM','Maintenance':'MNT','CAD CAM Technician':'CAD','Ceramic Technician':'CER','Wax up & Metal Technician':'WMT','Plaster Technician':'PLT','Acrylic Technician':'ACT','Rider':'RDR'};
+
+/* Which role codes a person belongs to.
+   Needed because tasks belong to a ROLE, not a person: to report one staff
+   member's pending work you first have to know which role's list is theirs.
+   Assignment first, then the role implied by their designation, then any role
+   they have actually completed work in. */
+function kbdcRolesForStaff(name, logRows) {
+  var want = kbdcNormName(name), out = {};
+  try {
+    kbdcScanPrefixed('kbdc_role_emp_').forEach(function(e){
+      if (e && e.sourceKey && kbdcNormName(e.name) === want) out[e.sourceKey] = 1;
+    });
+  } catch(e) {}
+  try {
+    sharedStaffGet().forEach(function(m){
+      if (kbdcNormName(m && m.name) !== want) return;
+      var desig = (m.designation || m.role || '');
+      var code = KBDC_DESIG_CODE[desig] || (desig ? desig.slice(0,3).toUpperCase() : '');
+      if (code) out[code] = 1;
+    });
+  } catch(e) {}
+  (logRows || []).forEach(function(r){ if (r && r.roleCode) out[r.roleCode] = 1; });
+  return Object.keys(out);
+}
+
 function kbdcLogStaffNames(){
   var seen = {}, out = [];
   function add(n){ n = String(n||'').trim(); if(!n || seen[n.toLowerCase()]) return; seen[n.toLowerCase()]=1; out.push(n); }
@@ -5026,7 +5054,7 @@ function ManagerDashboard({
     var adminCodes = ROLE_CARDS.admin.map(function(r){return r.code;});
     var mgmtCodes = ROLE_CARDS.mgmt.map(function(r){return r.code;});
     var labCodes = ROLE_CARDS.lab.map(function(r){return r.code;});
-    var DESIG_CODE = {'Owner':'OWN','Proprietor':'OWN','Medical Director':'MDD','Clinical Director':'CLD','Chief Dental Surgeon':'CDS','Chief Clinical Dentist':'CDS','Clinic Head':'CLH','Associate Dentist':'ASD','Dentist':'ASD','Dental Hygienist':'DHY','Lead Dental Nurse':'LDN','Nurse':'LDN','Dental Assistant':'DAS','Sterilization Technician':'STT','Steril. Technician':'STT','Patient Coordinator':'PTC','Receptionist':'RCP','Front Office Manager':'RCP','Front Office':'RCP','House Keeping':'HSK','Housekeeping Staff':'HSK','Janitor':'HSK','Housekeeping':'HSK','Practice Manager':'PRM','MIS Officer':'MIS','MIS':'MIS','Inventory Officer':'INO','Admin Head':'ADH','Admin':'ADH','Accounts Manager':'ACM','Accountant':'ACM','Maintenance':'MNT','CAD CAM Technician':'CAD','Ceramic Technician':'CER','Wax up & Metal Technician':'WMT','Plaster Technician':'PLT','Acrylic Technician':'ACT','Rider':'RDR'};
+    var DESIG_CODE = KBDC_DESIG_CODE;
     function staffToRow(s) {
       var desig = s.designation||s.role||'';
       var code = DESIG_CODE[desig]||desig.slice(0,3).toUpperCase();
@@ -5348,6 +5376,10 @@ function ManagerDashboard({
     // actually worked in belong in the report. Otherwise, a role with no work
     // done and nothing outstanding is just noise: the report used to list all
     // ~25 of them with nothing against any.
+    // With a person selected, only the roles that are actually theirs belong in
+    // the report. Counting pending for every role made all ~25 appear at "0
+    // completed", which is not a report about that person at all.
+    var onlyRoles = mgrRptStaff ? kbdcRolesForStaff(mgrRptStaff, rows) : null;
     var list = (roles || []).map(function(r){
       return { r: r, done: doneBy[r.code] || 0,
                // Pending is what is outstanding right now for that role, which
@@ -5357,7 +5389,10 @@ function ManagerDashboard({
                // percentage entirely, leaving only a completed count with
                // nothing to read it against.
                pend: getRoleTasks(r.code).filter(function(t){ return !t.done; }).length };
-    }).filter(function(x){ return x.done || x.pend; });
+    }).filter(function(x){
+      if (onlyRoles && onlyRoles.indexOf(x.r.code) < 0) return false;
+      return x.done || x.pend;
+    });
     if (!list.length) return /*#__PURE__*/React.createElement("div", { className: "rpt-empty" },
       "No task completions recorded for this selection.");
     var totDone = 0, totPend = 0;
