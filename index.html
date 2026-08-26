@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-24-4';
+var KBDC_APP_VERSION = '2026-08-26-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -5351,9 +5351,12 @@ function ManagerDashboard({
     var list = (roles || []).map(function(r){
       return { r: r, done: doneBy[r.code] || 0,
                // Pending is what is outstanding right now for that role, which
-               // is the number the owner acts on; completions are what
-               // happened in the chosen range.
-               pend: mgrRptStaff ? 0 : getRoleTasks(r.code).filter(function(t){ return !t.done; }).length };
+               // is the number the owner acts on; completions are what happened
+               // in the chosen range. Shown whether or not a person is
+               // selected: filtering used to blank out pending and the
+               // percentage entirely, leaving only a completed count with
+               // nothing to read it against.
+               pend: getRoleTasks(r.code).filter(function(t){ return !t.done; }).length };
     }).filter(function(x){ return x.done || x.pend; });
     if (!list.length) return /*#__PURE__*/React.createElement("div", { className: "rpt-empty" },
       "No task completions recorded for this selection.");
@@ -5373,11 +5376,12 @@ function ManagerDashboard({
         className: "rpt-done",
         style: { fontSize: 11, background: '#E8F5E9', color: '#2E7D32', padding: '2px 8px', borderRadius: 10 }
       }, done + " completed"),
-      !mgrRptStaff && /*#__PURE__*/React.createElement("div", {
+      /*#__PURE__*/React.createElement("div", {
         className: "rpt-pend",
         style: { fontSize: 11, background: pend ? '#FFF3E0' : '#ECEFF1', color: pend ? '#E65100' : '#78909C', padding: '2px 8px', borderRadius: 10 }
       }, pend + " pending"),
-      !mgrRptStaff && /*#__PURE__*/React.createElement("div", {
+      /*#__PURE__*/React.createElement("div", {
+        className: "rpt-pct",
         style: { fontSize: 11, fontWeight: 700, color: '#1357A6', minWidth: 38, textAlign: 'right' }
       }, pct + "%"));
     });
@@ -5387,8 +5391,8 @@ function ManagerDashboard({
       style: { display: 'flex', alignItems: 'center', gap: 10, paddingTop: 10, fontSize: 12, fontWeight: 700, color: '#1A237E' }
     }, /*#__PURE__*/React.createElement("div", { style: { flex: 1 } }, "Total"),
        /*#__PURE__*/React.createElement("div", null, totDone + " completed"),
-       !mgrRptStaff && /*#__PURE__*/React.createElement("div", null, totPend + " pending"),
-       !mgrRptStaff && /*#__PURE__*/React.createElement("div", { style: { minWidth: 38, textAlign: 'right' } },
+       /*#__PURE__*/React.createElement("div", null, totPend + " pending"),
+       /*#__PURE__*/React.createElement("div", { style: { minWidth: 38, textAlign: 'right' } },
          (grand ? Math.round(totDone / grand * 100) : 0) + "%")));
   })())), stab === 'Staff' && /*#__PURE__*/React.createElement(StaffTab, {
     editStaff: editStaff,
@@ -11178,6 +11182,29 @@ async function kbdcAutoSyncCycle() {
 // ~2,900 Apps Script calls an hour and roughly 300.
 var KBDC_SYNC_BASE_MS = 120000;
 var KBDC_SYNC_MAX_MS  = 600000;
+// While someone is actually watching a live screen — the attendance dashboard
+// as staff arrive — two minutes feels broken. Such a screen registers itself
+// and the gap drops to fifteen seconds for as long as it is open AND in the
+// foreground, then goes back to normal. Only the watching device speeds up,
+// only while watching, and a cycle with nothing new transfers no rows at all
+// (see getStamps) — so this costs a handful of tiny calls rather than
+// returning to the traffic that got the clinic throttled.
+var KBDC_SYNC_FAST_MS = 15000;
+var kbdcLiveWatchers = 0;
+function kbdcWatchLive() {
+  kbdcLiveWatchers++;
+  // A pace only takes effect on the NEXT scheduled tick, so without this the
+  // owner opens the attendance screen and still waits out the two-minute timer
+  // that was already counting down. Wake the scheduler so it refreshes now and
+  // then continues at the live cadence.
+  try { window.dispatchEvent(new Event('kbdc-sync-wake')); } catch(e) {}
+  var released = false;
+  return function release() { if (!released) { released = true; kbdcLiveWatchers = Math.max(0, kbdcLiveWatchers - 1); } };
+}
+function kbdcLiveWatching() {
+  return kbdcLiveWatchers > 0 &&
+         (typeof document === 'undefined' || document.visibilityState !== 'hidden');
+}
 function kbdcNoteSyncOutcome(okNow) {
   var s = kbdcGetSyncStatus();
   var streak = okNow ? 0 : Math.min((s.failStreak || 0) + 1, 6);
@@ -11186,8 +11213,10 @@ function kbdcNoteSyncOutcome(okNow) {
 }
 function kbdcNextSyncDelay() {
   var streak = kbdcGetSyncStatus().failStreak || 0;
+  // Backing off after a failure always wins: a struggling backend must not be
+  // polled every fifteen seconds just because a screen is open.
   var base = streak ? Math.min(KBDC_SYNC_BASE_MS * Math.pow(2, streak), KBDC_SYNC_MAX_MS)
-                    : KBDC_SYNC_BASE_MS;
+                    : (kbdcLiveWatching() ? KBDC_SYNC_FAST_MS : KBDC_SYNC_BASE_MS);
   // Jitter, so eight devices that all opened the app at 9am don't keep calling
   // in lockstep for the rest of the day.
   return Math.round(base * (0.75 + Math.random() * 0.5));
@@ -23718,7 +23747,11 @@ function LeaveAttendancePage({ appUser }) {
     }
     window.addEventListener('kbdc-modules-sync', onSync);
     window.addEventListener('kbdc-staff-sync', onSync);
+    // This screen is watched live while staff arrive, so ask for the fast
+    // cadence for as long as it is open. Released on unmount.
+    var release = kbdcWatchLive();
     return function(){
+      release();
       window.removeEventListener('kbdc-modules-sync', onSync);
       window.removeEventListener('kbdc-staff-sync', onSync);
     };
@@ -24019,11 +24052,14 @@ function App() {
     function onVis() { if (document.visibilityState === 'visible') cycle(); }
     document.addEventListener('visibilitychange', onVis);
     window.addEventListener('focus', cycle);
+    // A screen that wants live updates asks for one immediately on open.
+    window.addEventListener('kbdc-sync-wake', cycle);
     return function() {
       stopped = true;
       clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVis);
       window.removeEventListener('focus', cycle);
+      window.removeEventListener('kbdc-sync-wake', cycle);
     };
   }, [session]);
 
