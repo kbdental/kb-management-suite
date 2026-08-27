@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-26-4';
+var KBDC_APP_VERSION = '2026-08-26-5';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10850,6 +10850,9 @@ function kbdcSetSyncStatus(patch){
 // asks while one is in flight, run once more afterwards rather than in
 // parallel, so the newly recorded work is never left behind.
 var kbdcSyncMainRunning = false, kbdcSyncMainAgain = false;
+// Reset by a page load, which is the point: a refresh should show attendance
+// within one round trip rather than after the whole database has been read.
+var kbdcFirstPullDone = false;
 async function kbdcAutoSyncMain() {
   if (kbdcSyncMainRunning) { kbdcSyncMainAgain = true; return; }
   kbdcSyncMainRunning = true;
@@ -10876,6 +10879,39 @@ async function kbdcAutoSyncMainRun() {
     var readEverything = (cycleN % 10 === 1);
     var sheetsToRead = readEverything ? sheetNames
       : sheetNames.filter(function(s){ return KBDC_HOT_SHEETS[s]; });
+
+    // On the first sync after a page load, fetch attendance and the staff list
+    // on their own first and apply them straight away. The full pass reads
+    // around seventeen tabs in several requests, so a refresh otherwise showed
+    // nothing until all of them had come back — which is why it took minutes
+    // and several refreshes to see who was in. This is one small request, once
+    // per load.
+    if (!kbdcFirstPullDone) {
+      kbdcFirstPullDone = true;
+      try {
+        var quick = await kbdcBackendPullBatch(url, ['Attendance', 'StaffFull'], 1);
+        var qAtt = ((quick.data || {})['Attendance'] || []).map(kbdcUnflattenRow);
+        if (qAtt.length) {
+          var merged = kbdcUnionMergeById(kbdcLsArray('kbdc_la_attendance'), qAtt);
+          var nextQ = JSON.stringify(merged);
+          if (localStorage.getItem('kbdc_la_attendance') !== nextQ) {
+            localStorage.setItem('kbdc_la_attendance', nextQ);
+            window.dispatchEvent(new Event('kbdc-modules-sync'));
+          }
+        }
+        var qStaff = ((quick.data || {})['StaffFull'] || []).map(kbdcUnflattenRow);
+        if (qStaff.length) {
+          var localS = kbdcLsArray('kbdc_hr_staff');
+          var mergedS = localS.length ? kbdcMergeStaffByRecency(localS, qStaff) : qStaff;
+          var nextS = JSON.stringify(mergedS);
+          if (localStorage.getItem('kbdc_hr_staff') !== nextS) {
+            localStorage.setItem('kbdc_hr_staff', nextS);
+            localStorage.setItem('kbdc_shared_staff', nextS);
+            window.dispatchEvent(new Event('kbdc-staff-sync'));
+          }
+        }
+      } catch (e) { /* the full pass below still runs */ }
+    }
 
     var got = null, pullErr = null;
     try { got = await kbdcPullSheets(url, sheetsToRead, readEverything); }
@@ -21890,19 +21926,8 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
   // on a configured week-off — everyone who had simply not checked in was
   // counted and labelled "Absent", even while the Calendar correctly showed
   // the day as a holiday. Nobody is absent on a day they were not due in.
-  const kbdcTodayHoliday = (function(){
-    try {
-      var hs = (typeof laGetHolidays === 'function') ? laGetHolidays() : [];
-      var hit = (hs || []).find(function(h){
-        return String(h && (h.date || h.from) || '').slice(0,10) === LA_TODAY;
-      });
-      return hit ? (hit.name || hit.title || 'Holiday') : '';
-    } catch(e) { return ''; }
-  })();
-  const kbdcTodayWeekOff = (function(){
-    try { return laGetWeekOff().indexOf(new Date(LA_TODAY + 'T00:00:00').getDay()) !== -1; }
-    catch(e) { return false; }
-  })();
+  const kbdcTodayHoliday = kbdcHolidayOn(LA_TODAY);
+  const kbdcTodayWeekOff = kbdcWeekOffOn(LA_TODAY);
   const kbdcNonWorkingDay = !!kbdcTodayHoliday || kbdcTodayWeekOff;
   // On a non-working day only genuine absences of people who were expected in
   // can exist, and nobody is expected in — so the count is zero rather than
@@ -22442,6 +22467,12 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
                 var sPill='lp-red',sTxt='Absent';
                 if(rec&&rec.checkIn&&!rec.checkOut){sPill='lp-orange';sTxt='Active';}
                 else if(rec&&rec.checkIn&&rec.checkOut){sPill='lp-green';sTxt='Done';}
+                else { /* No record. Before calling it an absence, check the day
+                          was a working one — this table had no holiday or
+                          week-off awareness at all. */
+                  var nonWorking=kbdcNonWorkingOn(LA_TODAY);
+                  if(nonWorking){sPill='lp-grey';sTxt=nonWorking;}
+                }
                 return React.createElement('tr',{key:s.name},
                   React.createElement('td',null,React.createElement('div',{className:'la-emp-cell'},React.createElement('div',{className:'la-av',style:{background:color}},inits),s.name)),
                   React.createElement('td',null,React.createElement('span',{className:'la-tag lt-blue'},s.group||s.dept||'—')),
@@ -23194,6 +23225,33 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
 }
 
 /* ── Calendar sub-page ── */
+/* Is this date a declared holiday? Returns its name, or ''.
+   Holiday awareness used to be written inline in the dashboard and only ever
+   asked about today, so every other view — the attendance table among them —
+   marked a whole clinic "Absent" on Independence Day. */
+function kbdcHolidayOn(dateStr) {
+  try {
+    var want = String(dateStr || '').slice(0, 10);
+    if (!want) return '';
+    var hit = (laGetHolidays() || []).find(function(h){
+      return String((h && (h.date || h.from)) || '').slice(0, 10) === want;
+    });
+    return hit ? (hit.name || hit.title || 'Holiday') : '';
+  } catch(e) { return ''; }
+}
+function kbdcWeekOffOn(dateStr) {
+  try {
+    var d = new Date(String(dateStr || '').slice(0, 10) + 'T00:00:00');
+    if (isNaN(d.getTime())) return false;
+    return laGetWeekOff().indexOf(d.getDay()) !== -1;
+  } catch(e) { return false; }
+}
+/* Nobody is absent on a day they were not due in. */
+function kbdcNonWorkingOn(dateStr) {
+  var h = kbdcHolidayOn(dateStr);
+  if (h) return h;
+  return kbdcWeekOffOn(dateStr) ? 'Week Off' : '';
+}
 function laGetHolidays(){
   try{
     var h=JSON.parse(localStorage.getItem('kbdc_la_holidays')||'null');
