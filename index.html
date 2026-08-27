@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-26-3';
+var KBDC_APP_VERSION = '2026-08-26-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10841,7 +10841,25 @@ function kbdcSetSyncStatus(patch){
     window.dispatchEvent(new Event('kbdc-sync-status'));
   } catch(e){}
 }
+// Only one main sync at a time.
+//
+// kbdcAutoSyncMain is called directly by every check-in and check-out as well
+// as by the scheduler, with no guard — so a staff member tapping Check In
+// while a cycle was already running produced two overlapping runs reading and
+// writing the same local state and the same push bookkeeping. If something
+// asks while one is in flight, run once more afterwards rather than in
+// parallel, so the newly recorded work is never left behind.
+var kbdcSyncMainRunning = false, kbdcSyncMainAgain = false;
 async function kbdcAutoSyncMain() {
+  if (kbdcSyncMainRunning) { kbdcSyncMainAgain = true; return; }
+  kbdcSyncMainRunning = true;
+  try { await kbdcAutoSyncMainRun(); }
+  finally {
+    kbdcSyncMainRunning = false;
+    if (kbdcSyncMainAgain) { kbdcSyncMainAgain = false; return kbdcAutoSyncMain(); }
+  }
+}
+async function kbdcAutoSyncMainRun() {
   var url = kbdcBackendUrl();
   if (!url) return;
   try {
@@ -11089,6 +11107,22 @@ async function kbdcAutoSyncMain() {
     });
 
     // No explicit budget — kbdcSplitPushChunks owns that decision.
+    // Today's attendance is the one thing that must never be skipped as
+    // "already sent". If a signature is ever wrong — a half-finished cycle, two
+    // overlapping runs, a device restored from an old backup — the cost is a
+    // person marked absent for the whole day, and the owner having to press a
+    // repair button on every phone. It is a handful of rows; send them every
+    // cycle regardless.
+    try {
+      var todayStr = kbdcToday();
+      var todaysAtt = (pushPayload['Attendance'] || []).filter(function(r){
+        return String((r && r.date) || '').slice(0, 10) === todayStr;
+      });
+      if (todaysAtt.length && !changedPayload['Attendance']) {
+        changedPayload['Attendance'] = todaysAtt;
+      }
+    } catch(e) {}
+
     var chunks = kbdcSplitPushChunks(changedPayload);
     var pushedBytes = 0;
     for (var ci = 0; ci < chunks.length; ci++) {
@@ -22329,7 +22363,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     setNewPin1('');setNewPin2('');setShowChangPin(false);setPinError('');
     showToast('Admin PIN updated successfully');
   }
-  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
+  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var attendance=laLoadAtt();var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
   function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
 
   var SC=['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#37474F','#AD1457'];
