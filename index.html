@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-26-5';
+var KBDC_APP_VERSION = '2026-08-26-6';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -22343,12 +22343,24 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     var cDt=new Date(calYear,calMonth,cd);
     var isWE=laGetWeekOff().indexOf(cDt.getDay())!==-1;
     var isFut=dStr>LA_TODAY;
+    /* A declared holiday is not an absence, and it is paid whether or not
+       anyone tapped Check In. This grid knew about week-offs but had no
+       holiday check at all, so Independence Day read as "A" for every
+       member of staff. */
+    var cHol=kbdcHolidayOn(dStr);
     var cStat='',cColor='#90A4AE';
-    if(isWE){cStat='WO';cColor='#78909C';}
+    /* A declared holiday wins over a week off: both are paid, but naming the
+       holiday is the more useful of the two — and it is what the calendar
+       says. 15 August 2026 falls on a Saturday, so week-off would otherwise
+       hide it. */
+    if(cHol){cStat='H';cColor='#00695C';}
+    else if(isWE){cStat='WO';cColor='#78909C';}
     else if(isFut){cStat='';cColor='#CFD8DC';}
     else if(cRec&&cRec.checkIn){cStat='P';cColor='#2E7D32';}
     else{cStat='A';cColor='#E53935';}
-    calDays.push({d:cd,dStr:dStr,dt:cDt,stat:cStat,color:cColor,isWE:isWE,isFut:isFut});
+    calDays.push({d:cd,dStr:dStr,dt:cDt,stat:cStat,color:cColor,isWE:isWE,isFut:isFut,hol:cHol,
+                  /* Paid: worked, on a declared holiday, or a week off. */
+                  paid:(cStat==='P'||cStat==='H'||cStat==='WO')});
   }
 
   /* first-in / last-out rows */
@@ -22683,15 +22695,16 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
         React.createElement('div',{style:{display:'flex',gap:14,fontSize:10.5,color:'#546E7A',marginBottom:12,flexWrap:'wrap'}},
           React.createElement('span',null,React.createElement('span',{style:{display:'inline-block',width:10,height:10,borderRadius:2,background:'#F1F8E9',border:'1px solid #C5E1A5',marginRight:4}}),  'Present (P)'),
           React.createElement('span',null,React.createElement('span',{style:{display:'inline-block',width:10,height:10,borderRadius:2,background:'#FFEBEE',border:'1px solid #EF9A9A',marginRight:4}}),'Absent (A)'),
-          React.createElement('span',null,React.createElement('span',{style:{display:'inline-block',width:10,height:10,borderRadius:2,background:'#F5F5F5',border:'1px solid #E0E0E0',marginRight:4}}),'Weekend (WO)')
+          React.createElement('span',null,React.createElement('span',{style:{display:'inline-block',width:10,height:10,borderRadius:2,background:'#F5F5F5',border:'1px solid #E0E0E0',marginRight:4}}),'Weekend (WO)'),
+          React.createElement('span',null,React.createElement('span',{style:{display:'inline-block',width:10,height:10,borderRadius:2,background:'#E0F2F1',border:'1px solid #80CBC4',marginRight:4}}),'Holiday (H)')
         ),
         React.createElement('div',{style:{overflowX:'auto',paddingBottom:4}},
           React.createElement('div',{style:{display:'flex',gap:3,minWidth:'max-content'}},
             calDays.map(function(cd){
               var dayN=['Su','Mo','Tu','We','Th','Fr','Sa'][cd.dt.getDay()];
-              var bg=cd.isWE?'#F5F5F5':cd.isFut?'#FAFAFA':cd.stat==='P'?'#F1F8E9':'#FFEBEE';
-              var bdr=cd.isWE?'#E0E0E0':cd.isFut?'#ECEFF1':cd.stat==='P'?'#C5E1A5':'#EF9A9A';
-              return React.createElement('div',{key:cd.d,style:{width:48,textAlign:'center',borderRadius:8,border:'1px solid '+bdr,background:bg,padding:'7px 4px',flexShrink:0}},
+              var bg=cd.stat==='H'?'#E0F2F1':cd.isWE?'#F5F5F5':cd.isFut?'#FAFAFA':cd.stat==='P'?'#F1F8E9':'#FFEBEE';
+              var bdr=cd.stat==='H'?'#80CBC4':cd.isWE?'#E0E0E0':cd.isFut?'#ECEFF1':cd.stat==='P'?'#C5E1A5':'#EF9A9A';
+              return React.createElement('div',{key:cd.d,title:cd.hol||'',style:{width:48,textAlign:'center',borderRadius:8,border:'1px solid '+bdr,background:bg,padding:'7px 4px',flexShrink:0}},
                 React.createElement('div',{style:{fontSize:9.5,fontWeight:700,color:'#78909C',marginBottom:2}},dayN),
                 React.createElement('div',{style:{fontSize:9,color:'#90A4AE',marginBottom:5}},LA_MONTH_NAMES[calMonth].slice(0,3)+' '+laPad(cd.d)),
                 React.createElement('div',{style:{fontSize:13,fontWeight:700,color:cd.isFut?'#CFD8DC':cd.color}},cd.stat||'—')
