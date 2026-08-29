@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-26-6';
+var KBDC_APP_VERSION = '2026-08-29-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -21985,6 +21985,33 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
         ),
         bStaff.length===0 && React.createElement('div',{className:'la-empty',style:{padding:16,fontSize:11}},'Add staff in My Team to track attendance.'),
         (function(){
+          /* Which phones are running old code.
+             Every check-in now records the app version of the device that made
+             it. A phone left on an older build keeps its own stale sync
+             behaviour and cannot be fixed from here — it needs closing and
+             reopening once — but until now there was no way to tell WHICH
+             phone, so the owner had to work through all of them. */
+          var stale = [];
+          (todayAtt || []).forEach(function(a){
+            if (!a || !a.checkIn || !a.appVer) return;      // pre-dates this stamp
+            if (a.appVer === KBDC_APP_VERSION) return;
+            var n = String(a.staffName || '').trim();
+            if (n && stale.indexOf(n) < 0) stale.push(n);
+          });
+          if (!stale.length) return null;
+          return React.createElement('div',{
+            style:{margin:'8px 12px',padding:'9px 11px',background:'#FDF0E3',
+                   border:'1px solid #F0C68A',borderLeft:'4px solid #9E5700',
+                   borderRadius:8,fontSize:11,color:'#9E5700',lineHeight:1.5}
+          },
+            React.createElement('strong',null,'Out of date: '),
+            stale.join(', '),
+            stale.length === 1 ? "'s phone is" : "'s phones are",
+            ' running an older version of the app, so their attendance may not sync. ',
+            'Fully close the app on it and open it again once — after that it updates itself.'
+          );
+        })(),
+        (function(){
           /* A check-in that matches nobody on the staff list used to be
              discarded in silence, and that person simply read as Absent with
              no way to tell their record was sitting right there. Name it. */
@@ -22253,11 +22280,11 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       if (existing) {
         pre = attendance.map(function(a){
           return (a.date===LA_TODAY&&kbdcAttMatches(a,sid,selectedEmp))
-            ? Object.assign({},a,{checkIn:t,updatedAt:new Date().toISOString()}) : a; });
+            ? Object.assign({},a,{checkIn:t,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}) : a; });
       } else {
         pre = [...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,
           checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:null,locOut:null,
-          lateTag:null,lateMin:0,leaveOverride:(todayLeave?true:undefined),updatedAt:new Date().toISOString()}];
+          lateTag:null,lateMin:0,leaveOverride:(todayLeave?true:undefined),appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
       }
       setAttendance(pre); laSaveAtt(pre);
       try{ kbdcAutoSyncMain(); }catch(e){}
@@ -22291,11 +22318,11 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       if(exists){
         updated=attendance.map(function(a){
           return (a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
-            ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()})
+            ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()})
             :a;
         });
       } else {
-        updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,updatedAt:new Date().toISOString()}];
+        updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
       }
       setAttendance(updated);laSaveAtt(updated);
       try{ kbdcAutoSyncMain(); }catch(e){}
@@ -22317,7 +22344,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var oh0=parseInt(t.split(':')[0]),om0=parseInt(t.split(':')[1]);
       var hrs0=Math.round(((oh0*60+om0)-(ih0*60+im0))/60*10)/10;
       var pre=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
-        ?{...a,checkOut:t,hours:hrs0,updatedAt:new Date().toISOString()}:a;});
+        ?{...a,checkOut:t,hours:hrs0,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});
       setAttendance(pre); laSaveAtt(pre);
       try{ kbdcAutoSyncMain(); }catch(e){}
     })();
@@ -22328,7 +22355,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var ih=parseInt(todayRec.checkIn.split(':')[0]),im=parseInt(todayRec.checkIn.split(':')[1]);
       var oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]);
       var hours=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;
-      var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))?{...a,checkOut:t,hours:hours,locOut:loc,updatedAt:new Date().toISOString()}:a;});
+      var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))?{...a,checkOut:t,hours:hours,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});
       setAttendance(updated);laSaveAtt(updated);
       try{ kbdcAutoSyncMain(); }catch(e){}
     });
@@ -22400,8 +22427,8 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     setNewPin1('');setNewPin2('');setShowChangPin(false);setPinError('');
     showToast('Admin PIN updated successfully');
   }
-  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var attendance=laLoadAtt();var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
-  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
+  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var attendance=laLoadAtt();var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
+  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
 
   var SC=['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#37474F','#AD1457'];
   function doAssign(n,id){laAssignShift(n,id);setShiftMap(function(p){var nx=Object.assign({},p);if(id)nx[n]=id;else delete nx[n];return nx;});showToast('Shift saved',true);}
