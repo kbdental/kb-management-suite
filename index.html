@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-29-1';
+var KBDC_APP_VERSION = '2026-08-29-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -22380,10 +22380,13 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
        holiday is the more useful of the two — and it is what the calendar
        says. 15 August 2026 falls on a Saturday, so week-off would otherwise
        hide it. */
-    if(cHol){cStat='H';cColor='#00695C';}
+    /* Someone who actually turned up is Present, whatever kind of day it was.
+       This used to test the week off first, so a Saturday check-in in a
+       six-day clinic displayed as "WO" and the day's attendance looked lost. */
+    if(cRec&&cRec.checkIn){cStat='P';cColor='#2E7D32';}
+    else if(cHol){cStat='H';cColor='#00695C';}
     else if(isWE){cStat='WO';cColor='#78909C';}
     else if(isFut){cStat='';cColor='#CFD8DC';}
-    else if(cRec&&cRec.checkIn){cStat='P';cColor='#2E7D32';}
     else{cStat='A';cColor='#E53935';}
     calDays.push({d:cd,dStr:dStr,dt:cDt,stat:cStat,color:cColor,isWE:isWE,isFut:isFut,hol:cHol,
                   /* Paid: worked, on a declared holiday, or a week off. */
@@ -22825,7 +22828,12 @@ function LA_CircleProgress({used,total,color}){
 
 function laGetAlloc(){try{return JSON.parse(localStorage.getItem('kbdc_la_alloc')||'{}');}catch(e){return{};}}
 function laSaveAlloc(a){try{localStorage.setItem('kbdc_la_alloc',JSON.stringify(a));localStorage.setItem('kbdc_la_alloc_updatedAt',new Date().toISOString());}catch(e){}}
-function laGetWeekOff(){try{var w=localStorage.getItem('kbdc_la_weekoff');return w?JSON.parse(w):[0,6];}catch(e){return[0,6];}}
+/* Sunday only. This defaulted to [0,6] — a two-day weekend — which for a
+   clinic working Monday to Saturday wrote off every Saturday: check-ins
+   made that day were displayed as "week off" rather than present, and
+   Saturdays were dropped from the payroll month. Change it under
+   Leave & Attendance -> Holidays -> Week Off if a clinic differs. */
+function laGetWeekOff(){try{var w=localStorage.getItem('kbdc_la_weekoff');return w?JSON.parse(w):[0];}catch(e){return[0];}}
 function laSaveWeekOff(days){try{localStorage.setItem('kbdc_la_weekoff',JSON.stringify(days));localStorage.setItem('kbdc_la_weekoff_updatedAt',new Date().toISOString());}catch(e){}}
 function laGetStaffAlloc(alloc,sName,type){if(alloc[sName]&&alloc[sName][type]!=null)return alloc[sName][type];var def={'Casual Leave':12,'Sick / Medical Leave':12,'Medical Leave':12};return def[type]!=null?def[type]:0;}
 
