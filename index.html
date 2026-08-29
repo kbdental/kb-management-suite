@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-29-2';
+var KBDC_APP_VERSION = '2026-08-29-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -4930,6 +4930,19 @@ function kbdcLogStaffNames(){
   return out.sort(function(a,b){ return a.localeCompare(b); });
 }
 // One filter, used by History and Report alike.
+/* "Wednesday, 26 August 2026" — History listed only a time, so there was no
+   way to tell which day a completion belonged to. */
+/* "29 Aug" — for row stamps, where the group heading already gives the day. */
+function kbdcShortDate(dateStr) {
+  var d = new Date(String(dateStr || '').slice(0,10) + 'T00:00:00');
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('en-IN', { day:'numeric', month:'short' });
+}
+function kbdcPrettyDate(dateStr) {
+  var d = new Date(String(dateStr || '').slice(0,10) + 'T00:00:00');
+  if (isNaN(d.getTime())) return String(dateStr || 'Undated');
+  return d.toLocaleDateString('en-IN', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+}
 function kbdcLogFilter(from, to, staff){
   return kbdcLog().filter(function(r){
     var day = String(r.date||'').slice(0,10);
@@ -4947,6 +4960,7 @@ function ManagerDashboard({
   const [mgrNotes, setMgrNotes] = useState(function(){ try { return JSON.parse(localStorage.getItem('kbdc_mgr_notes') || '[]'); } catch(e){ return []; } });
   const [mgrNoteStaff, setMgrNoteStaff] = useState('');
   const [mgrPendStaff, setMgrPendStaff] = useState('');
+  const [mgrActStaff, setMgrActStaff] = useState('');
   const [mgrNotePrio, setMgrNotePrio] = useState('');
   const [mgrRptFrom, setMgrRptFrom] = useState('');
   const [mgrRptTo, setMgrRptTo] = useState('');
@@ -5107,9 +5121,27 @@ function ManagerDashboard({
       color: '#1A237E',
       marginBottom: 10
     }
-  }, (function(){ var L = kbdcLog(); return "RECENT ACTIVITY (" + L.length + ")"; })()),
+  }, (function(){
+       var L = kbdcLogFilter('', '', mgrActStaff);
+       return "RECENT ACTIVITY (" + L.length + (mgrActStaff ? " \u2014 " + mgrActStaff : "") + ")";
+     })()), /*#__PURE__*/React.createElement("div", {
+    style: { display:'flex', alignItems:'center', gap:8, marginBottom:12, flexWrap:'wrap' }
+  }, /*#__PURE__*/React.createElement("span", {
+    style: { fontSize:11, color:'#546E7A', fontWeight:600 }
+  }, "Show activity for"), /*#__PURE__*/React.createElement("select", {
+    className: "hist-sel",
+    value: mgrActStaff,
+    onChange: function(e){ setMgrActStaff(e.target.value); }
+  }, /*#__PURE__*/React.createElement("option", { value: '' }, "Everyone"),
+     kbdcLogStaffNames().map(function(n){
+       return /*#__PURE__*/React.createElement("option", { key:n, value:n }, n); })),
+     mgrActStaff && /*#__PURE__*/React.createElement("button", {
+       onClick: function(){ setMgrActStaff(''); },
+       style: { padding:'5px 11px', border:'1px solid #CFD8DC', borderRadius:7, background:'#fff',
+                cursor:'pointer', fontFamily:"'Poppins',sans-serif", fontSize:11.5, color:'#546E7A' }
+     }, "Clear")),
      (function(){
-       return kbdcLog().slice().sort(function(x,y){
+       return kbdcLogFilter('', '', mgrActStaff).slice().sort(function(x,y){
          return String((y.date||'')+(y.time||'')).localeCompare(String((x.date||'')+(x.time||'')));
        }).slice(0, 30).map(kbdcLogRow);
      })().map((a, i) => /*#__PURE__*/React.createElement("div", {
@@ -5847,37 +5879,47 @@ function HistoryTab({roles}) {
        return rows.length + ' task completion' + (rows.length===1?'':'s') +
               ' in this range across ' + Object.keys(roleSet).length + ' role' +
               (Object.keys(roleSet).length===1?'':'s');
-     })()), /*#__PURE__*/React.createElement("div", {
-    className: "hist-date-grp"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "hist-date-lbl"
-  }, ''), (function(){
+     })()), (function(){
+       /* Group by day, with the date as a heading. Rows previously showed only
+          a time, so there was no way to tell which day a completion was on. */
        var rows = kbdcLogFilter(mgrHistFrom, mgrHistTo, mgrHistStaff).sort(function(x,y){
          return String((y.date||'')+(y.time||'')).localeCompare(String((x.date||'')+(x.time||'')));
        });
-       return rows.map(kbdcLogRow);
-     })().map((r, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "hist-row"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "hist-dot"
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "emp-av",
-    style: {
-      background: r.c,
-      width: 22,
-      height: 22,
-      fontSize: 8
-    }
-  }, r.av), /*#__PURE__*/React.createElement("div", {
-    className: "hist-name"
-  }, r.name), /*#__PURE__*/React.createElement("div", {
-    className: "hist-code"
-  }, r.code), /*#__PURE__*/React.createElement("div", {
-    className: "hist-task"
-  }, r.task), /*#__PURE__*/React.createElement("div", {
-    className: "hist-time"
-  }, r.time)))));
+       if (!rows.length) return /*#__PURE__*/React.createElement("div", {
+         className: "rpt-empty"
+       }, "No task completions in this range.");
+       var order = [], byDay = {};
+       rows.forEach(function(r){
+         var d = String(r.date || '').slice(0,10) || 'Undated';
+         if (!byDay[d]) { byDay[d] = []; order.push(d); }
+         byDay[d].push(r);
+       });
+       return order.map(function(day){
+         return /*#__PURE__*/React.createElement("div", {
+           key: day, className: "hist-date-grp"
+         }, /*#__PURE__*/React.createElement("div", {
+           className: "hist-date-lbl"
+         }, kbdcPrettyDate(day) + "  \u00b7  " + byDay[day].length +
+            " task" + (byDay[day].length === 1 ? "" : "s")),
+         byDay[day].map(kbdcLogRow).map(function(r, i){
+           return /*#__PURE__*/React.createElement("div", {
+             key: i, className: "hist-row"
+           }, /*#__PURE__*/React.createElement("div", { className: "hist-dot" }),
+              /*#__PURE__*/React.createElement("div", {
+                className: "emp-av",
+                style: { background: r.c, width: 22, height: 22, fontSize: 8 }
+              }, r.av),
+              /*#__PURE__*/React.createElement("div", { className: "hist-name" }, r.name),
+              /*#__PURE__*/React.createElement("div", { className: "hist-code" }, r.code),
+              /*#__PURE__*/React.createElement("div", { className: "hist-task" }, r.task),
+              /* The heading already carries the full date, so keep the row
+                 stamp short — but still dated, so a row copied or read out of
+                 context is unambiguous. */
+              /*#__PURE__*/React.createElement("div", { className: "hist-time" },
+                kbdcShortDate(r.date) + "  " + (r.time || '')));
+         }));
+       });
+     })());
 }
 function StaffTab({
   editStaff,
