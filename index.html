@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-31-2';
+var KBDC_APP_VERSION = '2026-08-31-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10260,7 +10260,14 @@ function kbdcAttBackendUrl() {
   try { return localStorage.getItem('kbdc_backend_url_attendance') || KBDC_DEFAULT_ATT_BACKEND_URL || ''; }
   catch(e) { return ''; }
 }
-function kbdcSetAttBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_attendance', u || ''); } catch(e) {} }
+function kbdcSetAttBackendUrl(u) {
+  try {
+    if ((u || '') !== (localStorage.getItem('kbdc_backend_url_attendance') || '')) {
+      localStorage.setItem('kbdc_backend_url_attendance_updatedAt', new Date().toISOString());
+    }
+    localStorage.setItem('kbdc_backend_url_attendance', u || '');
+  } catch(e) {}
+}
 /* True once a distinct Sheet is configured. Until then nothing changes. */
 function kbdcAttBackendSeparate() {
   var u = kbdcAttBackendUrl();
@@ -11154,7 +11161,29 @@ async function kbdcAutoSyncMainRun() {
     // ---- Settings (Week Off days) — single key/value row. Same
     // timestamp-comparison reasoning as Leave Allocation above. ----
     var settingsRows = remote['ClinicSettings'] || [];
-    var weekOffRow = settingsRows.filter(function(r){ return r.key === 'weekOffDays'; })[0];
+    function newestSetting(k) {
+      return settingsRows.filter(function(r){ return r.key === k; })
+        .sort(function(x, y){
+          return (y.updatedAt ? new Date(y.updatedAt).getTime() : 0) -
+                 (x.updatedAt ? new Date(x.updatedAt).getTime() : 0);
+        })[0];
+    }
+    var attUrlRow = newestSetting('attendanceBackendUrl');
+    if (attUrlRow && attUrlRow.value && /^https:\/\/script\.google\.com\//.test(String(attUrlRow.value))) {
+      var remoteAttTime = attUrlRow.updatedAt ? new Date(attUrlRow.updatedAt).getTime() : 0;
+      var localAttTime = (function(){ var t = localStorage.getItem('kbdc_backend_url_attendance_updatedAt'); return t ? new Date(t).getTime() : 0; })();
+      if (String(attUrlRow.value) !== kbdcAttBackendUrl() && remoteAttTime >= localAttTime) {
+        kbdcSetAttBackendUrl(String(attUrlRow.value));
+        try { localStorage.setItem('kbdc_backend_url_attendance_updatedAt', attUrlRow.updatedAt || new Date().toISOString()); } catch(e) {}
+        // This device has just learned attendance moved. Everything it holds
+        // locally — including check-ins it made before it knew — belongs on the
+        // new Sheet, so upload at once rather than waiting for the next cycle.
+        try { localStorage.removeItem('kbdc_push_sigs'); } catch(e) {}
+        try { kbdcAutoSyncAttendance(); } catch(e) {}
+        window.dispatchEvent(new Event('kbdc-modules-sync'));
+      }
+    }
+    var weekOffRow = newestSetting('weekOffDays');
     var remoteWeekOffTime = (weekOffRow && weekOffRow.updatedAt) ? new Date(weekOffRow.updatedAt).getTime() : 0;
     var localWeekOffTime = (function(){ var t = localStorage.getItem('kbdc_la_weekoff_updatedAt'); return t ? new Date(t).getTime() : 0; })();
     if (weekOffRow && weekOffRow.value && remoteWeekOffTime >= localWeekOffTime) {
@@ -11205,6 +11234,15 @@ async function kbdcAutoSyncMainRun() {
       if (rows.length) pushPayload[m.sheet] = rows;
     });
     pushPayload['ClinicSettings'] = [{ key: 'weekOffDays', value: JSON.stringify(laGetWeekOff()), updatedAt: localStorage.getItem('kbdc_la_weekoff_updatedAt') || '' }];
+    // Where attendance lives is a clinic-wide fact, not a per-device preference.
+    // If each device had to be told separately, the phones would keep writing to
+    // the old Sheet while the dashboard read the new one, and today's check-ins
+    // would fall between them. Publish it so every device follows along.
+    if (kbdcAttBackendUrl()) {
+      pushPayload['ClinicSettings'].push({ key: 'attendanceBackendUrl',
+        value: kbdcAttBackendUrl(),
+        updatedAt: localStorage.getItem('kbdc_backend_url_attendance_updatedAt') || '' });
+    }
     var blobRows = [];
     Object.keys(mergedBlobs).forEach(function(k){
       var v = kbdcBlobForBackup(k, mergedBlobs[k]);
