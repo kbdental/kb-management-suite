@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-29-3';
+var KBDC_APP_VERSION = '2026-08-31-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -22026,6 +22026,27 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
           React.createElement('span',{className:'la-panel-link',onClick:()=>setTab('attendance')},'View All →')
         ),
         bStaff.length===0 && React.createElement('div',{className:'la-empty',style:{padding:16,fontSize:11}},'Add staff in My Team to track attendance.'),
+        (function(){
+          /* The sync error, in words, on the screen the owner actually looks
+             at. It was only ever behind a click on the badge, so every report
+             of "attendance is not updating" arrived without the one line that
+             explains it, and cost another round trip to ask for. */
+          var st = kbdcGetSyncStatus();
+          if (!st || !st.err) return null;
+          return React.createElement('div',{
+            style:{margin:'8px 12px',padding:'10px 12px',background:'#FBEAE8',
+                   border:'1px solid #E8A9A2',borderLeft:'4px solid #A82018',
+                   borderRadius:8,fontSize:11,color:'#A82018',lineHeight:1.5}
+          },
+            React.createElement('strong',null,'Attendance is not syncing on this device. '),
+            React.createElement('span',{style:{userSelect:'text'}}, st.err),
+            React.createElement('div',{style:{marginTop:4,color:'#7A1812'}},
+              (st.lastOk ? 'Last successful sync: ' + new Date(st.lastOk).toLocaleString()
+                         : 'No successful sync yet on this device.') +
+              '  ·  App ' + KBDC_APP_VERSION +
+              '  ·  Tap the red badge at the top for the full connection panel.')
+          );
+        })(),
         (function(){
           /* Which phones are running old code.
              Every check-in now records the app version of the device that made
