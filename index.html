@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-31-1';
+var KBDC_APP_VERSION = '2026-08-31-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -2663,6 +2663,7 @@ function SyncDiagnostics({ onClose }) {
     setBusy(true);
     var res = [];
     res.push(await kbdcProbeBackend(kbdcBackendUrl(), 'Main backend'));
+    if (kbdcAttBackendSeparate()) res.push(await kbdcProbeBackend(kbdcAttBackendUrl(), 'Attendance backend'));
     res.push(await kbdcProbeBackend(kbdcInvBackendUrl(), 'Inventory backend'));
     setProbes(res);
     setBusy(false);
@@ -2672,6 +2673,9 @@ function SyncDiagnostics({ onClose }) {
       'App version: ' + KBDC_APP_VERSION,
       'Expects backend: ' + KBDC_EXPECTED_BACKEND,
       'Main backend reported: ' + (s.backendVersion || '(not seen yet)'),
+      'Attendance backend: ' + (kbdcAttBackendSeparate()
+        ? ((s.attBackendVersion || '(not seen yet)') + ' @ ' + kbdcAttBackendUrl())
+        : '(shared with the main backend)'),
       'Inventory backend reported: ' + (s.invBackendVersion || '(not seen yet)'),
       'Last good backup: ' + (s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never'),
       'Last upload: ' + (s.lastPushBytes != null ? (s.lastPushBytes + ' bytes in ' +
@@ -2734,6 +2738,8 @@ function SyncDiagnostics({ onClose }) {
     row('Expects script version', KBDC_EXPECTED_BACKEND),
     row('Main script reported', s.backendVersion || 'not seen yet',
         !!s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND),
+    kbdcAttBackendSeparate() && row('Attendance script reported', s.attBackendVersion || 'not seen yet',
+        !!s.attBackendVersion && s.attBackendVersion !== KBDC_EXPECTED_BACKEND),
     row('Inventory script reported', s.invBackendVersion || 'not seen yet',
         !!s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND),
     row('Last good backup', s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never', !s.lastOk),
@@ -10240,9 +10246,31 @@ function SettingsClientPanel() {
 // automatically, with no per-device setup step. Settings → Data Backend can
 // still override these (e.g. if the clinic ever moves to a new Sheet).
 var KBDC_DEFAULT_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbxfxWxPM4kk4Fa242Ewj2T9ktPsn3irBZjAxhWHCaEZkA0CG1ULBZED7PZWVD22cyDO/exec';
+var KBDC_DEFAULT_ATT_BACKEND_URL = '';
 var KBDC_DEFAULT_INV_BACKEND_URL = 'https://script.google.com/macros/s/AKfycbw5XgC4jJWR3W7fdyLFKYYkd3fZyIeL3xbfzfSy3f_nmuOKLhP0rYjwLq_9ttQ8tjxRrA/exec';
 function kbdcBackendUrl() { try { return localStorage.getItem('kbdc_backend_url') || KBDC_DEFAULT_BACKEND_URL; } catch(e) { return KBDC_DEFAULT_BACKEND_URL; } }
 function kbdcSetBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url', u || ''); } catch(e) {} }
+/* Attendance on its own Sheet.
+   Optional: leave it unset and attendance keeps travelling with the main
+   backend exactly as before. Set it and attendance gets its own Apps Script
+   project — which matters for more than size, because each project has its
+   own daily quota and its own script-wide write lock. Today attendance queues
+   behind 1,186 task rows for both. */
+function kbdcAttBackendUrl() {
+  try { return localStorage.getItem('kbdc_backend_url_attendance') || KBDC_DEFAULT_ATT_BACKEND_URL || ''; }
+  catch(e) { return ''; }
+}
+function kbdcSetAttBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_attendance', u || ''); } catch(e) {} }
+/* True once a distinct Sheet is configured. Until then nothing changes. */
+function kbdcAttBackendSeparate() {
+  var u = kbdcAttBackendUrl();
+  return !!u && u !== kbdcBackendUrl();
+}
+function kbdcAttBackendReq(sheet, action, payload) { return kbdcBackendReqAt(kbdcAttBackendUrl(), sheet, action, payload); }
+var KBDC_ATTENDANCE_MODULES = [
+  { id:'attendance', label:'Attendance', sheet:'Attendance', localKey:'kbdc_la_attendance',
+    get: function(){ return kbdcLsArray('kbdc_la_attendance'); } }
+];
 function kbdcInvBackendUrl() { try { return localStorage.getItem('kbdc_backend_url_inventory') || KBDC_DEFAULT_INV_BACKEND_URL; } catch(e) { return KBDC_DEFAULT_INV_BACKEND_URL; } }
 function kbdcSetInvBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_inventory', u || ''); } catch(e) {} }
 // Optional shared-secret sent with every backend request. When empty (the
@@ -10256,6 +10284,8 @@ var KBDC_DEFAULT_BACKEND_TOKEN = 'kbdc-live-g01_zGKPi54vzk2zzKey7UST';
 function kbdcBackendToken() { try { return localStorage.getItem('kbdc_backend_token') || KBDC_DEFAULT_BACKEND_TOKEN; } catch(e) { return KBDC_DEFAULT_BACKEND_TOKEN; } }
 function kbdcSetBackendToken(t) { try { localStorage.setItem('kbdc_backend_token', t || ''); } catch(e) {} }
 function kbdcSheetLink() { try { return localStorage.getItem('kbdc_sheet_link') || ''; } catch(e) { return ''; } }
+function kbdcAttSheetLink() { try { return localStorage.getItem('kbdc_sheet_link_attendance') || ''; } catch(e) { return ''; } }
+function kbdcSetAttSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link_attendance', u || ''); } catch(e) {} }
 function kbdcSetSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link', u || ''); } catch(e) {} }
 function kbdcInvSheetLink() { try { return localStorage.getItem('kbdc_sheet_link_inventory') || ''; } catch(e) { return ''; } }
 function kbdcSetInvSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link_inventory', u || ''); } catch(e) {} }
@@ -10326,6 +10356,14 @@ function kbdcLocalTime(d) {
 }
 function kbdcToday() { return kbdcLocalDate(); }
 
+/* A check-in used to call the main sync directly. With attendance on its own
+   Sheet the main sync no longer carries it, so send it to the right place. */
+function kbdcSyncAttendanceNow() {
+  try {
+    if (kbdcAttBackendSeparate()) { kbdcAutoSyncAttendance(); }
+    else { kbdcAutoSyncMain(); }
+  } catch(e) {}
+}
 function kbdcLsArray(key) { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } }
 
 async function kbdcBackendReqAt(u, sheet, action, payload) {
@@ -10908,7 +10946,15 @@ async function kbdcAutoSyncMainRun() {
   var url = kbdcBackendUrl();
   if (!url) return;
   try {
-    var pushMods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
+    // Attendance travels on its own backend once one is configured, so the
+    // main sync must not also carry it — otherwise both write the same rows
+    // to two different Sheets and the two copies drift apart.
+    var attSeparate = kbdcAttBackendSeparate();
+    var pushMods = KBDC_BACKEND_MODULES.filter(function(m){
+      if (m.id === 'staff') return false;
+      if (attSeparate && m.id === 'attendance') return false;
+      return true;
+    });
     var sheetNames = ['StaffFull', 'ClinicSettings', 'AppData'].concat(pushMods.map(function(m){ return m.sheet; }));
     // Read the busy tabs every cycle and the rarely-changing ones every tenth,
     // in small groups. Omitting a tab is safe — the merges below union by id,
@@ -10931,7 +10977,8 @@ async function kbdcAutoSyncMainRun() {
     if (!kbdcFirstPullDone) {
       kbdcFirstPullDone = true;
       try {
-        var quick = await kbdcBackendPullBatch(url, ['Attendance', 'StaffFull'], 1);
+        var quick = await kbdcBackendPullBatch(url,
+          attSeparate ? ['StaffFull'] : ['Attendance', 'StaffFull'], 1);
         var qAtt = ((quick.data || {})['Attendance'] || []).map(kbdcUnflattenRow);
         if (qAtt.length) {
           var merged = kbdcUnionMergeById(kbdcLsArray('kbdc_la_attendance'), qAtt);
@@ -11229,6 +11276,65 @@ async function kbdcAutoSyncMainRun() {
     kbdcNoteSyncOutcome(false);
   }
 }
+/* Attendance's own sync, when it has its own Sheet.
+   Deliberately tiny: one tab, so the reply is a few kilobytes rather than a
+   megabyte, it holds its own lock, and it draws on its own daily quota. This
+   is the data the clinic actually depends on hour to hour, so it should not
+   share a queue with anything else. */
+var kbdcSyncAttRunning = false, kbdcSyncAttAgain = false;
+async function kbdcAutoSyncAttendance() {
+  if (!kbdcAttBackendSeparate()) return;
+  if (kbdcSyncAttRunning) { kbdcSyncAttAgain = true; return; }
+  kbdcSyncAttRunning = true;
+  try { await kbdcAutoSyncAttendanceRun(); }
+  finally {
+    kbdcSyncAttRunning = false;
+    if (kbdcSyncAttAgain) { kbdcSyncAttAgain = false; return kbdcAutoSyncAttendance(); }
+  }
+}
+async function kbdcAutoSyncAttendanceRun() {   // still folded into the main sync
+  var url = kbdcAttBackendUrl();
+  try {
+    var got = await kbdcPullSheets(url, ['Attendance'], false);
+    kbdcSetSyncStatus({ attBackendVersion: got.version || '(pre-versioning)' });
+
+    var remote = ((got.data || {})['Attendance'] || []).map(kbdcUnflattenRow);
+    if (remote.length) {
+      var merged = kbdcUnionMergeById(kbdcLsArray('kbdc_la_attendance'), remote);
+      var next = JSON.stringify(merged);
+      if (localStorage.getItem('kbdc_la_attendance') !== next) {
+        localStorage.setItem('kbdc_la_attendance', next);
+        window.dispatchEvent(new Event('kbdc-modules-sync'));
+      }
+    }
+
+    var rows = kbdcLsArray('kbdc_la_attendance').map(kbdcFlattenRow);
+    if (rows.length) {
+      /* Same rule as the main backup: send what changed, but never skip
+         today's rows on the strength of a signature — the cost of getting
+         that wrong is somebody marked absent for the day. */
+      var sigs = kbdcPushSigs();
+      var sig = kbdcRowsSig(rows);
+      var send = (sigs['Attendance'] !== sig) ? rows : rows.filter(function(r){
+        return String((r && r.date) || '').slice(0, 10) === kbdcToday();
+      });
+      if (send.length) {
+        var chunks = kbdcSplitPushChunks({ Attendance: send });
+        for (var i = 0; i < chunks.length; i++) {
+          var res = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: chunks[i] });
+          if (res && res.ok === false) throw new Error(res.error || 'Attendance backup was rejected');
+        }
+      }
+      sigs['Attendance'] = sig;
+      kbdcSetPushSigs(sigs);
+    }
+    kbdcSetSyncStatus({ lastOk: Date.now(), err: '' });
+    kbdcNoteSyncOutcome(true);
+  } catch (e) {
+    kbdcSetSyncStatus({ err: 'Attendance Sheet: ' + ((e && e.message) ? e.message : 'sync failed') });
+    kbdcNoteSyncOutcome(false);
+  }
+}
 async function kbdcAutoSyncInventory() {
   var url = kbdcInvBackendUrl();
   if (!url) return;
@@ -11322,6 +11428,7 @@ async function kbdcAutoSyncInventory() {
 }
 async function kbdcAutoSyncCycle() {
   await kbdcAutoSyncMain();
+  await kbdcAutoSyncAttendance();
   // Inventory is a SECOND Apps Script project with its own quota, and stock
   // moves a few times a day rather than a few times a minute. Calling it on
   // every cycle doubled this clinic's Apps Script usage for almost no benefit.
@@ -11626,7 +11733,17 @@ function DataBackendTab() {
     e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:4 } }, '1. Main Backend — everything except Inventory'),
     e2(BackendGroup, { modules: KBDC_BACKEND_MODULES, getUrl: kbdcBackendUrl, setUrl: kbdcSetBackendUrl, reqFn: kbdcBackendReq, pushLabel: '⬆ Push Everything Now', getSheetLink: kbdcSheetLink, setSheetLink: kbdcSetSheetLink }),
 
-    e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:8 } }, '2. Inventory Backend — its own separate Sheet'),
+    e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:8 } },
+      '2. Attendance Backend — optional, its own separate Sheet'),
+    e2('div', { style:{ fontSize:11.5, color:'#6B7280', marginBottom:8, lineHeight:1.6 } },
+      'Leave this empty and attendance is stored with the Main Backend, as before. ' +
+      'Give it its own Sheet and attendance stops queueing behind the task lists: a separate ' +
+      'Apps Script project has its own daily quota and its own write lock, and the reply the ' +
+      'app has to download each time is a few kilobytes instead of the whole database. ' +
+      'Paste the same backend/Code.gs into the new Sheet — it needs no changes.'),
+    e2(BackendGroup, { modules: KBDC_ATTENDANCE_MODULES, getUrl: kbdcAttBackendUrl, setUrl: kbdcSetAttBackendUrl, reqFn: kbdcAttBackendReq, pushLabel: '⬆ Push Attendance Now', getSheetLink: kbdcAttSheetLink, setSheetLink: kbdcSetAttSheetLink }),
+
+    e2('div', { style:{ fontSize:13, fontWeight:800, color:'#111827', marginBottom:8, marginTop:8 } }, '3. Inventory Backend — its own separate Sheet'),
     e2(BackendGroup, { modules: KBDC_INVENTORY_MODULES, getUrl: kbdcInvBackendUrl, setUrl: kbdcSetInvBackendUrl, reqFn: kbdcInvBackendReq, pushLabel: '⬆ Push Inventory Now', getSheetLink: kbdcInvSheetLink, setSheetLink: kbdcSetInvSheetLink }),
 
     e2('div', { style:{ background:'#E8F5E9', borderRadius:12, border:'1px solid #A5D6A7', padding:'16px 18px' } },
@@ -22350,7 +22467,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
           lateTag:null,lateMin:0,leaveOverride:(todayLeave?true:undefined),appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
       }
       setAttendance(pre); laSaveAtt(pre);
-      try{ kbdcAutoSyncMain(); }catch(e){}
+      kbdcSyncAttendanceNow();
     })();
 
     laFetchLocation().then(function(loc){
@@ -22388,7 +22505,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
         updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
       }
       setAttendance(updated);laSaveAtt(updated);
-      try{ kbdcAutoSyncMain(); }catch(e){}
+      kbdcSyncAttendanceNow();
       if(lateTag==='L1') showToast('Checked in. Late arrival — L1 (1st late this month, no deduction)');
       else if(lateTag==='L2') showToast('Checked in. Late arrival — L2 (2nd late this month, no deduction)');
       else if(lateTag==='late-ded') showToast('Checked in. 3rd+ late this month — counts as half-day deduction');
@@ -22409,7 +22526,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var pre=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
         ?{...a,checkOut:t,hours:hrs0,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});
       setAttendance(pre); laSaveAtt(pre);
-      try{ kbdcAutoSyncMain(); }catch(e){}
+      kbdcSyncAttendanceNow();
     })();
 
     laFetchLocation().then(function(loc){
@@ -22420,7 +22537,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var hours=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;
       var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))?{...a,checkOut:t,hours:hours,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});
       setAttendance(updated);laSaveAtt(updated);
-      try{ kbdcAutoSyncMain(); }catch(e){}
+      kbdcSyncAttendanceNow();
     });
   }
 
@@ -22493,8 +22610,8 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     setNewPin1('');setNewPin2('');setShowChangPin(false);setPinError('');
     showToast('Admin PIN updated successfully');
   }
-  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var attendance=laLoadAtt();var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
-  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);try{ kbdcAutoSyncMain(); }catch(e){}});}
+  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var attendance=laLoadAtt();var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();});}
+  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();});}
 
   var SC=['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#37474F','#AD1457'];
   function doAssign(n,id){laAssignShift(n,id);setShiftMap(function(p){var nx=Object.assign({},p);if(id)nx[n]=id;else delete nx[n];return nx;});showToast('Shift saved',true);}
