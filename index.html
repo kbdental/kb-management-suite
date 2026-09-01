@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-01-1';
+var KBDC_APP_VERSION = '2026-09-01-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10767,9 +10767,15 @@ async function kbdcPullSheets(url, names, forceAll) {
   var want = names;
   if (stamps && !forceAll) {
     want = names.filter(function(n) {
-      // Never read here before, or the Sheet says this tab has changed since.
-      var now = (stamps[n] === undefined) ? 0 : stamps[n];
-      return prevRevs[n] === undefined || String(prevRevs[n]) !== String(now);
+      // Skip a tab ONLY when both sides carry a real revision and they agree.
+      // A missing remote stamp used to be read as revision 0 and stored as
+      // such, so it matched for ever after and the tab was read exactly once
+      // per device and then never again — the Sheet could change all day and
+      // this device would not look. A tab the Sheet cannot vouch for must be
+      // read, not assumed unchanged.
+      if (stamps[n] === undefined) return true;
+      if (prevRevs[n] === undefined) return true;
+      return String(prevRevs[n]) !== String(stamps[n]);
     });
   }
 
@@ -10968,7 +10974,15 @@ async function kbdcAutoSyncMainRun() {
       if (attSeparate && m.id === 'attendance') return false;
       return true;
     });
-    var sheetNames = ['StaffFull', 'ClinicSettings', 'AppData'].concat(pushMods.map(function(m){ return m.sheet; }));
+    // What this device READS is not what it WRITES. Attendance stops being
+    // written here once it has its own Sheet, but it must still be read from
+    // the main one: any device that has not yet learned attendance moved is
+    // still writing check-ins there, and if nobody reads them those people
+    // simply show Absent. Deriving the read list from the write list is what
+    // stranded five of ten staff — they checked in after the switch, onto a
+    // Sheet this device had quietly stopped looking at.
+    var readMods = KBDC_BACKEND_MODULES.filter(function(m){ return m.id !== 'staff'; });
+    var sheetNames = ['StaffFull', 'ClinicSettings', 'AppData'].concat(readMods.map(function(m){ return m.sheet; }));
     // Read the busy tabs every cycle and the rarely-changing ones every tenth,
     // in small groups. Omitting a tab is safe — the merges below union by id,
     // so a tab absent from the reply leaves this device's copy alone.
@@ -10991,7 +11005,7 @@ async function kbdcAutoSyncMainRun() {
       kbdcFirstPullDone = true;
       try {
         var quick = await kbdcBackendPullBatch(url,
-          attSeparate ? ['StaffFull'] : ['Attendance', 'StaffFull'], 1);
+          ['Attendance', 'StaffFull'], 1);
         var qAtt = ((quick.data || {})['Attendance'] || []).map(kbdcUnflattenRow);
         if (qAtt.length) {
           var merged = kbdcUnionMergeById(kbdcLsArray('kbdc_la_attendance'), qAtt);
@@ -11131,7 +11145,7 @@ async function kbdcAutoSyncMainRun() {
     // before this cycle ran can never be wiped out by an older remote
     // snapshot that hasn't seen it yet. ----
     var genericChanged = false;
-    pushMods.filter(function(m){ return m.localKey && m.id !== 'taskcompletions'; }).forEach(function(m) {
+    readMods.filter(function(m){ return m.localKey && m.id !== 'taskcompletions'; }).forEach(function(m) {
       var remoteRows = (remote[m.sheet] || []).map(kbdcUnflattenRow);
       var localRows = kbdcLsArray(m.localKey);
       var mergedRows = kbdcUnionMergeById(localRows, remoteRows);
@@ -22231,8 +22245,11 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
             React.createElement('strong',null,'Out of date: '),
             stale.join(', '),
             stale.length === 1 ? "'s phone is" : "'s phones are",
-            ' running an older version of the app, so their attendance may not sync. ',
-            'Fully close the app on it and open it again once — after that it updates itself.'
+            ' running an older version of the app. Their attendance did arrive; ',
+            'this is only worth clearing so they get the latest fixes. ',
+            'Fully close the app on it and open it again once — after that it updates itself. ',
+            'Anyone missing from the list below is a separate matter: this notice ',
+            'can only name people whose attendance came through.'
           );
         })(),
         (function(){
