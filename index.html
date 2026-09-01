@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-08-31-3';
+var KBDC_APP_VERSION = '2026-09-01-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -2681,7 +2681,7 @@ function SyncDiagnostics({ onClose }) {
       'Last upload: ' + (s.lastPushBytes != null ? (s.lastPushBytes + ' bytes in ' +
         (s.lastPushChunks || 0) + ' request(s))') : 'not measured yet'),
       'Last uploaded tabs: ' + (s.lastPushSheets || '—'),
-      'Current error: ' + (s.err || '(none)'),
+      'Current error: ' + (kbdcSyncAnyErr(s) || '(none)'),
     ];
     // Today's attendance as this device sees it, and who it can be matched to.
     try {
@@ -2732,8 +2732,8 @@ function SyncDiagnostics({ onClose }) {
         'Google Sheet connection'),
       React.createElement('button', { onClick:onClose, style:{ border:'none', background:'none',
         fontSize:20, cursor:'pointer', color:'#90A4AE', lineHeight:1 } }, '×')),
-    s.err && React.createElement('div', { style:{ background:'#FFEBEE', color:'#B71C1C', padding:'10px 12px',
-      borderRadius:8, fontSize:12.5, marginBottom:14, userSelect:'text', fontWeight:600 } }, s.err),
+    kbdcSyncAnyErr(s) && React.createElement('div', { style:{ background:'#FFEBEE', color:'#B71C1C', padding:'10px 12px',
+      borderRadius:8, fontSize:12.5, marginBottom:14, userSelect:'text', fontWeight:600 } }, kbdcSyncAnyErr(s)),
     row('App version', KBDC_APP_VERSION),
     row('Expects script version', KBDC_EXPECTED_BACKEND),
     row('Main script reported', s.backendVersion || 'not seen yet',
@@ -2769,7 +2769,7 @@ function SyncDiagnostics({ onClose }) {
                 localStorage.removeItem('kbdc_backend_url');
                 localStorage.removeItem('kbdc_backend_url_inventory');
               } catch(e) {}
-              kbdcSetSyncStatus({ failStreak: 0, err: '' });
+              kbdcSetSyncStatus({ failStreak: 0, err: '', attErr: '', invErr: '' });
               setBusy(true);
               kbdcAutoSyncCycle().finally(function(){ setBusy(false); setProbes(null); });
             },
@@ -2822,7 +2822,7 @@ function SyncDiagnostics({ onClose }) {
             localStorage.removeItem('kbdc_pull_sizes');
             localStorage.removeItem('kbdc_pull_cycle');
           } catch(e) {}
-          kbdcSetSyncStatus({ failStreak: 0, err: '' });
+          kbdcSetSyncStatus({ failStreak: 0, err: '', attErr: '', invErr: '' });
           setBusy(true);
           kbdcAutoSyncCycle().finally(function(){ setBusy(false); setProbes(null); });
         },
@@ -2877,7 +2877,9 @@ function SyncStatusBadge() {
   var staleBackends = [];
   if (s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Main (' + s.backendVersion + ')');
   if (s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Inventory (' + s.invBackendVersion + ')');
-  if (!s.err && staleBackends.length) {
+  if (s.attBackendVersion && s.attBackendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Attendance (' + s.attBackendVersion + ')');
+  var anyErr = kbdcSyncAnyErr(s);
+  if (!anyErr && staleBackends.length) {
     return React.createElement(React.Fragment, null,
       React.createElement('div', {
         onClick: function(){ setShowDiag(true); },
@@ -2889,9 +2891,9 @@ function SyncStatusBadge() {
       }, '⚠ Backend needs redeploy'),
       showDiag && React.createElement(SyncDiagnostics, { onClose: function(){ setShowDiag(false); } }));
   }
-  if (s.err) {
+  if (anyErr) {
     color='#B71C1C'; bg='#FFEBEE'; label='⚠ Backup issue';
-    title='Last backup did not reach Google Sheets: '+s.err+(s.lastOk?('. Last good backup '+rel(s.lastOk)+'.'):'. No successful backup yet.');
+    title='Last backup did not reach Google Sheets: '+anyErr+(s.lastOk?('. Last good backup '+rel(s.lastOk)+'.'):'. No successful backup yet.');
   } else if (s.lastOk) {
     color='#1B5E20'; bg='#E8F5E9'; label='✓ Backed up '+rel(s.lastOk);
     title='Your data was saved to Google Sheets '+rel(s.lastOk)+'.';
@@ -10290,6 +10292,10 @@ function kbdcSetInvBackendUrl(u) { try { localStorage.setItem('kbdc_backend_url_
 var KBDC_DEFAULT_BACKEND_TOKEN = 'kbdc-live-g01_zGKPi54vzk2zzKey7UST';
 function kbdcBackendToken() { try { return localStorage.getItem('kbdc_backend_token') || KBDC_DEFAULT_BACKEND_TOKEN; } catch(e) { return KBDC_DEFAULT_BACKEND_TOKEN; } }
 function kbdcSetBackendToken(t) { try { localStorage.setItem('kbdc_backend_token', t || ''); } catch(e) {} }
+function kbdcSyncAnyErr(s) {
+  s = s || {};
+  return [s.err, s.attErr, s.invErr].filter(function(x){ return !!x; }).join(' · ');
+}
 function kbdcSheetLink() { try { return localStorage.getItem('kbdc_sheet_link') || ''; } catch(e) { return ''; } }
 function kbdcAttSheetLink() { try { return localStorage.getItem('kbdc_sheet_link_attendance') || ''; } catch(e) { return ''; } }
 function kbdcSetAttSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link_attendance', u || ''); } catch(e) {} }
@@ -11366,10 +11372,10 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
       sigs['Attendance'] = sig;
       kbdcSetPushSigs(sigs);
     }
-    kbdcSetSyncStatus({ lastOk: Date.now(), err: '' });
+    kbdcSetSyncStatus({ attLastOk: Date.now(), attErr: '' });
     kbdcNoteSyncOutcome(true);
   } catch (e) {
-    kbdcSetSyncStatus({ err: 'Attendance Sheet: ' + ((e && e.message) ? e.message : 'sync failed') });
+    kbdcSetSyncStatus({ attErr: 'Attendance Sheet: ' + ((e && e.message) ? e.message : 'sync failed') });
     kbdcNoteSyncOutcome(false);
   }
 }
@@ -11460,7 +11466,7 @@ async function kbdcAutoSyncInventory() {
     // to show for it. Surface it instead.
     if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
   } catch (e) {
-    kbdcSetSyncStatus({ err: 'Inventory: ' + ((e && e.message) ? e.message : 'sync failed') });
+    kbdcSetSyncStatus({ invErr: 'Inventory: ' + ((e && e.message) ? e.message : 'sync failed') });
     kbdcNoteSyncOutcome(false);
   }
 }
