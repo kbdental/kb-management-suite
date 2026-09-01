@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-01-2';
+var KBDC_APP_VERSION = '2026-09-01-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -22220,6 +22220,41 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
                          : 'No successful sync yet on this device.') +
               '  ·  App ' + KBDC_APP_VERSION +
               '  ·  Tap the red badge at the top for the full connection panel.')
+          );
+        })(),
+        (function(){
+          /* One quiet line, always visible. The running version was printed
+             only inside the red error box, so on a device reporting a healthy
+             sync there was no way to tell whether an update had actually
+             landed — a reload that silently served a cached copy looked
+             exactly like a reload that worked. The counts sit next to it
+             because they separate the two remaining possibilities without
+             anyone having to open a Sheet: check-ins that are on this device
+             but not on screen are a display problem, while check-ins that
+             never arrive are a sync problem. */
+          var stD = kbdcGetSyncStatus() || {};
+          var ago = function(t) {
+            if (!t) return 'never';
+            var s = Math.round((Date.now() - t) / 1000);
+            if (s < 90) return s + 's ago';
+            if (s < 5400) return Math.round(s / 60) + 'm ago';
+            return Math.round(s / 3600) + 'h ago';
+          };
+          var todayRows = 0;
+          try {
+            todayRows = kbdcLsArray('kbdc_la_attendance').filter(function(a){
+              return String((a && a.date) || '').slice(0, 10) === kbdcToday() && a.checkIn;
+            }).length;
+          } catch (e) {}
+          return React.createElement('div', {
+            style:{ margin:'2px 12px 8px', fontSize:10, color:'#94A3B8',
+                    lineHeight:1.5, userSelect:'text' }
+          },
+            'App ' + KBDC_APP_VERSION + '  ·  ' + todayRows + ' check-in' +
+            (todayRows === 1 ? '' : 's') + ' held on this device today  ·  main Sheet read ' +
+            ago(stD.lastOk) +
+            (kbdcAttBackendSeparate() ? ('  ·  Attendance Sheet read ' + ago(stD.attLastOk))
+                                      : '  ·  attendance shares the main Sheet')
           );
         })(),
         (function(){
