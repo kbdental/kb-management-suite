@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-01-3';
+var KBDC_APP_VERSION = '2026-09-01-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11189,11 +11189,14 @@ async function kbdcAutoSyncMainRun() {
         })[0];
     }
     var attUrlRow = newestSetting('attendanceBackendUrl');
-    if (attUrlRow && attUrlRow.value && /^https:\/\/script\.google\.com\//.test(String(attUrlRow.value))) {
+    var attUrlVal = attUrlRow ? String(attUrlRow.value == null ? '' : attUrlRow.value) : null;
+    if (attUrlRow && (attUrlVal === '' || /^https:\/\/script\.google\.com\//.test(attUrlVal))) {
       var remoteAttTime = attUrlRow.updatedAt ? new Date(attUrlRow.updatedAt).getTime() : 0;
       var localAttTime = (function(){ var t = localStorage.getItem('kbdc_backend_url_attendance_updatedAt'); return t ? new Date(t).getTime() : 0; })();
-      if (String(attUrlRow.value) !== kbdcAttBackendUrl() && remoteAttTime >= localAttTime) {
-        kbdcSetAttBackendUrl(String(attUrlRow.value));
+      // An untimestamped row is a leftover from an earlier write; it must not
+      // be able to switch a device back on.
+      if (attUrlVal !== kbdcAttBackendUrl() && remoteAttTime && remoteAttTime >= localAttTime) {
+        kbdcSetAttBackendUrl(attUrlVal);
         try { localStorage.setItem('kbdc_backend_url_attendance_updatedAt', attUrlRow.updatedAt || new Date().toISOString()); } catch(e) {}
         // This device has just learned attendance moved. Everything it holds
         // locally — including check-ins it made before it knew — belongs on the
@@ -11258,10 +11261,12 @@ async function kbdcAutoSyncMainRun() {
     // If each device had to be told separately, the phones would keep writing to
     // the old Sheet while the dashboard read the new one, and today's check-ins
     // would fall between them. Publish it so every device follows along.
-    if (kbdcAttBackendUrl()) {
+    var attUrlStamp = localStorage.getItem('kbdc_backend_url_attendance_updatedAt') || '';
+    if (attUrlStamp) {
+      // Published even when empty: an empty value with a newer timestamp is
+      // how "attendance goes back to the main Sheet" reaches every device.
       pushPayload['ClinicSettings'].push({ key: 'attendanceBackendUrl',
-        value: kbdcAttBackendUrl(),
-        updatedAt: localStorage.getItem('kbdc_backend_url_attendance_updatedAt') || '' });
+        value: kbdcAttBackendUrl(), updatedAt: attUrlStamp });
     }
     var blobRows = [];
     Object.keys(mergedBlobs).forEach(function(k){
@@ -11471,14 +11476,22 @@ async function kbdcAutoSyncInventory() {
       var rows = m.get().map(kbdcFlattenRow);
       if (rows.length) pushPayload[m.sheet] = rows;
     });
-    var invRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: pushPayload });
-    // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
-    // kbdcBackendReqAt does not treat as an error. Combined with the empty
-    // catch below, an Inventory push that the backend actually rejected
-    // (script lock timeout, quota, a bad token) looked exactly like success —
-    // so stock entries silently never reached the Sheet with nothing anywhere
-    // to show for it. Surface it instead.
-    if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
+    // Sent in size-bounded chunks, exactly as the main backup is. This used to
+    // go as ONE request carrying every item and every transaction, and it grew
+    // until Apps Script would no longer accept it: the Sheet's transaction log
+    // stops dead on 2 May 2026 while the app kept recording perfectly well on
+    // each device. That is the whole of "the inventory shows the transaction
+    // but does not update" — the entries were never lost, they simply had no
+    // request small enough to travel in.
+    var invChunks = kbdcSplitPushChunks(pushPayload);
+    for (var ci = 0; ci < invChunks.length; ci++) {
+      // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
+      // kbdcBackendReqAt does not treat as an error. Combined with the empty
+      // catch below, an Inventory push that the backend actually rejected
+      // (script lock timeout, quota, a bad token) looked exactly like success.
+      var invRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: invChunks[ci] });
+      if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
+    }
   } catch (e) {
     kbdcSetSyncStatus({ invErr: 'Inventory: ' + ((e && e.message) ? e.message : 'sync failed') });
     kbdcNoteSyncOutcome(false);
