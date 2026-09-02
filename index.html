@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-01-4';
+var KBDC_APP_VERSION = '2026-09-01-5';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10906,6 +10906,57 @@ function kbdcUnionMergeById(localRows, remoteRows) {
 // reflected a stock in/out. Merge on name+category instead and keep the NEWER
 // edit (by the updatedAt the inventory app now stamps on every change), so one
 // item stays one row and its stock updates everywhere.
+/* Stock on hand was kept as a running total ON the item row, and item rows
+   merge whole-row-newest-wins. So two people booking stock before their phones
+   had synced destroyed each other's work: device A books IN 5 (10 -> 15),
+   device B, still showing 10, books OUT 3 (10 -> 7), B's row is newer, and A's
+   five units are gone. Same action, different answer, wrong numbers — with
+   nothing to show anything had happened.
+
+   The transaction ledger has none of that problem: every movement is its own
+   row with its own id, and rows merge by union, so no device can erase
+   another's entry. Stock is therefore derived from the ledger rather than
+   trusted from a field two devices race to overwrite.
+
+   The opening balance is recovered once per item from the totals that row
+   already carries (stock minus what its own history accounts for), so items
+   whose history predates the ledger keep their correct figure instead of
+   collapsing to zero. */
+function kbdcReconcileInvStock() {
+  var items, tx;
+  try { items = kbdcLsArray('kbdc_inv_items'); tx = kbdcLsArray('kbdc_inv_tx'); }
+  catch (e) { return false; }
+  if (!items.length) return false;
+  function key(r){ return String((r && r.name) || '').trim().toLowerCase() + '||' +
+                          String((r && r.cat) || '').trim().toLowerCase(); }
+  var moved = {};
+  tx.forEach(function(t){
+    if (!t || !t.name) return;
+    var k = key(t), q = Number(t.qty) || 0;
+    if (!moved[k]) moved[k] = { inQty: 0, outQty: 0 };
+    if (String(t.type).toUpperCase() === 'OUT') moved[k].outQty += q;
+    else moved[k].inQty += q;
+  });
+  var changed = false;
+  var next = items.map(function(it){
+    if (!it || !it.name) return it;
+    var m = moved[key(it)] || { inQty: 0, outQty: 0 };
+    var opening = it.openingStock;
+    if (opening === undefined || opening === null || isNaN(Number(opening))) {
+      opening = (Number(it.stock) || 0) - ((Number(it.totalIn) || 0) - (Number(it.totalOut) || 0));
+    }
+    opening = Number(opening) || 0;
+    var stock = opening + m.inQty - m.outQty;
+    if (Number(it.stock) === stock && Number(it.totalIn) === m.inQty &&
+        Number(it.totalOut) === m.outQty && Number(it.openingStock) === opening) return it;
+    changed = true;
+    var price = Number(it.price) || 0;
+    return Object.assign({}, it, { openingStock: opening, totalIn: m.inQty,
+      totalOut: m.outQty, stock: stock, value: Math.round(price * stock * 100) / 100 });
+  });
+  if (changed) { try { localStorage.setItem('kbdc_inv_items', JSON.stringify(next)); } catch (e) { return false; } }
+  return changed;
+}
 function kbdcMergeInvItemsByNameCat(localRows, remoteRows) {
   function key(r){ return String(r.name||'').trim().toLowerCase()+'||'+String(r.cat||'').trim().toLowerCase(); }
   function ts(x){ var t=x&&x.updatedAt; if(!t) return 0; var n=new Date(t).getTime(); return isNaN(n)?0:n; }
@@ -11460,6 +11511,8 @@ async function kbdcAutoSyncInventory() {
       var next = JSON.stringify(mergedRows);
       if (localStorage.getItem(localKey) !== next) localStorage.setItem(localKey, next);
     });
+    kbdcReconcileInvStock();
+
     // The Inventory screen is an embedded mini-app that loads its data into
     // memory once. Nudge it to re-read what this sync just merged, otherwise
     // it keeps showing the snapshot it started with and the data looks like
