@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-03-4';
+var KBDC_APP_VERSION = '2026-09-03-5';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10303,6 +10303,40 @@ function kbdcSyncAnyErr(s) {
   s = s || {};
   return [s.err, s.attErr, s.invErr].filter(function(x){ return !!x; }).join(' · ');
 }
+/* A backend accepts whatever it is sent and creates a tab for it, so one URL
+   pasted into the wrong box silently fills a Sheet with the other app's data
+   — which is how the Inventory Sheet ended up holding StaffFull with Aadhaar
+   and PAN numbers, payroll, Tasks and LeaveRequests, and the Management Sheet
+   ended up with inventory tabs. The Sheet itself can say which it is: ask it
+   what tabs it already has, and object before a single row is written. */
+async function kbdcCheckBackendKind(url, modules) {
+  var INV = ['InventoryItems', 'InventoryStockIn', 'InventoryStockOut'];
+  var MAIN = ['Tasks', 'StaffFull', 'TaskCompletions', 'RoleEmployees', 'LeaveRequests'];
+  var wantInv = (modules || []).some(function(m){ return /^Inventory/.test(m.sheet); });
+  var tabs = [];
+  try {
+    var st = await kbdcBackendReqBatch(url, 'getStamps', {});
+    if (!st || st.ok === false || !st.stamps) return '';   // nothing to judge on
+    tabs = Object.keys(st.stamps);
+  } catch (e) { return ''; }
+  if (!tabs.length) return '';
+  var hasInv = INV.some(function(t){ return tabs.indexOf(t) >= 0; });
+  var hasMain = MAIN.some(function(t){ return tabs.indexOf(t) >= 0; });
+  if (wantInv && hasMain && !hasInv) {
+    return '\u26A0 Saved, but this looks like the MANAGEMENT Sheet — it already holds ' +
+      'Tasks and staff records, not stock. Sending inventory here will add stock tabs to it.';
+  }
+  if (!wantInv && hasInv && !hasMain) {
+    return '\u26A0 Saved, but this looks like the INVENTORY Sheet — it already holds stock ' +
+      'tabs and none of the management ones. Sending everything here will copy staff records, ' +
+      'payroll and tasks into your stock Sheet.';
+  }
+  if (hasInv && hasMain) {
+    return '\u26A0 Saved. This Sheet already holds BOTH stock tabs and management tabs, which ' +
+      'usually means a URL was once pasted into the wrong box. Worth checking before it grows.';
+  }
+  return '';
+}
 function kbdcSheetLink() { try { return localStorage.getItem('kbdc_sheet_link') || ''; } catch(e) { return ''; } }
 function kbdcAttSheetLink() { try { return localStorage.getItem('kbdc_sheet_link_attendance') || ''; } catch(e) { return ''; } }
 function kbdcSetAttSheetLink(u) { try { localStorage.setItem('kbdc_sheet_link_attendance', u || ''); } catch(e) {} }
@@ -11513,7 +11547,7 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
    call settles it — if a few hundred bytes come back, the URL is fine. */
 async function kbdcDiagnose404(url, label) {
   try {
-    var probe = await kbdcBackendReqAt(url, 'getStamps', {});
+    var probe = await kbdcBackendReqBatch(url, 'getStamps', {});
     if (probe) {
       return label + ' is reachable, but a reply was too large to arrive. ' +
         'The app is already splitting its requests; if this keeps happening the ' +
@@ -11865,10 +11899,15 @@ function DataBackendTab() {
     var sheetUrl0 = React.useState(getSheetLink ? getSheetLink() : ''); var sheetUrl = sheetUrl0[0]; var setSheetUrlSt = sheetUrl0[1];
     var sheetSavedMsg0 = React.useState(''); var sheetSavedMsg = sheetSavedMsg0[0]; var setSheetSavedMsg = sheetSavedMsg0[1];
 
-    function saveUrl() {
-      setUrl(url.trim());
+    async function saveUrl() {
+      var u = url.trim();
+      setUrl(u);
       setSavedMsg('✓ Saved');
-      setTimeout(function(){ setSavedMsg(''); }, 2500);
+      if (!u) { setTimeout(function(){ setSavedMsg(''); }, 2500); return; }
+      var warn = '';
+      try { warn = await kbdcCheckBackendKind(u, modules); } catch (e) {}
+      if (warn) { setSavedMsg(warn); }       // left on screen: it needs reading
+      else { setTimeout(function(){ setSavedMsg(''); }, 2500); }
     }
     function saveSheetUrl() {
       if (!setSheetLink) return;
