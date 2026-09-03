@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-03-5';
+var KBDC_APP_VERSION = '2026-09-03-6';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -12459,6 +12459,15 @@ function InventoryPage({ invRole, userName }) {
         );
     }
   }, [invRole, userName]);
+  /* Someone looking at this screen is watching stock the way the attendance
+     screen is watched while staff arrive: a colleague issuing something from
+     the shop floor has to show up here, not two minutes later. Asking for the
+     fast cadence covers the sync that reads it AND the inventory sync that
+     runs on every cycle, so an issue recorded on one device appears on any
+     screen someone is actually looking at within about fifteen seconds.
+     Released on unmount, so a device left on another page goes back to the
+     quiet pace and the clinic's Apps Script quota is not spent on nobody. */
+  React.useEffect(function(){ return kbdcWatchLive(); }, []);
   if (!invRole) {
     return React.createElement('div', { style:{ padding:40, textAlign:'center', color:'#78909C', fontFamily:"'Poppins',sans-serif" } }, 'You do not have Inventory access. Ask an admin to grant it in HR Admin.');
   }
