@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-02-2';
+var KBDC_APP_VERSION = '2026-09-03-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11464,6 +11464,25 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
     kbdcNoteSyncOutcome(false);
   }
 }
+/* Apps Script answers a web-app call with a 302 to googleusercontent.com, and
+   that second hop returns 404 both when the deployment URL is wrong AND when a
+   reply is too large or too slow to come back. Same code, opposite remedies:
+   one needs a new URL pasted in, the other needs smaller requests. One tiny
+   call settles it — if a few hundred bytes come back, the URL is fine. */
+async function kbdcDiagnose404(url, label) {
+  try {
+    var probe = await kbdcBackendReqAt(url, 'getStamps', {});
+    if (probe) {
+      return label + ' is reachable, but a reply was too large to arrive. ' +
+        'The app is already splitting its requests; if this keeps happening the ' +
+        'Sheet has grown too big to read in one go and needs older rows archived.';
+    }
+  } catch (probeErr) { /* fall through to the wrong-URL explanation */ }
+  return 'HTTP 404 — the ' + label + ' web app URL is wrong, or that deployment no ' +
+    'longer exists. "New deployment" creates a NEW address: open the Sheet, ' +
+    'Extensions \u2192 Apps Script \u2192 Deploy \u2192 Manage deployments, copy the Web app URL ' +
+    'shown there, and paste it into Settings \u2192 Data Backend.';
+}
 var kbdcSyncInvRunning = false, kbdcSyncInvAgain = false;
 async function kbdcAutoSyncInventory() {
   if (kbdcSyncInvRunning) { kbdcSyncInvAgain = true; return; }
@@ -11497,7 +11516,32 @@ async function kbdcAutoSyncInventoryRun() {
     // third: an unchanged inventory now costs one small reply, so a colleague's
     // stock-out reaches the other devices in a minute or two rather than
     // whenever the third cycle happened to come round.
-    var got = await kbdcPullSheets(url, sheetNames, false);
+    var got = null, invPullErr = null;
+    try { got = await kbdcPullSheets(url, sheetNames, false); }
+    catch (e0) { invPullErr = e0; }
+    if (!got) {
+      /* The read failed. Do NOT abandon the upload: the backend merges rather
+         than replaces, so pushing can only add rows, and it is the only way a
+         colleague's stock-out ever leaves the device it was recorded on. This
+         is exactly the case reported — one phone showing stock deducted and
+         every other device showing the old figure. */
+      try {
+        var localOnly = {};
+        KBDC_INVENTORY_MODULES.forEach(function(m) {
+          var rows = m.get().map(kbdcFlattenRow);
+          if (rows.length) localOnly[m.sheet] = rows;
+        });
+        var soloChunks = kbdcSplitPushChunks(localOnly);
+        for (var si = 0; si < soloChunks.length; si++) {
+          await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: soloChunks[si] });
+        }
+      } catch (pushErr) { /* reported as the read failure below — that is the cause */ }
+      var msg0 = (invPullErr && invPullErr.message) ? invPullErr.message : 'sync failed';
+      if (/\b404\b/.test(msg0)) msg0 = await kbdcDiagnose404(url, 'Inventory');
+      kbdcSetSyncStatus({ invErr: 'Inventory: ' + msg0 });
+      kbdcNoteSyncOutcome(false);
+      return;
+    }
     var remote = got.data || {};
     // Inventory is a SECOND, separate Apps Script deployment. Redeploying one
     // and forgetting the other is easy and looks exactly like a broken fix.
@@ -11576,7 +11620,9 @@ async function kbdcAutoSyncInventoryRun() {
       if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
     }
   } catch (e) {
-    kbdcSetSyncStatus({ invErr: 'Inventory: ' + ((e && e.message) ? e.message : 'sync failed') });
+    var msg = (e && e.message) ? e.message : 'sync failed';
+    if (/\b404\b/.test(msg)) msg = await kbdcDiagnose404(url, 'Inventory');
+    kbdcSetSyncStatus({ invErr: 'Inventory: ' + msg });
     kbdcNoteSyncOutcome(false);
   }
 }
