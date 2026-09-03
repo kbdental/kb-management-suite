@@ -87,6 +87,7 @@ function doPost(e) {
         var mrows = modules[name] || [];
         try {
           saveAllRows(sn, mrows);
+          kbdcBumpRev_(sn);        // so readers know this tab moved
           savedCounts[name] = mrows.length;
         } catch (perSheetErr) {
           failures.push(name + ': ' + (perSheetErr && perSheetErr.message ? perSheetErr.message : perSheetErr));
@@ -97,6 +98,14 @@ function doPost(e) {
                          error: 'Some modules did not save — ' + failures.join(' | ') });
       }
       return respond({ ok: true, saved: savedCounts });
+    }
+    if (action === 'getStamps') {
+      // Deliberately tiny: one read of the SyncMeta tab, no row data at all.
+      // Without it the app cannot ask what changed, so every cycle re-read all
+      // 715 items and every transaction in full — replies large enough for
+      // Apps Script's redirect hop to drop, which the app reported as
+      // HTTP 404 and "the Google Sheet returned no data".
+      return respond({ ok: true, stamps: kbdcReadRevs_() });
     }
     if (action === 'getBatch') {
       var sheetNames = body.sheets || [];
@@ -126,7 +135,7 @@ function doGet(e) {
  *
  * Bump this whenever this file changes.
  */
-var KBDC_INV_BACKEND_VERSION = '2026-08-19-2';
+var KBDC_INV_BACKEND_VERSION = '2026-09-03-1';
 
 function respond(obj) {
   if (obj && typeof obj === 'object' && obj.version === undefined) {
@@ -404,4 +413,35 @@ function testTokenGate() {
 
   var allPass = configured && missingRejected && wrongRejected && !correctRejected;
   Logger.log('=== ' + (allPass ? 'ALL PASS — the gate is working correctly.' : 'NOT all tests passed — resolve the FAIL/SKIP lines above before deploying.') + ' ===');
+}
+
+function kbdcBumpRev_(sheetName) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var meta = ss.getSheetByName('SyncMeta');
+    if (!meta) { meta = ss.insertSheet('SyncMeta'); meta.appendRow(['sheet', 'rev']); }
+    var vals = meta.getDataRange().getValues();
+    for (var i = 0; i < vals.length; i++) {
+      if (String(vals[i][0]) === String(sheetName)) {
+        meta.getRange(i + 1, 2).setValue((Number(vals[i][1]) || 0) + 1);
+        return;
+      }
+    }
+    meta.appendRow([sheetName, 1]);
+  } catch (e) {
+    // Never let bookkeeping break a real save. A missed bump only means a
+    // device re-reads that tab on its next full pass.
+  }
+}
+
+function kbdcReadRevs_() {
+  var out = {};
+  try {
+    var meta = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('SyncMeta');
+    if (!meta) return out;
+    meta.getDataRange().getValues().forEach(function(r) {
+      if (r[0] && String(r[0]) !== 'sheet') out[String(r[0])] = Number(r[1]) || 0;
+    });
+  } catch (e) {}
+  return out;
 }

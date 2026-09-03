@@ -870,10 +870,22 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-03-6';
+var KBDC_APP_VERSION = '2026-09-03-7';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
+/* The Inventory backend is a separate script and now carries its own version:
+   it gained getStamps, which the main one has had since August. Without that
+   the app could not ask what had changed, so every cycle re-read all 715 items
+   and every transaction in full — replies large enough for Apps Script's
+   redirect hop to drop, reported as HTTP 404 and "returned no data". */
+var KBDC_EXPECTED_INV_BACKEND = '2026-09-03-1';
+function kbdcInvExpectedVersion() {
+  try {
+    var iu = kbdcInvBackendUrl();
+    return (iu && iu !== kbdcBackendUrl()) ? KBDC_EXPECTED_INV_BACKEND : KBDC_EXPECTED_BACKEND;
+  } catch (e) { return KBDC_EXPECTED_BACKEND; }
+}
 // Keeps every device on the current build.
 //
 // This used to run ONCE per browser session and stop, gated on a
@@ -2741,7 +2753,7 @@ function SyncDiagnostics({ onClose }) {
     kbdcAttBackendSeparate() && row('Attendance script reported', s.attBackendVersion || 'not seen yet',
         !!s.attBackendVersion && s.attBackendVersion !== KBDC_EXPECTED_BACKEND),
     row('Inventory script reported', s.invBackendVersion || 'not seen yet',
-        !!s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND),
+        !!s.invBackendVersion && s.invBackendVersion !== kbdcInvExpectedVersion()),
     row('Last good backup', s.lastOk ? new Date(s.lastOk).toLocaleString() : 'never', !s.lastOk),
     (function(){
       // A URL saved on this device overrides the one built into the app, and
@@ -2876,7 +2888,12 @@ function SyncStatusBadge() {
   // saving while the very bug that was just fixed is still live on the server.
   var staleBackends = [];
   if (s.backendVersion && s.backendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Main (' + s.backendVersion + ')');
-  if (s.invBackendVersion && s.invBackendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Inventory (' + s.invBackendVersion + ')');
+  /* Inventory only needs its OWN version when it has its own deployment. When
+     it rides on the main backend — which is what an empty Inventory setting
+     now means — the script answering is the main one, and demanding the
+     inventory version of it would nag for ever about a setup that is correct. */
+  var invExpects = kbdcInvExpectedVersion();
+  if (s.invBackendVersion && s.invBackendVersion !== invExpects) staleBackends.push('Inventory (' + s.invBackendVersion + ')');
   if (s.attBackendVersion && s.attBackendVersion !== KBDC_EXPECTED_BACKEND) staleBackends.push('Attendance (' + s.attBackendVersion + ')');
   var anyErr = kbdcSyncAnyErr(s);
   if (!anyErr && staleBackends.length) {
@@ -10663,7 +10680,15 @@ async function kbdcBackendPullBatch(url, sheetNames, attempts) {
     try {
       var res = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
       if (!res || res.ok === false) throw new Error((res && res.error) || 'The Google Sheet could not be read');
-      if (!res.data) throw new Error('The Google Sheet returned no data');
+      if (!res.data) {
+        /* Name what did come back. "Returned no data" on its own sent the
+           owner round the houses re-pasting a URL that was correct. */
+        var gotKeys = Object.keys(res).filter(function(k){ return k !== 'ok'; }).join(', ');
+        throw new Error('The Google Sheet returned no data for ' + (sheetNames || []).join(', ') +
+          '. The script replied with ' + (gotKeys || 'nothing') +
+          (res.version ? (' and reports version ' + res.version) : ' and no version, so it is old code') +
+          '. If the version is missing or old, redeploy the script for that Sheet.');
+      }
       return res;
     } catch (e) {
       lastErr = e;
@@ -11706,10 +11731,22 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
         if (__w && typeof __w.kbdcInvRefreshFromStorage === 'function') __w.kbdcInvRefreshFromStorage();
       }
     } catch (e) {}
+    /* Send only what has actually changed. Pushing every row every cycle
+       bumped each tab's revision every cycle, so the very next read saw a
+       change and downloaded the whole inventory again — a 335 KB round trip
+       on repeat, for data this device had just sent itself. That is also the
+       size of reply Apps Script's redirect hop drops, which is how a healthy
+       Sheet still produced "returned no data". */
+    var invSigs = kbdcPushSigs();
     var pushPayload = {};
+    var pushedSigs = {};
     KBDC_INVENTORY_MODULES.forEach(function(m) {
       var rows = m.get().map(kbdcFlattenRow);
-      if (rows.length) pushPayload[m.sheet] = rows;
+      if (!rows.length) return;
+      var sig = kbdcRowsSig(rows);
+      pushedSigs[m.sheet] = sig;
+      if (invSigs['inv:' + m.sheet] === sig) return;   // this Sheet already has it
+      pushPayload[m.sheet] = rows;
     });
     // Sent in size-bounded chunks, exactly as the main backup is. This used to
     // go as ONE request carrying every item and every transaction, and it grew
@@ -11718,7 +11755,7 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
     // each device. That is the whole of "the inventory shows the transaction
     // but does not update" — the entries were never lost, they simply had no
     // request small enough to travel in.
-    var invChunks = kbdcSplitPushChunks(pushPayload);
+    var invChunks = Object.keys(pushPayload).length ? kbdcSplitPushChunks(pushPayload) : [];
     for (var ci = 0; ci < invChunks.length; ci++) {
       // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
       // kbdcBackendReqAt does not treat as an error. Combined with the empty
@@ -11727,6 +11764,10 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
       var invRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: invChunks[ci] });
       if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
     }
+    // Recorded only after the write is known to have landed, so a failed push
+    // is retried next cycle rather than being remembered as done.
+    Object.keys(pushedSigs).forEach(function(sh){ invSigs['inv:' + sh] = pushedSigs[sh]; });
+    kbdcSetPushSigs(invSigs);
   } catch (e) {
     var msg = (e && e.message) ? e.message : 'sync failed';
     if (/\b404\b/.test(msg)) msg = await kbdcDiagnose404(url, 'Inventory');
