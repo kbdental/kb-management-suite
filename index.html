@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-01-7';
+var KBDC_APP_VERSION = '2026-09-02-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11024,7 +11024,17 @@ async function kbdcAutoSyncMainRun() {
     // Attendance travels on its own backend once one is configured, so the
     // main sync must not also carry it — otherwise both write the same rows
     // to two different Sheets and the two copies drift apart.
-    var attSeparate = kbdcAttBackendSeparate();
+    // A separate attendance backend is trusted to carry attendance ALONE only
+    // once it has actually proved it works on this device. It is too easy to
+    // paste a URL whose Sheet does not exist, or whose deployment was never
+    // finished: the clinic's whole attendance for the day then goes somewhere
+    // nobody can read, and every member of staff quietly shows Absent. Until
+    // the attendance backend has one recorded success and no standing error,
+    // attendance keeps going to the main Sheet as well. Rows union by id, so
+    // writing them to both places costs a little traffic and risks nothing.
+    var attStatus = kbdcGetSyncStatus() || {};
+    var attProven = !!attStatus.attLastOk && !attStatus.attErr;
+    var attSeparate = kbdcAttBackendSeparate() && attProven;
     var pushMods = KBDC_BACKEND_MODULES.filter(function(m){
       if (m.id === 'staff') return false;
       if (attSeparate && m.id === 'attendance') return false;
