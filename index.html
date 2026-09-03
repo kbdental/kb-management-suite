@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-02-1';
+var KBDC_APP_VERSION = '2026-09-02-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11464,7 +11464,17 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
     kbdcNoteSyncOutcome(false);
   }
 }
+var kbdcSyncInvRunning = false, kbdcSyncInvAgain = false;
 async function kbdcAutoSyncInventory() {
+  if (kbdcSyncInvRunning) { kbdcSyncInvAgain = true; return; }
+  kbdcSyncInvRunning = true;
+  try { await kbdcAutoSyncInventoryRun(); }
+  finally {
+    kbdcSyncInvRunning = false;
+    if (kbdcSyncInvAgain) { kbdcSyncInvAgain = false; return kbdcAutoSyncInventory(); }
+  }
+}
+async function kbdcAutoSyncInventoryRun() {
   var url = kbdcInvBackendUrl();
   if (!url) return;
   try {
@@ -11482,7 +11492,12 @@ async function kbdcAutoSyncInventory() {
     // Same {ok:false} trap as the main sync: a rejected read used to look like
     // an empty Inventory sheet, so stock a colleague had just booked in simply
     // never appeared and the device reported itself healthy.
-    var got = await kbdcBackendPullBatch(url, sheetNames, 2);
+    // Ask what changed rather than downloading the whole inventory every time.
+    // This is what makes it affordable to check on EVERY cycle instead of every
+    // third: an unchanged inventory now costs one small reply, so a colleague's
+    // stock-out reaches the other devices in a minute or two rather than
+    // whenever the third cycle happened to come round.
+    var got = await kbdcPullSheets(url, sheetNames, false);
     var remote = got.data || {};
     // Inventory is a SECOND, separate Apps Script deployment. Redeploying one
     // and forgetting the other is easy and looks exactly like a broken fix.
@@ -11568,16 +11583,12 @@ async function kbdcAutoSyncInventory() {
 async function kbdcAutoSyncCycle() {
   await kbdcAutoSyncMain();
   await kbdcAutoSyncAttendance();
-  // Inventory is a SECOND Apps Script project with its own quota, and stock
-  // moves a few times a day rather than a few times a minute. Calling it on
-  // every cycle doubled this clinic's Apps Script usage for almost no benefit.
-  // Stock in/out still syncs instantly when someone actually records it.
-  var n = 0;
-  try {
-    n = (parseInt(localStorage.getItem('kbdc_inv_cycle') || '0', 10) || 0) + 1;
-    localStorage.setItem('kbdc_inv_cycle', String(n));
-  } catch(e) { n = 1; }
-  if (n % 3 === 1) await kbdcAutoSyncInventory();
+  // Every cycle. The device that records a movement already pushes it at once,
+  // but the OTHER devices only see it when they next read — and reading only
+  // every third cycle is why one person's stock-out sat unseen on every other
+  // device. The read is stamp-gated now, so an unchanged inventory costs a few
+  // hundred bytes and this is cheaper than the old every-third full download.
+  await kbdcAutoSyncInventory();
 }
 
 // --- How often to talk to Google ------------------------------------------
@@ -12290,7 +12301,23 @@ function InventoryPage({ invRole, userName }) {
   if (!invRole) {
     return React.createElement('div', { style:{ padding:40, textAlign:'center', color:'#78909C', fontFamily:"'Poppins',sans-serif" } }, 'You do not have Inventory access. Ask an admin to grant it in HR Admin.');
   }
+  var invSt = kbdcGetSyncStatus() || {};
   return React.createElement("div", { style:{ flex:1, display:"flex", flexDirection:"column", overflow:"hidden", height:"100%" } },
+    /* Stock that never leaves the device it was recorded on is the one thing
+       this screen must not hide. The header badge reports it, but nobody
+       watching a stock figure looks up there — and a colleague's issue
+       silently failing to travel looks exactly like nothing happening. */
+    invSt.invErr && React.createElement("div", {
+      style:{ margin:"8px 12px", padding:"10px 12px", background:"#FBEAE8",
+              border:"1px solid #E8A9A2", borderLeft:"4px solid #A82018",
+              borderRadius:8, fontSize:11.5, color:"#A82018", lineHeight:1.5,
+              fontFamily:"'Poppins',sans-serif" } },
+      React.createElement("strong", null, "Stock changes are not reaching the Google Sheet. "),
+      React.createElement("span", { style:{ userSelect:"text" } }, invSt.invErr),
+      React.createElement("div", { style:{ marginTop:4, color:"#7A1812" } },
+        "What you record here is safe on this device, but no other device will see it until this is fixed. " +
+        "Most often the Inventory Apps Script needs redeploying: Extensions \u2192 Apps Script \u2192 Deploy \u2192 Manage deployments \u2192 pencil \u2192 New version.")
+    ),
     React.createElement("iframe", { ref:ref, sandbox:"allow-scripts allow-same-origin allow-forms allow-modals", style:{ width:"100%", height:"100%", border:"none" }, title:"KB Dental Inventory" })
   );
 }
