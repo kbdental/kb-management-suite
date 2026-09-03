@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-03-1';
+var KBDC_APP_VERSION = '2026-09-03-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11487,15 +11487,33 @@ var kbdcSyncInvRunning = false, kbdcSyncInvAgain = false;
 async function kbdcAutoSyncInventory() {
   if (kbdcSyncInvRunning) { kbdcSyncInvAgain = true; return; }
   kbdcSyncInvRunning = true;
-  try { await kbdcAutoSyncInventoryRun(); }
+  try {
+    var okRun = await kbdcAutoSyncInventoryRun();
+    /* If Inventory's own Apps Script cannot be reached, stock is not going to
+       sit on one phone waiting for a URL to be corrected. The main backend
+       speaks the same protocol and is demonstrably working, so inventory
+       travels with it until its own backend answers again. Rows merge by id
+       rather than replacing, so nothing is lost either way, and the moment the
+       Inventory URL works the sync goes back to it on its own. */
+    if (okRun === false && kbdcInvBackendUrl() && kbdcBackendUrl() &&
+        kbdcBackendUrl() !== kbdcInvBackendUrl()) {
+      var viaMain = await kbdcAutoSyncInventoryRun(kbdcBackendUrl());
+      if (viaMain) {
+        kbdcSetSyncStatus({ invErr: 'Inventory could not reach its own Google Sheet, ' +
+          'so stock is being saved to the main Sheet instead. Every device is in step ' +
+          'and nothing is lost — but the Inventory backend URL still needs correcting ' +
+          'in Settings \u2192 Data Backend.' });
+      }
+    }
+  }
   finally {
     kbdcSyncInvRunning = false;
     if (kbdcSyncInvAgain) { kbdcSyncInvAgain = false; return kbdcAutoSyncInventory(); }
   }
 }
-async function kbdcAutoSyncInventoryRun() {
-  var url = kbdcInvBackendUrl();
-  if (!url) return;
+async function kbdcAutoSyncInventoryRun(useUrl) {
+  var url = useUrl || kbdcInvBackendUrl();
+  if (!url) return false;
   try {
     var sheetNames = KBDC_INVENTORY_MODULES.map(function(m){ return m.sheet; });
     // Also read the legacy single transactions tab so any history that only
@@ -11540,12 +11558,12 @@ async function kbdcAutoSyncInventoryRun() {
       if (/\b404\b/.test(msg0)) msg0 = await kbdcDiagnose404(url, 'Inventory');
       kbdcSetSyncStatus({ invErr: 'Inventory: ' + msg0 });
       kbdcNoteSyncOutcome(false);
-      return;
+      return false;
     }
     var remote = got.data || {};
     // Inventory is a SECOND, separate Apps Script deployment. Redeploying one
     // and forgetting the other is easy and looks exactly like a broken fix.
-    kbdcSetSyncStatus({ invBackendVersion: got.version || '(pre-versioning)' });
+    kbdcSetSyncStatus({ invBackendVersion: got.version || '(pre-versioning)', invErr: '' });
     // Union merge by id — a stock in/out just recorded locally (not pushed
     // yet) must never be wiped out by an older remote snapshot that hasn't
     // seen it. Field-level qty conflicts on the SAME item id from two
@@ -11624,7 +11642,9 @@ async function kbdcAutoSyncInventoryRun() {
     if (/\b404\b/.test(msg)) msg = await kbdcDiagnose404(url, 'Inventory');
     kbdcSetSyncStatus({ invErr: 'Inventory: ' + msg });
     kbdcNoteSyncOutcome(false);
+    return false;
   }
+  return true;
 }
 async function kbdcAutoSyncCycle() {
   await kbdcAutoSyncMain();
@@ -12361,8 +12381,7 @@ function InventoryPage({ invRole, userName }) {
       React.createElement("strong", null, "Stock changes are not reaching the Google Sheet. "),
       React.createElement("span", { style:{ userSelect:"text" } }, invSt.invErr),
       React.createElement("div", { style:{ marginTop:4, color:"#7A1812" } },
-        "What you record here is safe on this device, but no other device will see it until this is fixed. " +
-        "Most often the Inventory Apps Script needs redeploying: Extensions \u2192 Apps Script \u2192 Deploy \u2192 Manage deployments \u2192 pencil \u2192 New version.")
+        "What you record here is safe on this device. \u00b7 App " + KBDC_APP_VERSION)
     ),
     React.createElement("iframe", { ref:ref, sandbox:"allow-scripts allow-same-origin allow-forms allow-modals", style:{ width:"100%", height:"100%", border:"none" }, title:"KB Dental Inventory" })
   );
