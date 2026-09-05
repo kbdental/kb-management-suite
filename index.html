@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-05-2';
+var KBDC_APP_VERSION = '2026-09-05-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -5106,11 +5106,36 @@ function ManagerDashboard({
       var desig = (s && (s.designation || s.role)) || '';
       return DESIG_CODE[desig] || desig.slice(0, 3).toUpperCase();
     }
+    /* Completions are counted from the LOG, not from the done flags on this
+       device's copy of the task list. Those flags merge with local winning a
+       conflict, so a colleague ticking a task on their own phone never flipped
+       the flag here — the manager's Overview sat at 0% however much work had
+       been done. The log is a separate row per completion, merged by id, so it
+       arrives whole. It is what the Report tab has always counted. */
+    var todayStr = kbdcToday();
+    var logToday = kbdcLog().filter(function(r){
+      return r && String(r.date || '').slice(0, 10) === todayStr;
+    });
+    function doneCountFor(code, name) {
+      var want = kbdcNormName(name), seen = {};
+      logToday.forEach(function(r){
+        if (r.roleCode !== code) return;
+        var who = kbdcNormName(r.staffName || '');
+        // A completion with no name recorded belongs to whoever holds the role.
+        if (who && want && who !== want) return;
+        if (r.taskCode) seen[r.taskCode] = 1;
+      });
+      return Object.keys(seen).length;
+    }
     function staffToRow(s) {
       var code = codeFor(s);
       var roleCard = [].concat(ROLE_CARDS.clinical,ROLE_CARDS.admin,ROLE_CARDS.mgmt,ROLE_CARDS.lab).find(function(r){return r.code===code;});
       var tasks = getRoleTasks(code);
-      var done = tasks.filter(function(t){return t.done;}).length;
+      var flagged = tasks.filter(function(t){return t.done;}).length;
+      // Whichever source knows about more completed work is the one that has
+      // heard from the person who did it.
+      var done = Math.max(flagged, doneCountFor(code, s.name));
+      if (done > tasks.length) done = tasks.length;
       var pct = tasks.length>0?Math.round((done/tasks.length)*100):0;
       return {code:code, name:s.name, c:(roleCard?roleCard.c:s.c)||'#1357A6', pct:pct, delta:''};
     }
@@ -5128,7 +5153,13 @@ function ManagerDashboard({
     var otherRows = hrStaff.filter(function(s){ return !placed[codeFor(s)]; }).map(staffToRow);
     var totalStaff = hrStaff.length;
     var allTasks = 0, allDone = 0;
-    [].concat(ROLE_CARDS.clinical,ROLE_CARDS.admin,ROLE_CARDS.mgmt,ROLE_CARDS.lab).forEach(function(r){var t=getRoleTasks(r.code);allTasks+=t.length;allDone+=t.filter(function(x){return x.done;}).length;});
+    [].concat(ROLE_CARDS.clinical,ROLE_CARDS.admin,ROLE_CARDS.mgmt,ROLE_CARDS.lab).forEach(function(r){
+      var t=getRoleTasks(r.code);
+      allTasks+=t.length;
+      var flagged=t.filter(function(x){return x.done;}).length;
+      var logged=doneCountFor(r.code, '');      // every completion logged for this role today
+      allDone+=Math.min(t.length, Math.max(flagged, logged));
+    });
     var avgScore = allTasks>0?Math.round((allDone/allTasks)*100)+'%':'0%';
     return /*#__PURE__*/React.createElement("div", null,
       React.createElement("div", {className:"mgr-kpis"},
