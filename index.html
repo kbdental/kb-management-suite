@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-03-7';
+var KBDC_APP_VERSION = '2026-09-05-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10675,10 +10675,22 @@ function kbdcRoleEmpRowsToByCode(rows) {
 // it was fully backed up. Fail loudly instead, and retry a transient rejection
 // the same way the push does.
 async function kbdcBackendPullBatch(url, sheetNames, attempts) {
-  var tries = attempts || 2, lastErr;
+  var tries = attempts || 3, lastErr;
   for (var i = 0; i < tries; i++) {
     try {
-      var res = await kbdcBackendReqBatch(url, 'getBatch', { sheets: sheetNames });
+      /* Apps Script answers a POST with a 302 to googleusercontent.com, and a
+         302 turns a POST into a GET. Normally that redirected GET is served
+         the response Google has already prepared; when it is not, the GET
+         lands back on the script and runs doGet, whose reply is the
+         "backend is running" greeting — ok:true, a message, and no data at
+         all. That is a transient redirect failure, not a broken deployment,
+         so say so and try again with a fresh URL rather than reporting a
+         Sheet problem that does not exist. */
+      var res = await kbdcBackendReqBatch(kbdcBustCache(url, i), 'getBatch', { sheets: sheetNames });
+      if (res && res.message && !res.data) {
+        throw new Error('Apps Script answered the redirected request with its greeting page ' +
+          'instead of the data (a known Google redirect hiccup) — retrying');
+      }
       if (!res || res.ok === false) throw new Error((res && res.error) || 'The Google Sheet could not be read');
       if (!res.data) {
         /* Name what did come back. "Returned no data" on its own sent the
@@ -10902,6 +10914,14 @@ async function kbdcBackendReqBatchRetry(url, action, payload, attempts) {
     }
   }
   throw lastErr;
+}
+/* Each retry gets its own URL. The redirect Apps Script issues is cacheable,
+   so repeating the identical request can be answered from the same stale hop
+   that just failed — the retry then fails in exactly the same way, which is
+   how a momentary hiccup looked like a permanent fault. */
+function kbdcBustCache(url, attempt) {
+  if (!url || !attempt) return url;
+  return url + (url.indexOf('?') >= 0 ? '&' : '?') + '_r=' + attempt + '-' + Date.now();
 }
 async function kbdcBackendReqBatch(url, action, payload) {
   return kbdcBackendReqAt(url, null, action, payload);
