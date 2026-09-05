@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-05-1';
+var KBDC_APP_VERSION = '2026-09-05-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -5095,19 +5095,37 @@ function ManagerDashboard({
     var mgmtCodes = ROLE_CARDS.mgmt.map(function(r){return r.code;});
     var labCodes = ROLE_CARDS.lab.map(function(r){return r.code;});
     var DESIG_CODE = KBDC_DESIG_CODE;
+    /* One rule for working out a person's role code, used by the column
+       filters AND by the row builder. They disagreed: the row builder fell
+       back to the first three letters of the designation, the filters looked
+       the designation up and gave up when it was missing. Six of this clinic's
+       designations are not in that map — Lab, Administration, Management,
+       Clinical, Technician, Driver — so those people matched no column at all
+       and disappeared from the Overview completely. */
+    function codeFor(s) {
+      var desig = (s && (s.designation || s.role)) || '';
+      return DESIG_CODE[desig] || desig.slice(0, 3).toUpperCase();
+    }
     function staffToRow(s) {
-      var desig = s.designation||s.role||'';
-      var code = DESIG_CODE[desig]||desig.slice(0,3).toUpperCase();
+      var code = codeFor(s);
       var roleCard = [].concat(ROLE_CARDS.clinical,ROLE_CARDS.admin,ROLE_CARDS.mgmt,ROLE_CARDS.lab).find(function(r){return r.code===code;});
       var tasks = getRoleTasks(code);
       var done = tasks.filter(function(t){return t.done;}).length;
       var pct = tasks.length>0?Math.round((done/tasks.length)*100):0;
       return {code:code, name:s.name, c:(roleCard?roleCard.c:s.c)||'#1357A6', pct:pct, delta:''};
     }
-    var clinicRows = hrStaff.filter(function(s){var c=DESIG_CODE[s.designation||s.role||''];return clinicalCodes.indexOf(c)>=0;}).map(staffToRow);
-    var adminRows  = hrStaff.filter(function(s){var c=DESIG_CODE[s.designation||s.role||''];return adminCodes.indexOf(c)>=0;}).map(staffToRow);
-    var mgmtRows   = hrStaff.filter(function(s){var c=DESIG_CODE[s.designation||s.role||''];return mgmtCodes.indexOf(c)>=0;}).map(staffToRow);
-    var labRows    = hrStaff.filter(function(s){var c=DESIG_CODE[s.designation||s.role||''];return labCodes.indexOf(c)>=0;}).map(staffToRow);
+    var clinicRows = hrStaff.filter(function(s){return clinicalCodes.indexOf(codeFor(s))>=0;}).map(staffToRow);
+    var adminRows  = hrStaff.filter(function(s){return adminCodes.indexOf(codeFor(s))>=0;}).map(staffToRow);
+    var mgmtRows   = hrStaff.filter(function(s){return mgmtCodes.indexOf(codeFor(s))>=0;}).map(staffToRow);
+    var labRows    = hrStaff.filter(function(s){return labCodes.indexOf(codeFor(s))>=0;}).map(staffToRow);
+    /* Anyone the four groups do not claim still has to appear. A dashboard
+       that silently omits people is worse than one that shows an odd heading:
+       the owner cannot see who is missing, because they are missing. */
+    var placed = {};
+    [clinicalCodes, adminCodes, mgmtCodes, labCodes].forEach(function(list){
+      list.forEach(function(c){ placed[c] = 1; });
+    });
+    var otherRows = hrStaff.filter(function(s){ return !placed[codeFor(s)]; }).map(staffToRow);
     var totalStaff = hrStaff.length;
     var allTasks = 0, allDone = 0;
     [].concat(ROLE_CARDS.clinical,ROLE_CARDS.admin,ROLE_CARDS.mgmt,ROLE_CARDS.lab).forEach(function(r){var t=getRoleTasks(r.code);allTasks+=t.length;allDone+=t.filter(function(x){return x.done;}).length;});
@@ -5120,7 +5138,8 @@ function ManagerDashboard({
         React.createElement("div",{className:"mgr-kpi"},React.createElement("div",{className:"mgr-kpi-num"},allDone+'/'+allTasks),React.createElement("div",{className:"mgr-kpi-lbl"},"Completed"))
       ),
       React.createElement("div",{className:"mgr-cols"},
-        [['🏥 Clinical',clinicRows,'#1357A6'],['🗂️ Administration',adminRows,'#2E7D32'],['👑 Management',mgmtRows,'#C62828'],['🧪 Lab',labRows,'#6A1B9A']].map(function(grp){
+        [['🏥 Clinical',clinicRows,'#1357A6'],['🗂️ Administration',adminRows,'#2E7D32'],['👑 Management',mgmtRows,'#C62828'],['🧪 Lab',labRows,'#6A1B9A']]
+          .concat(otherRows.length ? [['👥 Other staff',otherRows,'#546E7A']] : []).map(function(grp){
           var title=grp[0],staff=grp[1],hc=grp[2];
           return React.createElement("div",{key:title,className:"mgr-col"},
             React.createElement("div",{className:"mgr-col-hd",style:{background:hc}},title,' (',staff.length,')'),
@@ -5131,7 +5150,7 @@ function ManagerDashboard({
                   React.createElement("div",{className:"mgr-sav",style:{background:s.c}},s.code),
                   React.createElement("div",{className:"mgr-sname"},s.name),
                   React.createElement("div",{className:"mgr-bar-w"},React.createElement("div",{className:"mgr-bar"},React.createElement("div",{className:"mgr-bar-f",style:{width:s.pct+'%',background:s.pct>50?'#E53935':s.pct>0?'#FF8F00':'#1357A6'}}))),
-                  React.createElement("div",{className:"mgr-spct",style:{color:s.pct>50?'#E53935':s.pct>0?'#FF8F00':'#546E7A'}},s.pct,'%'),
+                  React.createElement("div",{className:"mgr-spct",style:{color:s.pct>=80?'#2E7D32':s.pct>=40?'#FF8F00':s.pct>0?'#E53935':'#546E7A'}},s.pct,'%'),
                   React.createElement("div",{className:"mgr-sdelta"},s.delta)
                 );
               })
