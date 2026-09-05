@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-05-3';
+var KBDC_APP_VERSION = '2026-09-05-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11521,7 +11521,12 @@ async function kbdcAutoSyncMainRun() {
     // and Apps Script executions are a limited daily quota shared by every
     // device in the clinic.
     var prevSigs = kbdcPushSigs();
+    /* Start from what is already recorded rather than an empty object. This
+       map is shared with the inventory sync, which keeps its own entries under
+       an "inv:" prefix; replacing it wholesale erased those every cycle and
+       made inventory re-send its entire stock list each time. */
     var newSigs = {};
+    Object.keys(prevSigs).forEach(function(k){ if (k.indexOf('inv:') === 0) newSigs[k] = prevSigs[k]; });
     var lastFull = parseInt(localStorage.getItem('kbdc_push_full_at') || '0', 10);
     var forceFull = !lastFull || (Date.now() - lastFull) > 21600000;
     var changedPayload = {};
@@ -11545,6 +11550,19 @@ async function kbdcAutoSyncMainRun() {
       });
       if (todaysAtt.length && !changedPayload['Attendance']) {
         changedPayload['Attendance'] = todaysAtt;
+      }
+      /* And today's task completions, for the same reason. The Sheet's
+         TaskCompletions tab stopped at 39 rows dated 13 August while staff went
+         on ticking tasks every day: whatever left that signature looking
+         already-sent, the log then agreed with itself for ever and nothing new
+         was offered again. A manager's dashboard reading 0% all day is the
+         same class of harm as a present employee marked absent. It is a
+         handful of rows; send them every cycle regardless. */
+      var todaysLog = (pushPayload['TaskCompletions'] || []).filter(function(r){
+        return String((r && r.date) || '').slice(0, 10) === todayStr;
+      });
+      if (todaysLog.length && !changedPayload['TaskCompletions']) {
+        changedPayload['TaskCompletions'] = pushPayload['TaskCompletions'];
       }
     } catch(e) {}
 
@@ -11659,23 +11677,14 @@ async function kbdcAutoSyncInventory() {
   if (kbdcSyncInvRunning) { kbdcSyncInvAgain = true; return; }
   kbdcSyncInvRunning = true;
   try {
-    var okRun = await kbdcAutoSyncInventoryRun();
-    /* If Inventory's own Apps Script cannot be reached, stock is not going to
-       sit on one phone waiting for a URL to be corrected. The main backend
-       speaks the same protocol and is demonstrably working, so inventory
-       travels with it until its own backend answers again. Rows merge by id
-       rather than replacing, so nothing is lost either way, and the moment the
-       Inventory URL works the sync goes back to it on its own. */
-    if (okRun === false && kbdcInvBackendUrl() && kbdcBackendUrl() &&
-        kbdcBackendUrl() !== kbdcInvBackendUrl()) {
-      var viaMain = await kbdcAutoSyncInventoryRun(kbdcBackendUrl());
-      if (viaMain) {
-        kbdcSetSyncStatus({ invErr: 'Inventory could not reach its own Google Sheet, ' +
-          'so stock is being saved to the main Sheet instead. Every device is in step ' +
-          'and nothing is lost — but the Inventory backend URL still needs correcting ' +
-          'in Settings \u2192 Data Backend.' });
-      }
-    }
+    /* No falling back to the main backend. That was well meant — stock should
+       not sit on one phone waiting for a URL to be corrected — but it wrote
+       InventoryStockOut, InventoryStockIn and InventoryItems into the
+       Management Suite Sheet, which is exactly the mixing of the two Sheets
+       the owner had just spent an afternoon undoing. Inventory data belongs in
+       the Inventory Sheet or nowhere; when its backend cannot be reached the
+       failure is reported and the records wait safely on the device. */
+    await kbdcAutoSyncInventoryRun();
   }
   finally {
     kbdcSyncInvRunning = false;
@@ -11683,14 +11692,18 @@ async function kbdcAutoSyncInventory() {
   }
 }
 async function kbdcAutoSyncInventoryRun(useUrl) {
-  /* No Inventory backend configured means "keep inventory with the main
-     Sheet", not "do not sync inventory at all". It used to mean the latter:
-     the sync returned on the spot, reported nothing, and left the badge green
-     while every stock movement stayed on the device that made it and reached
-     no Google Sheet anywhere. An empty setting must never be a silent
-     no-op for data people are relying on. */
-  var url = useUrl || kbdcInvBackendUrl() || kbdcBackendUrl();
-  if (!url) return false;
+  /* Inventory goes to the Inventory Sheet and nowhere else. Sending it to the
+     main backend when no Inventory URL is set looked like a kindness — better
+     than the old behaviour, where an empty setting silently synced nothing at
+     all — but it filled the Management Suite Sheet with stock tabs. An empty
+     setting is now reported rather than quietly redirected. */
+  var url = useUrl || kbdcInvBackendUrl();
+  if (!url) {
+    kbdcSetSyncStatus({ invErr: 'No Inventory backend is set, so stock is not being ' +
+      'saved anywhere. What you record is safe on this device. Paste the Inventory ' +
+      'Sheet\u2019s web app URL into Settings \u2192 Data Backend.' });
+    return false;
+  }
   try {
     var sheetNames = KBDC_INVENTORY_MODULES.map(function(m){ return m.sheet; });
     // Also read the legacy single transactions tab so any history that only
