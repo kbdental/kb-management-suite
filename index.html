@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-05-4';
+var KBDC_APP_VERSION = '2026-09-07-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -10487,6 +10487,9 @@ function kbdcSyncAttendanceNow() {
 }
 function kbdcLsArray(key) { try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch(e) { return []; } }
 
+/* Long enough for a slow Apps Script call on a poor connection, short enough
+   that a dead request cannot hold a sync cycle open past the next one. */
+var KBDC_REQ_TIMEOUT_MS = 45000;
 async function kbdcBackendReqAt(u, sheet, action, payload) {
   if (!u) throw new Error('No backend URL set. Paste your Apps Script Web App URL above and click Save first.');
   // Content-Type must stay "text/plain" here — sending "application/json" makes the
@@ -10497,11 +10500,34 @@ async function kbdcBackendReqAt(u, sheet, action, payload) {
   var _tok = kbdcBackendToken();
   var _body = Object.assign({ sheet: sheet, action: action }, payload || {});
   if (_tok) _body.token = _tok;
-  var r = await fetch(u, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(_body)
-  });
+  /* A request that never answers used to hang here for ever. fetch has no
+     timeout of its own, and a phone that loses signal mid-request, or an Apps
+     Script call that is never returned, leaves this promise pending until the
+     page is reloaded. With the re-entrancy guards around the sync cycles that
+     is fatal: the guard stays raised, every later cycle returns immediately,
+     and the device stops syncing altogether while still looking normal. It is
+     why attendance would work for two days and then stop, with the status line
+     frozen at the same "read N minutes ago" for both Sheets at once. Give up
+     and let the cycle end, so the next one can run. */
+  var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+  var timer = ctl ? setTimeout(function(){ try { ctl.abort(); } catch(e) {} }, KBDC_REQ_TIMEOUT_MS) : null;
+  var r;
+  try {
+    r = await fetch(u, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(_body),
+      signal: ctl ? ctl.signal : undefined
+    });
+  } catch (fetchErr) {
+    if (fetchErr && fetchErr.name === 'AbortError') {
+      throw new Error('The Google Sheet did not answer within ' +
+        Math.round(KBDC_REQ_TIMEOUT_MS / 1000) + ' seconds — giving up so the next sync can run');
+    }
+    throw fetchErr;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
   if (!r.ok) throw new Error('HTTP ' + r.status);
   return r.json();
 }
