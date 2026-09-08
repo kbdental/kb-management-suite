@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-08-1';
+var KBDC_APP_VERSION = '2026-09-08-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -23206,7 +23206,34 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     setNewPin1('');setNewPin2('');setShowChangPin(false);setPinError('');
     showToast('Admin PIN updated successfully');
   }
-  function clockInAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var attendance=laLoadAtt();var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});var upd;if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkIn:t,locIn:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});}else{upd=[...attendance,{id:'att'+Date.now(),staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];}setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();});}
+  /* Save FIRST, then attach the location if it ever arrives. This whole
+     function used to sit inside laFetchLocation().then(...), so marking
+     somebody present from the dashboard did nothing at all until the browser
+     answered for a location — and on a laptop indoors, or with permission
+     never granted, it may never answer. The owner would click, see nothing
+     happen, and have no way to correct an attendance record at all. That is
+     the same fault fixed on the staff side weeks ago; it was still here.
+     Location is useful, but it is not what attendance is for. */
+  function clockInAdm(sN,sI){
+    var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes());
+    var recId='att'+Date.now();
+    function apply(loc,isFinal){
+      var attendance=laLoadAtt();
+      var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});
+      var upd;
+      if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))
+        ?Object.assign({},a,{checkIn:t,locIn:(loc!==undefined?loc:a.locIn),appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}):a;});}
+      else{upd=[...attendance,{id:recId,staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,
+        hours:null,branch:activeBranch,locIn:(loc!==undefined?loc:null),locOut:null,
+        appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];}
+      setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();
+      if(isFinal)setLocLoadingAdm(function(p){return{...p,[ssid]:false};});
+    }
+    setLocLoadingAdm(function(p){return{...p,[ssid]:true};});
+    apply(undefined,false);                       // recorded and syncing already
+    laFetchLocation().then(function(loc){apply(loc,true);})
+      .catch(function(){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});});
+  }
   function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();});}
 
   var SC=['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#37474F','#AD1457'];
