@@ -164,7 +164,7 @@ function doGet(e) {
  *
  * Bump this whenever this file changes.
  */
-var KBDC_BACKEND_VERSION = '2026-08-19-2';
+var KBDC_BACKEND_VERSION = '2026-09-08-1';
 
 function respond(obj) {
   if (obj && typeof obj === 'object' && obj.version === undefined) {
@@ -258,6 +258,16 @@ function kbdcRowKey_(row) {
   if (row.roleCode !== undefined && row.taskCode !== undefined) {
     // Covers Tasks (role+task) and TaskCompletions (role+task+date).
     return 'rt:' + row.roleCode + '|' + row.taskCode + (row.date !== undefined ? '|' + row.date : '');
+  }
+  // Settings-style rows: AppData and ClinicSettings are a key/value store, so
+  // the KEY is the identity. Without this they fell through to the content
+  // hash below, and because each push carried a fresh updatedAt every row
+  // looked brand new: AppData grew to 831 rows of the same six keys repeated,
+  // a 22 MB download that every device fetched every couple of minutes. That
+  // is what "The Google Sheet did not answer within 45 seconds" was.
+  if (row.key !== undefined && row.key !== null && String(row.key).trim() !== '' &&
+      row.value !== undefined) {
+    return 'k:' + String(row.key).trim();
   }
   // Name+category identity, matching the client's kbdcMergeInvItemsByNameCat()
   // exactly — the field is `cat` (NOT `category`), trimmed and lowercased.

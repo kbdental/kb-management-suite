@@ -870,10 +870,10 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-08-3';
+var KBDC_APP_VERSION = '2026-09-08-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
-var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
+var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
 /* The Inventory backend is a separate script and now carries its own version:
    it gained getStamps, which the main one has had since August. Without that
    the app could not ask what had changed, so every cycle re-read all 715 items
