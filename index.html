@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-08-2';
+var KBDC_APP_VERSION = '2026-09-08-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11532,10 +11532,25 @@ async function kbdcAutoSyncMainRun() {
         value: kbdcAttBackendUrl(), updatedAt: attUrlStamp });
     }
     var blobRows = [];
+    /* Stamp a NEW time only when the value has actually changed. This row was
+       being given a fresh updatedAt on every cycle, so AppData looked different
+       every time however settled its contents were: every device re-sent the
+       whole blob every cycle, they queued behind each other on the Sheet's
+       script lock, and the loser reported "Lock timeout: another process was
+       holding the lock for too long". It is why AppData sits on revision 2965
+       while Tasks — which people actually change all day — is on 442. */
+    var blobStamps = {};
+    try { blobStamps = JSON.parse(localStorage.getItem('kbdc_blob_stamps') || '{}'); } catch(e) {}
+    var nowIso = new Date().toISOString();
     Object.keys(mergedBlobs).forEach(function(k){
       var v = kbdcBlobForBackup(k, mergedBlobs[k]);
-      if (v != null) blobRows.push({ key: k, value: v, updatedAt: new Date().toISOString() });
+      if (v == null) return;
+      var prev = blobStamps[k];
+      var stamp = (prev && prev.sig === kbdcHashString(v)) ? prev.at : nowIso;
+      blobStamps[k] = { sig: kbdcHashString(v), at: stamp };
+      blobRows.push({ key: k, value: v, updatedAt: stamp });
     });
+    try { localStorage.setItem('kbdc_blob_stamps', JSON.stringify(blobStamps)); } catch(e) {}
     if (blobRows.length) pushPayload['AppData'] = blobRows;
 
     // Send only the tabs whose contents actually changed since the last
@@ -22670,6 +22685,29 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
              explains it, and cost another round trip to ask for. */
           var st = kbdcGetSyncStatus();
           if (!st || !st.err) return null;
+          /* "Attendance is not syncing on this device" was shown for ANY main
+             backup error, including one where attendance saved perfectly well
+             and some other tab did not — AppData timing out on the Sheet's
+             lock, most often. Saying attendance failed when it did not sends
+             the owner hunting the wrong thing, and buries the tab that really
+             needs attention. Only claim it when attendance is actually in the
+             list of what did not save. */
+          var partial = /Some modules did not save/.test(st.err);
+          if (partial && !/Attendance/.test(st.err)) {
+            var which = (st.err.split('\u2014')[1] || st.err).split(':')[0].trim();
+            return React.createElement('div',{
+              style:{margin:'8px 12px',padding:'10px 12px',background:'#FFF8E1',
+                     border:'1px solid #F0C68A',borderLeft:'4px solid #9E5700',
+                     borderRadius:8,fontSize:11,color:'#7A4A00',lineHeight:1.5}
+            },
+              React.createElement('strong',null,'Attendance is saving normally. '),
+              React.createElement('span',{style:{userSelect:'text'}},
+                'One other part of the backup did not save this time' +
+                (which ? (' (' + which + ')') : '') +
+                ' \u2014 usually because two devices wrote to the Sheet at the same ' +
+                'moment. It retries by itself.')
+            );
+          }
           return React.createElement('div',{
             style:{margin:'8px 12px',padding:'10px 12px',background:'#FBEAE8',
                    border:'1px solid #E8A9A2',borderLeft:'4px solid #A82018',
