@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-07-1';
+var KBDC_APP_VERSION = '2026-09-08-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-08-19-2';
@@ -11598,6 +11598,9 @@ async function kbdcAutoSyncMainRun() {
       var body = { modules: chunks[ci] };
       pushedBytes += JSON.stringify(body).length;
       var mainRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', body);
+      if (!(mainRes && mainRes.ok === false) && chunks[ci]['Attendance']) {
+        kbdcMarkAttConfirmed(chunks[ci]['Attendance']);
+      }
       // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
       // kbdcBackendReqAt does not treat as an error — so without this check a
       // push the backend actually REJECTED (script lock timeout, quota, a bad
@@ -11625,6 +11628,37 @@ async function kbdcAutoSyncMainRun() {
    megabyte, it holds its own lock, and it draws on its own daily quota. This
    is the data the clinic actually depends on hour to hour, so it should not
    share a queue with anything else. */
+/* Which check-ins the Sheet has actually acknowledged. Until now a check-in
+   that never left the phone looked identical to one that arrived: the person
+   who tapped it saw "Present" on their own screen, the owner saw "Absent", and
+   nothing anywhere said the row had not been sent. That is why a stuck phone
+   could go unnoticed for five days. Confirmed ids only, so the phone can tell
+   its owner the truth. */
+function kbdcAttConfirmed() {
+  try { return JSON.parse(localStorage.getItem('kbdc_att_confirmed') || '{}'); } catch(e) { return {}; }
+}
+function kbdcMarkAttConfirmed(rows) {
+  try {
+    var seen = kbdcAttConfirmed(), today = kbdcToday();
+    (rows || []).forEach(function(r){ if (r && r.id) seen[r.id] = today; });
+    // Keep it from growing for ever: only the last few days matter.
+    var cutoff = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    Object.keys(seen).forEach(function(k){ if (String(seen[k]) < cutoff) delete seen[k]; });
+    localStorage.setItem('kbdc_att_confirmed', JSON.stringify(seen));
+    /* Tell the screen, or the warning stays up after the check-in has landed
+       and the person keeps pressing a button that has already worked. */
+    window.dispatchEvent(new Event('kbdc-modules-sync'));
+  } catch(e) {}
+}
+/* Today's check-ins on this device that the Sheet has NOT acknowledged. */
+function kbdcAttUnsent() {
+  try {
+    var seen = kbdcAttConfirmed(), today = kbdcToday();
+    return kbdcLsArray('kbdc_la_attendance').filter(function(a){
+      return a && a.checkIn && String(a.date || '').slice(0, 10) === today && !seen[a.id];
+    });
+  } catch(e) { return []; }
+}
 var kbdcSyncAttRunning = false, kbdcSyncAttAgain = false;
 async function kbdcAutoSyncAttendance() {
   if (!kbdcAttBackendSeparate()) return;
@@ -11667,6 +11701,7 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
         for (var i = 0; i < chunks.length; i++) {
           var res = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: chunks[i] });
           if (res && res.ok === false) throw new Error(res.error || 'Attendance backup was rejected');
+          kbdcMarkAttConfirmed(chunks[i]['Attendance']);
         }
       }
       sigs['Attendance'] = sig;
@@ -22647,6 +22682,44 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
                          : 'No successful sync yet on this device.') +
               '  ·  App ' + KBDC_APP_VERSION +
               '  ·  Tap the red badge at the top for the full connection panel.')
+          );
+        })(),
+        (function(){
+          /* A check-in that has not reached the Sheet is the single thing this
+             screen must shout about. Until now the person who tapped Check In
+             saw "Present" on their own phone and had no way to know the row was
+             still sitting there; the owner saw them Absent and had no way to
+             know which phone to go and prod. Five days of that. Name the people
+             whose check-ins are still on THIS device, and give a button that
+             sends them. */
+          var unsent = [];
+          try { unsent = kbdcAttUnsent(); } catch (e) {}
+          if (!unsent.length) return null;
+          return React.createElement('div', {
+            style:{ margin:'8px 12px', padding:'10px 12px', background:'#FFF8E1',
+                    border:'1px solid #F0C68A', borderLeft:'4px solid #9E5700',
+                    borderRadius:8, fontSize:11.5, color:'#7A4A00', lineHeight:1.55 }
+          },
+            React.createElement('strong', null,
+              unsent.length === 1
+                ? (unsent[0].staffName + '\u2019s check-in has not reached the Google Sheet yet. ')
+                : (unsent.length + ' check-ins have not reached the Google Sheet yet: ')),
+            unsent.length > 1
+              ? React.createElement('span', null, unsent.map(function(a){ return a.staffName; }).join(', ') + '. ')
+              : null,
+            React.createElement('span', null,
+              'It is safe on this phone, but nobody else can see it. Keep the app open \u2014 it keeps trying.'),
+            React.createElement('div', { style:{ marginTop:8 } },
+              React.createElement('button', {
+                onClick: function(){
+                  try { localStorage.removeItem('kbdc_push_sigs'); } catch(e) {}
+                  try { kbdcSyncAttendanceNow(); } catch(e) {}
+                  try { kbdcAutoSyncMain(); } catch(e) {}
+                },
+                style:{ background:'#9E5700', color:'#fff', border:'none', borderRadius:6,
+                        padding:'7px 14px', fontSize:11.5, fontWeight:700, cursor:'pointer' }
+              }, '\u2191 Send it now')
+            )
           );
         })(),
         (function(){
