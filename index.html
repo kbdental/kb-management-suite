@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-11-2';
+var KBDC_APP_VERSION = '2026-09-11-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -10689,6 +10689,7 @@ var KBDC_INVENTORY_MODULES = [
   { id:'insassets',   label:'Instrument & Equipment Register', sheet:'InstrumentRegister', localKey:'kbdc_ins_assets',   get: function(){ return kbdcLsArray('kbdc_ins_assets'); } },
   { id:'inssets',     label:'Instrument Sets',                 sheet:'InstrumentSets',     localKey:'kbdc_ins_sets',     get: function(){ return kbdcLsArray('kbdc_ins_sets'); } },
   { id:'inslog',      label:'Instrument Activity Log',         sheet:'InstrumentLog',      localKey:'kbdc_ins_log',      get: function(){ return kbdcLsArray('kbdc_ins_log'); } },
+  { id:'insloads',    label:'Sterilisation Loads',             sheet:'SterilisationLoads', localKey:'kbdc_ins_loads',    get: function(){ return kbdcLsArray('kbdc_ins_loads'); } },
   { id:'inssettings', label:'Instrument Settings',             sheet:'InstrumentSettings', localKey:'kbdc_ins_settings', get: function(){ return kbdcLsArray('kbdc_ins_settings'); } },
 ];
 
@@ -12712,12 +12713,14 @@ function InventoryPage({ invRole, userName }) {
    Nothing is ever deleted: an item leaves service as status 'Retired'. The
    Sheet merge cannot carry a deletion between devices, and the history is
    worth keeping anyway. */
-var KBDC_INS_KEYS = { assets:'kbdc_ins_assets', sets:'kbdc_ins_sets', log:'kbdc_ins_log', settings:'kbdc_ins_settings' };
+var KBDC_INS_KEYS = { assets:'kbdc_ins_assets', sets:'kbdc_ins_sets', log:'kbdc_ins_log', settings:'kbdc_ins_settings', loads:'kbdc_ins_loads' };
 var KBDC_INS_STATUSES = ['In use','In store','Sterilising','Under repair','Missing','Retired'];
 var KBDC_INS_CONDITIONS = ['Good','Fair','Poor','Damaged'];
 var KBDC_INS_DEFAULTS = {
   locations: ['Operatory 1','Operatory 2','Operatory 3','CSSD / Sterilisation','Store','Lab','Reception'],
   insCats: ['Diagnostic','Restorative','Endodontic','Periodontic','Surgical / Extraction','Prosthodontic','Orthodontic','Pedodontic','Implant','Handpiece','Other'],
+  cycles: ['134°C Wrapped (standard)','134°C Unwrapped','121°C Wrapped','134°C Prion (18 min)','Bowie-Dick test','Vacuum leak test'],
+  packDays: [30],
   eqpCats: ['Dental Chair','Autoclave / Sterilisation','X-ray / Imaging','Compressor / Suction','Scaler / Light Cure','Lab Equipment','IT / Electrical','Furniture','Other']
 };
 var INS_UI = { pri:'#00695C', priL:'#E0F2F1', red:'#C62828', amb:'#E65100', grey:'#546E7A', line:'#E3E8EE', bg:'#F5F7FA', font:"'Poppins',sans-serif" };
@@ -12726,7 +12729,8 @@ var insInp = { width:'100%', padding:'8px 10px', border:'1px solid #CFD8DC', bor
 
 function kbdcInsReadAll() {
   return { assets:kbdcLsArray(KBDC_INS_KEYS.assets), sets:kbdcLsArray(KBDC_INS_KEYS.sets),
-           log:kbdcLsArray(KBDC_INS_KEYS.log), settings:kbdcLsArray(KBDC_INS_KEYS.settings) };
+           log:kbdcLsArray(KBDC_INS_KEYS.log), settings:kbdcLsArray(KBDC_INS_KEYS.settings),
+           loads:kbdcLsArray(KBDC_INS_KEYS.loads) };
 }
 function kbdcInsList(settings, id) {
   var row = (settings || []).filter(function(r){ return r && r.id === id; })[0];
@@ -12769,6 +12773,60 @@ function kbdcInsSetIssues(set, assets) {
       (a.status === 'Missing' || a.status === 'Under repair' || a.condition === 'Damaged');
   });
 }
+/* ── Sterilisation (Phase 2) ── */
+// A machine test (Bowie-Dick, vacuum leak) carries no packs; it vouches for the autoclave.
+function kbdcInsIsTestCycle(c) { return /bowie|leak|test/i.test(String(c || '')); }
+function kbdcInsLoadAt(l) { return String(l.date || '') + 'T' + String(l.time || '00:00'); }
+// Local wall-clock time, same shape as kbdcInsLoadAt, so the two compare as strings.
+function kbdcInsNowLocal() {
+  var d = new Date(), p = function(n){ return (n < 10 ? '0' : '') + n; };
+  return kbdcLocalDate(d) + 'T' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
+function kbdcInsAddDays(dateStr, n) {
+  var d = new Date(String(dateStr || '').slice(0, 10) + 'T12:00:00');
+  if (isNaN(d.getTime())) return '';
+  d.setDate(d.getDate() + (Number(n) || 0));
+  return kbdcLocalDate(d);
+}
+function kbdcInsAutoclaves(assets) {
+  var eq = (assets || []).filter(function(a){ return a.kind === 'Equipment' && a.status !== 'Retired'; });
+  var ac = eq.filter(function(a){ return /autoclav|sterili/i.test((a.cat || '') + ' ' + a.name); });
+  return ac.length ? ac : eq;
+}
+function kbdcInsLoadResult(v) {
+  if (kbdcInsIsTestCycle(v.cycle)) {
+    var bad = v.bowieDick === 'Fail';
+    return { result: bad ? 'Failed' : 'Test passed', failReason: bad ? v.cycle : '' };
+  }
+  if (v.chem === 'Fail') return { result:'Failed', failReason:'chemical indicator' };
+  if (v.bi === 'Fail') return { result:'Failed', failReason:'biological indicator' };
+  if (v.bi === 'Pending') return { result:'BI pending', failReason:'' };
+  return { result:'Released', failReason:'' };
+}
+// Whether a set or loose instrument is sterile is worked out from the load
+// records, never stored on the item: one source of truth, and voiding a load
+// entered by mistake corrects every pack that was in it.
+function kbdcInsSterility(d) {
+  var last = {};
+  (d.loads || []).filter(function(l){ return l.result !== 'Void' && !kbdcInsIsTestCycle(l.cycle); })
+    .sort(function(a, b){ return kbdcInsLoadAt(a).localeCompare(kbdcInsLoadAt(b)); })
+    .forEach(function(l){ (Array.isArray(l.items) ? l.items : []).forEach(function(it){ last[it.type + ':' + it.id] = l; }); });
+  var today = kbdcToday(), out = {};
+  function judge(key, rec) {
+    var l = last[key];
+    if (!l) return;
+    var st;
+    if (l.result === 'Failed') st = 'failed';
+    else if (rec && rec.openedAt && String(rec.openedAt) >= kbdcInsLoadAt(l)) st = 'used';
+    else if (l.packExpiry && l.packExpiry < today) st = 'expired';
+    else st = 'sterile';
+    out[key] = { state:st, load:l, until:l.packExpiry || '' };
+  }
+  (d.sets || []).forEach(function(s){ judge('set:' + s.id, s); });
+  (d.assets || []).forEach(function(a){ judge('asset:' + a.id, a); });
+  return out;
+}
+
 function kbdcInsAlerts(d) {
   var out = [];
   d.assets.filter(function(a){ return a.status !== 'Retired'; }).forEach(function(a) {
@@ -12790,6 +12848,46 @@ function kbdcInsAlerts(d) {
     var iss = kbdcInsSetIssues(s, d.assets);
     if (iss.length) out.push({ sev:1, setId:s.id, text:s.tag + ' ' + s.name + ': ' + iss.length + (iss.length === 1 ? ' item' : ' items') +
       ' not usable (' + iss.map(function(a){ return a.tag; }).join(', ') + ')' });
+  });
+  var loads = (d.loads || []).filter(function(l){ return l.result !== 'Void'; });
+  loads.forEach(function(l) {
+    var isTest = kbdcInsIsTestCycle(l.cycle);
+    if (l.result === 'Failed' && !isTest && !l.recallDone && (l.items || []).length) {
+      out.push({ sev:2, loadId:l.id, text:'Load ' + l.tag + ' FAILED (' + (l.failReason || 'indicator') + ') on ' + l.date +
+        ': recall and reprocess ' + l.items.map(function(it){ return it.tag; }).join(', ') });
+    }
+    // A failed machine test stands until a later test of the same kind passes.
+    if (l.result === 'Failed' && isTest) {
+      var cleared = loads.some(function(m){ return m.autoclaveId === l.autoclaveId && m.cycle === l.cycle &&
+        m.result === 'Test passed' && kbdcInsLoadAt(m) > kbdcInsLoadAt(l); });
+      if (!cleared) out.push({ sev:2, loadId:l.id, text:(l.autoclaveTag || '') + ' ' + (l.autoclaveName || 'Autoclave') + ': ' + l.cycle +
+        ' FAILED on ' + l.date + '. Do not use it until a repeat test passes' });
+    }
+    var age = kbdcInsDaysUntil(l.date);
+    if (l.result === 'BI pending' && age !== null && age <= -2) out.push({ sev:1, loadId:l.id, text:'Load ' + l.tag + ' (' + l.date + '): biological indicator result not recorded' });
+  });
+  var ster = kbdcInsSterility(d), expired = [];
+  (d.sets || []).forEach(function(s){ var x = ster['set:' + s.id]; if (s.status !== 'Retired' && x && x.state === 'expired') expired.push(s.tag); });
+  (d.assets || []).forEach(function(a){ var x = ster['asset:' + a.id]; if (a.status !== 'Retired' && x && x.state === 'expired') expired.push(a.tag); });
+  if (expired.length) out.push({ sev:1, tab:'ster', text:expired.length + (expired.length === 1 ? ' pack is' : ' packs are') +
+    ' past the sterile date. Reprocess before use: ' + expired.join(', ') });
+  // Bowie-Dick is a daily check on vacuum autoclaves only, so this is opt-in:
+  // it applies to an autoclave once a Bowie-Dick test has ever been recorded on it.
+  var today = kbdcToday(), ac = {};
+  loads.forEach(function(l){
+    var k = l.autoclaveId;
+    if (!k) return;
+    var x = ac[k] || (ac[k] = { everBD:false, bdToday:false, runToday:false, label:(l.autoclaveTag || '') + ' ' + (l.autoclaveName || '') });
+    var bd = /bowie/i.test(l.cycle);
+    if (bd) x.everBD = true;
+    if (l.date === today) {
+      if (bd && l.result === 'Test passed') x.bdToday = true;
+      else if (!kbdcInsIsTestCycle(l.cycle)) x.runToday = true;
+    }
+  });
+  Object.keys(ac).forEach(function(k){
+    var x = ac[k];
+    if (x.everBD && x.runToday && !x.bdToday) out.push({ sev:1, tab:'ster', text:x.label + ': loads run today without a passed Bowie-Dick test' });
   });
   return out.sort(function(x, y){ return y.sev - x.sev; });
 }
@@ -12970,7 +13068,8 @@ function InsSetForm(props) {
 
 function InsSettingsForm(props) {
   var h = React.createElement;
-  var s = React.useState({ locations:props.locs.join('\n'), insCats:props.insCats.join('\n'), eqpCats:props.eqpCats.join('\n') });
+  var s = React.useState({ locations:props.locs.join('\n'), insCats:props.insCats.join('\n'), eqpCats:props.eqpCats.join('\n'),
+                           cycles:props.cycles.join('\n'), packDays:String(props.packDays) });
   var v = s[0], setV = s[1];
   function box(k, label) {
     return insField(label, h('textarea', { rows:9, value:v[k], style:insInp,
@@ -12980,9 +13079,88 @@ function InsSettingsForm(props) {
   return h('div', { style:{ background:'#fff', borderRadius:12, border:'1px solid ' + INS_UI.line, padding:16, maxWidth:900 } },
     h('div', { style:{ fontSize:12.5, color:INS_UI.grey, marginBottom:12 } }, 'One per line. Renaming a location here does not move items already recorded there.'),
     h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12 } },
-      box('locations', 'Rooms / locations'), box('insCats', 'Instrument categories'), box('eqpCats', 'Equipment categories')),
+      box('locations', 'Rooms / locations'), box('insCats', 'Instrument categories'), box('eqpCats', 'Equipment categories'),
+      box('cycles', 'Autoclave cycles (a name containing "test" or "Bowie" is a machine test)'),
+      insField('Sterile pack shelf life (days)', h('input', { type:'number', min:1, value:v.packDays, style:insInp,
+        onChange:function(e){ var val = e.target.value; setV(function(p){ return Object.assign({}, p, { packDays:val }); }); } }))),
     h('div', { style:{ textAlign:'right', marginTop:12 } },
-      h('button', { onClick:function(){ props.onSave({ locations:lines(v.locations), insCats:lines(v.insCats), eqpCats:lines(v.eqpCats) }); }, style:insBtn(INS_UI.pri) }, 'Save lists')));
+      h('button', { onClick:function(){ props.onSave({ locations:lines(v.locations), insCats:lines(v.insCats), eqpCats:lines(v.eqpCats),
+        cycles:lines(v.cycles), packDays:[Math.max(1, parseInt(v.packDays, 10) || 30)] }); }, style:insBtn(INS_UI.pri) }, 'Save lists')));
+}
+
+function insSterText(st) {
+  if (!st) return 'Not sterilised yet';
+  if (st.state === 'sterile') return 'Sterile until ' + (st.until || '?') + ' (' + st.load.tag + ')';
+  if (st.state === 'expired') return 'Sterile date passed (' + st.until + ')';
+  if (st.state === 'used') return 'Used, needs reprocessing';
+  return 'In failed load ' + st.load.tag + ', reprocess';
+}
+function insSterChip(st) {
+  var c = !st ? '#90A4AE' : st.state === 'sterile' ? '#2E7D32' : st.state === 'failed' ? INS_UI.red : st.state === 'expired' ? INS_UI.amb : '#78909C';
+  return insChip(insSterText(st), c);
+}
+var INS_RESULT_COLOR = { 'Released':'#2E7D32', 'Test passed':'#2E7D32', 'BI pending':'#E65100', 'Failed':'#C62828', 'Void':'#78909C' };
+
+function InsLoadForm(props) {
+  var h = React.createElement;
+  var s = React.useState(function(){
+    var d = new Date(), p = function(n){ return (n < 10 ? '0' : '') + n; };
+    return { autoclaveId: props.autoclaves.length === 1 ? props.autoclaves[0].id : '', cycle:props.cycles[0] || '', date:kbdcToday(),
+      time:p(d.getHours()) + ':' + p(d.getMinutes()), machineCycleNo:'', temp:'', pressure:'', holdMin:'', chem:'', bowieDick:'',
+      bi:'Not done', operator:props.userName || '', notes:'' };
+  });
+  var v = s[0], setV = s[1];
+  var s2 = React.useState([]), picked = s2[0], setPicked = s2[1];
+  var s3 = React.useState(''), q = s3[0], setQ = s3[1];
+  function set(k) { return function(e){ var x = {}; x[k] = e.target.value; setV(function(p){ return Object.assign({}, p, x); }); }; }
+  function sel(k, opts, blank) { return h('select', { id:'ins-l-' + k, value:v[k], onChange:set(k), style:insInp }, insOptions(opts, blank)); }
+  function inp(k, type, extra) { return h('input', Object.assign({ id:'ins-l-' + k, type:type || 'text', value:v[k], onChange:set(k), style:insInp }, extra || {})); }
+  function toggle(k) { setPicked(function(p){ return p.indexOf(k) >= 0 ? p.filter(function(x){ return x !== k; }) : p.concat([k]); }); }
+  var isTest = kbdcInsIsTestCycle(v.cycle), isBD = /bowie/i.test(v.cycle);
+  var ready = isTest ? !!v.bowieDick : !!v.chem;
+  var r = kbdcInsLoadResult(v);
+  var until = (r.result === 'Released' || r.result === 'BI pending') ? kbdcInsAddDays(v.date, props.packDays) : '';
+  var ql = q.toLowerCase();
+  function match(x) { return !ql || (x.tag + ' ' + x.name).toLowerCase().indexOf(ql) >= 0; }
+  function pickRow(key, tag, name, st) {
+    var on = picked.indexOf(key) >= 0;
+    return h('label', { key:key, id:'ins-pick-' + key.replace(':', '-'), style:{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px', fontSize:12.5,
+        borderBottom:'1px solid ' + INS_UI.line, background: on ? INS_UI.priL : '#fff', cursor:'pointer' } },
+      h('input', { type:'checkbox', checked:on, onChange:function(){ toggle(key); } }),
+      h('b', { style:{ color:INS_UI.pri, minWidth:74 } }, tag), h('span', { style:{ flex:1 } }, name), insSterChip(st));
+  }
+  var sets = props.sets.filter(match), loose = props.looseAssets.filter(match);
+  return h('div', null,
+    props.autoclaves.length === 0 && h('div', { style:{ background:'#FFF3E0', color:INS_UI.amb, padding:'10px 12px', borderRadius:8, fontSize:12.5, marginBottom:12 } },
+      'Add the autoclave in the Register first (+ Equipment, category "Autoclave / Sterilisation"). Every load is recorded against it.'),
+    h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(170px,1fr))', gap:10 } },
+      insField('Autoclave *', h('select', { id:'ins-l-autoclaveId', value:v.autoclaveId, onChange:set('autoclaveId'), style:insInp },
+        [h('option', { key:'', value:'' }, '— choose —')].concat(props.autoclaves.map(function(a){ return h('option', { key:a.id, value:a.id }, a.tag + ' ' + a.name); })))),
+      insField('Cycle *', sel('cycle', props.cycles)),
+      insField('Date', inp('date', 'date')), insField('Start time', inp('time', 'time')),
+      insField('Machine cycle no.', inp('machineCycleNo', 'text', { placeholder:'from the display' })),
+      insField('Temperature (°C)', inp('temp', 'number')), insField('Pressure (bar)', inp('pressure', 'number', { step:'0.01' })),
+      insField('Hold time (min)', inp('holdMin', 'number')),
+      isTest ? insField((isBD ? 'Bowie-Dick result' : 'Test result') + ' *', sel('bowieDick', ['Pass','Fail']))
+             : insField('Chemical indicator *', sel('chem', ['Pass','Fail','Not used'])),
+      !isTest && insField('Biological indicator', sel('bi', ['Not done','Pending','Pass','Fail'])),
+      insField('Operator', inp('operator'))),
+    !isTest && h('div', { style:{ fontSize:12, fontWeight:700, color:INS_UI.pri, margin:'16px 0 6px' } }, 'What went in (' + picked.length + ' ticked)'),
+    !isTest && h('input', { value:q, onChange:function(e){ setQ(e.target.value); }, placeholder:'Search sets and instruments…', style:Object.assign({}, insInp, { marginBottom:6 }) }),
+    !isTest && h('div', { style:{ maxHeight:260, overflowY:'auto', border:'1px solid ' + INS_UI.line, borderRadius:8 } },
+      sets.map(function(x){ return pickRow('set:' + x.id, x.tag, x.name, props.ster['set:' + x.id]); }),
+      loose.map(function(x){ return pickRow('asset:' + x.id, x.tag, x.name, props.ster['asset:' + x.id]); }),
+      sets.length + loose.length === 0 && h('div', { style:{ padding:12, fontSize:12, color:'#90A4AE' } },
+        q ? 'Nothing matches.' : 'No sets or loose instruments in the Register yet.')),
+    h('div', { style:{ marginTop:12 } }, insField('Notes', h('textarea', { value:v.notes, onChange:set('notes'), rows:2, style:insInp }), true)),
+    h('div', { id:'ins-load-outcome', style:{ marginTop:12, fontSize:12.5, fontWeight:600, color: !ready ? INS_UI.grey : r.result === 'Failed' ? INS_UI.red : '#2E7D32' } },
+      !ready ? 'Outcome: record the ' + (isTest ? 'test' : 'chemical indicator') + ' result'
+             : 'Outcome: ' + r.result + (until ? ' · packs sterile until ' + until : '') +
+               (r.result === 'Failed' && !isTest ? ' · everything ticked goes on the recall list' : '')),
+    h('div', { style:{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 } },
+      h('button', { onClick:props.onCancel, style:insBtn(INS_UI.grey, true) }, 'Cancel'),
+      h('button', { id:'ins-load-save', onClick:function(){ props.onSave(v, picked); }, style:insBtn(INS_UI.pri) }, 'Save load'))
+  );
 }
 
 var KBDC_INS_IMPORT_COLS = ['Type','Name','Category','Brand','Model','Serial No','Quantity','Location','Status','Condition',
@@ -13001,6 +13179,7 @@ function InstrumentsPage({ insRole, userName }) {
   var s2 = React.useState({ q:'', kind:'', status:'', loc:'' }), f = s2[0], setF = s2[1];
   var s3 = React.useState(null), modal = s3[0], setModal = s3[1];
   var s4 = React.useState(null), toast = s4[0], setToast = s4[1];
+  var s5 = React.useState({ month:'', ac:'' }), sf = s5[0], setSf = s5[1];
   var fileRef = React.useRef(null);
 
   React.useEffect(function(){ return kbdcWatchLive(); }, []);
@@ -13035,6 +13214,11 @@ function InstrumentsPage({ insRole, userName }) {
   var active = data.assets.filter(function(a){ return a.status !== 'Retired'; });
   var activeSets = data.sets.filter(function(s){ return s.status !== 'Retired'; });
   var activeSetIds = {}; activeSets.forEach(function(s){ activeSetIds[s.id] = s; });
+  var ster = kbdcInsSterility(data);
+  var cycles = kbdcInsList(data.settings, 'cycles'), packDays = Number(kbdcInsList(data.settings, 'packDays')[0]) || 30;
+  var autoclaves = kbdcInsAutoclaves(data.assets);
+  // Instruments sterilised on their own; one inside a set goes through with its set.
+  var looseInstr = active.filter(function(a){ return a.kind !== 'Equipment' && !(a.setId && activeSetIds[a.setId]); });
 
   var ACTIONS = [
     { k:'service',  label:'🔧 Record service',    mgr:true,  fields:['date','cost','vendor','note'], event:'Serviced',
@@ -13051,6 +13235,9 @@ function InstrumentsPage({ insRole, userName }) {
       show:function(a){ return a.status !== 'Missing' && a.status !== 'Retired'; }, apply:function(){ return { status:'Missing' }; } },
     { k:'found',    label:'🎉 Found',              mgr:false, fields:['location','note'], event:'Found',
       show:function(a){ return a.status === 'Missing'; }, apply:function(a, fm){ return { status:'In use', location:fm.location || a.location }; } },
+    { k:'opened',   label:'🩺 Mark used',         mgr:false, fields:['note'], event:'Used / opened',
+      show:function(a){ var x = ster['asset:' + a.id]; return a.kind !== 'Equipment' && !(a.setId && activeSetIds[a.setId]) && !!x && x.state === 'sterile'; },
+      apply:function(){ return { openedAt:kbdcInsNowLocal() }; } },
     { k:'retire',   label:'🗄 Retire',             mgr:true,  fields:['date','note'], event:'Retired',
       show:function(a){ return a.status !== 'Retired'; }, apply:function(){ return { status:'Retired', setId:'' }; } }
   ];
@@ -13143,6 +13330,78 @@ function InstrumentsPage({ insRole, userName }) {
     Object.keys(lists).forEach(function(id){ rows.push(stamp({ id:id, list:lists[id] })); });
     commit({ settings:rows });
     say('Lists saved');
+  }
+
+  function saveLoad(v, picked) {
+    var d = kbdcInsReadAll();
+    var ac = d.assets.filter(function(a){ return a.id === v.autoclaveId; })[0];
+    if (!ac) { say('Choose the autoclave.', true); return; }
+    if (!v.cycle) { say('Choose the cycle.', true); return; }
+    var isTest = kbdcInsIsTestCycle(v.cycle);
+    if (isTest ? !v.bowieDick : !v.chem) { say(isTest ? 'Record the test result.' : 'Record the chemical indicator result.', true); return; }
+    if (!isTest && !picked.length) { say('Tick at least one set or instrument that went in.', true); return; }
+    var byKey = {};
+    d.sets.forEach(function(s){ byKey['set:' + s.id] = s; });
+    d.assets.forEach(function(a){ byKey['asset:' + a.id] = a; });
+    var items = isTest ? [] : picked.map(function(k){
+      var x = byKey[k];
+      return x ? { type:k.split(':')[0], id:x.id, tag:x.tag, name:x.name } : null;
+    }).filter(Boolean);
+    var r = kbdcInsLoadResult(v);
+    var rec = stamp(Object.assign({}, v, r, { id:kbdcInsUid('ld_'), tag:kbdcInsNextTag(d.loads, 'L-', 4),
+      autoclaveTag:ac.tag, autoclaveName:ac.name, items:items,
+      packExpiry:(r.result === 'Released' || r.result === 'BI pending') ? kbdcInsAddDays(v.date, packDays) : '',
+      biReadAt:(v.bi === 'Pass' || v.bi === 'Fail') ? v.date : '', recallDone:false, createdBy:userName || '' }));
+    if (isTest) { rec.chem = ''; rec.bi = ''; }
+    var lr = logRow(ac, isTest ? v.cycle : 'Sterilisation load', rec.tag + ' · ' + rec.result + (items.length ? ' · ' + items.length + ' packs' : ''), '', v.date);
+    commit({ loads:d.loads.concat([rec]), log:d.log.concat([lr]) });
+    say(rec.tag + ' recorded: ' + rec.result, rec.result === 'Failed');
+    open({ t:'load', id:rec.id });
+  }
+  function updateLoad(id, patchFn, msg) {
+    var d = kbdcInsReadAll(), found = null;
+    var loads = d.loads.map(function(l){ if (l.id !== id) return l; found = stamp(Object.assign({}, l, patchFn(l))); return found; });
+    if (!found) { say('That load is no longer on this device.', true); return; }
+    commit({ loads:loads });
+    say(msg, found.result === 'Failed' && !found.recallDone);
+  }
+  function recordBI(l, res) {
+    if (!window.confirm('Record the biological indicator for ' + l.tag + ' as ' + (res === 'Pass' ? 'PASSED' : 'FAILED') + '?')) return;
+    updateLoad(l.id, function(){
+      return res === 'Pass' ? { bi:'Pass', biReadAt:kbdcToday(), result:'Released', failReason:'' }
+                            : { bi:'Fail', biReadAt:kbdcToday(), result:'Failed', failReason:'biological indicator' };
+    }, l.tag + (res === 'Pass' ? ': BI passed' : ': BI FAILED, recall the packs'));
+  }
+  function recallDone(l) {
+    var note = window.prompt('What was done with the packs from ' + l.tag + '? (e.g. all reprocessed in the next load)', '');
+    if (note === null) return;
+    updateLoad(l.id, function(){ return { recallDone:true, recallAt:kbdcToday(), recallBy:userName || '', recallNote:note }; }, l.tag + ': recall marked done');
+  }
+  function voidLoad(l) {
+    var why = window.prompt('Void ' + l.tag + '? It stays on record but no longer counts. Reason:', 'Entered by mistake');
+    if (why === null) return;
+    updateLoad(l.id, function(){ return { result:'Void', voidReason:why || 'Voided', voidBy:userName || '' }; }, l.tag + ' voided');
+  }
+  function markSetUsed(s) {
+    var d = kbdcInsReadAll();
+    commit({ sets:d.sets.map(function(x){ return x.id === s.id ? stamp(Object.assign({}, x, { openedAt:kbdcInsNowLocal() })) : x; }),
+             log:d.log.concat([logRow({ id:'', tag:s.tag, name:s.name }, 'Used / opened', '')]) });
+    say(s.tag + ' marked used');
+  }
+  function exportLoads(list) {
+    if (typeof XLSX === 'undefined') { say('The Excel library has not loaded. Check the connection and try again.', true); return; }
+    var head = ['Load','Date','Time','Autoclave','Machine cycle no.','Cycle','Temp (°C)','Pressure (bar)','Hold (min)','Chemical indicator',
+      'Test result','Biological indicator','BI read on','Result','Fail / void reason','Sterile until','Contents','Operator','Recall done','Notes'];
+    var rows = list.map(function(l){
+      return [l.tag, l.date, l.time, (l.autoclaveTag || '') + ' ' + (l.autoclaveName || ''), l.machineCycleNo || '', l.cycle, l.temp || '',
+        l.pressure || '', l.holdMin || '', l.chem || '', l.bowieDick || '', l.bi || '', l.biReadAt || '', l.result,
+        l.failReason || l.voidReason || '', l.packExpiry || '', (l.items || []).map(function(it){ return it.tag; }).join(', '),
+        l.operator || '', l.recallDone ? l.recallAt + ' ' + (l.recallNote || '') : '', l.notes || ''];
+    });
+    var wb = XLSX.utils.book_new(), ws = XLSX.utils.aoa_to_sheet([head].concat(rows));
+    ws['!cols'] = head.map(function(c){ return { wch:Math.max(11, c.length + 2) }; });
+    XLSX.utils.book_append_sheet(wb, ws, 'Sterilisation');
+    XLSX.writeFile(wb, 'KB_Sterilisation_Register.xlsx');
   }
 
   function downloadTemplate() {
@@ -13269,7 +13528,11 @@ function InstrumentsPage({ insRole, userName }) {
         alerts.length === 0
           ? h('div', { key:'n', style:{ fontSize:13, color:'#2E7D32' } }, '✅ Nothing needs attention.')
           : h('div', { key:'l', id:'ins-alerts' }, alerts.map(function(al, i){
-              return h('div', { key:i, onClick:function(){ if (al.assetId) open({ t:'view', id:al.assetId }); else open({ t:'set', id:al.setId }); },
+              return h('div', { key:i, onClick:function(){
+                  if (al.loadId) open({ t:'load', id:al.loadId });
+                  else if (al.tab) setTab(al.tab);
+                  else if (al.assetId) open({ t:'view', id:al.assetId });
+                  else open({ t:'set', id:al.setId }); },
                 style:{ display:'flex', alignItems:'center', gap:10, padding:'8px 4px', borderBottom:'1px solid ' + INS_UI.line, cursor:'pointer', fontSize:13 } },
                 h('span', { style:{ width:9, height:9, borderRadius:5, flexShrink:0, background: al.sev === 2 ? INS_UI.red : INS_UI.amb } }),
                 h('span', null, al.text));
@@ -13347,8 +13610,101 @@ function InstrumentsPage({ insRole, userName }) {
                 h('div', { style:{ fontSize:11, fontWeight:700, color:INS_UI.pri } }, s.tag),
                 h('div', { style:{ fontSize:14, fontWeight:700, color:'#263238', margin:'2px 0 6px' } }, s.name),
                 h('div', { style:{ fontSize:12, color:INS_UI.grey } }, (s.location || 'No location') + ' · ' + members.length + ' tagged' + (loose ? ' + ' + loose + ' untagged' : '')),
-                h('div', { style:{ marginTop:8 } }, iss.length ? insChip(iss.length + ' not usable', INS_UI.amb) : insChip('Complete', '#2E7D32')));
+                h('div', { style:{ marginTop:8, display:'flex', gap:6, flexWrap:'wrap', alignItems:'center' } },
+                  iss.length ? insChip(iss.length + ' not usable', INS_UI.amb) : insChip('Complete', '#2E7D32'),
+                  insSterChip(ster['set:' + s.id]),
+                  !!ster['set:' + s.id] && ster['set:' + s.id].state === 'sterile' && h('button', { id:'ins-used-' + s.id,
+                    onClick:function(e){ e.stopPropagation(); markSetUsed(s); },
+                    style:Object.assign(insBtn(INS_UI.grey, true), { padding:'3px 10px', fontSize:11 }) }, 'Mark used')));
             })));
+  }
+
+  function renderSter() {
+    var month = kbdcToday().slice(0, 7);
+    var list = data.loads.filter(function(l){ return (!sf.month || String(l.date).slice(0, 7) === sf.month) && (!sf.ac || l.autoclaveId === sf.ac); })
+      .sort(function(a, b){ return kbdcInsLoadAt(b).localeCompare(kbdcInsLoadAt(a)); });
+    var states = Object.keys(ster).map(function(k){ return ster[k].state; });
+    var tiles = [['Loads this month', data.loads.filter(function(l){ return l.result !== 'Void' && String(l.date).slice(0, 7) === month; }).length],
+      ['Sterile packs now', states.filter(function(x){ return x === 'sterile'; }).length],
+      ['Past sterile date', states.filter(function(x){ return x === 'expired'; }).length],
+      ['BI awaiting result', data.loads.filter(function(l){ return l.result === 'BI pending'; }).length]];
+    var th = { textAlign:'left', padding:'9px 10px', fontSize:10.5, fontWeight:700, color:INS_UI.grey, letterSpacing:'.05em', whiteSpace:'nowrap', borderBottom:'1px solid ' + INS_UI.line };
+    var td = { padding:'9px 10px', fontSize:12.5, borderBottom:'1px solid ' + INS_UI.line, whiteSpace:'nowrap' };
+    function ind(l) {
+      var p = [];
+      if (l.chem) p.push('CI ' + l.chem);
+      if (l.bowieDick) p.push((/bowie/i.test(l.cycle) ? 'BD ' : 'Test ') + l.bowieDick);
+      if (l.bi && l.bi !== 'Not done') p.push('BI ' + l.bi);
+      return p.join(' · ') || '—';
+    }
+    return h('div', { style:{ display:'flex', flexDirection:'column', gap:12 } },
+      h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:10 } },
+        tiles.map(function(t){
+          return card([h('div', { key:'l', style:{ fontSize:10.5, fontWeight:700, color:INS_UI.grey, letterSpacing:'.06em' } }, t[0].toUpperCase()),
+                       h('div', { key:'v', style:{ fontSize:24, fontWeight:800, color:INS_UI.pri, marginTop:4 } }, t[1])], { key:t[0] });
+        })),
+      h('div', { style:{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' } },
+        h('input', { id:'ins-ster-month', type:'month', value:sf.month, onChange:function(e){ setSf(Object.assign({}, sf, { month:e.target.value })); },
+          style:Object.assign({}, insInp, { width:'auto' }) }),
+        h('select', { value:sf.ac, onChange:function(e){ setSf(Object.assign({}, sf, { ac:e.target.value })); }, style:Object.assign({}, insInp, { width:'auto', minWidth:150 }) },
+          [h('option', { key:'', value:'' }, 'All autoclaves')].concat(autoclaves.map(function(a){ return h('option', { key:a.id, value:a.id }, a.tag + ' ' + a.name); }))),
+        h('div', { style:{ flex:1 } }),
+        h('button', { id:'ins-add-load', onClick:function(){ open({ t:'loadForm' }); }, style:insBtn(INS_UI.pri) }, '+ Record load'),
+        isMgr && h('button', { onClick:function(){ exportLoads(list); }, style:insBtn(INS_UI.pri, true) }, '⬇ Export Excel')),
+      card(h('div', { style:{ overflowX:'auto' } },
+        list.length === 0
+          ? h('div', { style:{ padding:20, textAlign:'center', color:'#90A4AE', fontSize:13 } }, data.loads.length ? 'No loads match these filters.' : 'No loads recorded yet.')
+          : h('table', { id:'ins-loads', style:{ borderCollapse:'collapse', width:'100%' } },
+              h('thead', null, h('tr', null, ['Load','Date','Autoclave','Cycle','Contents','Indicators','Result','By'].map(function(c){ return h('th', { key:c, style:th }, c); }))),
+              h('tbody', null, list.map(function(l){
+                var its = (l.items || []).map(function(it){ return it.tag; }).join(', ');
+                var recall = l.result === 'Failed' && !kbdcInsIsTestCycle(l.cycle) && !l.recallDone && (l.items || []).length > 0;
+                return h('tr', { key:l.id, onClick:function(){ open({ t:'load', id:l.id }); }, style:{ cursor:'pointer', opacity: l.result === 'Void' ? 0.55 : 1 } },
+                  h('td', { style:Object.assign({}, td, { fontWeight:700, color:INS_UI.pri }) }, l.tag),
+                  h('td', { style:td }, l.date + ' ' + (l.time || '')),
+                  h('td', { style:td }, l.autoclaveTag || '—'),
+                  h('td', { style:td }, l.cycle),
+                  h('td', { style:Object.assign({}, td, { whiteSpace:'normal', minWidth:140 }) }, its || '—'),
+                  h('td', { style:td }, ind(l)),
+                  h('td', { style:td }, insChip(l.result, INS_RESULT_COLOR[l.result] || INS_UI.grey), recall ? ' ' : null, recall ? insChip('Recall', INS_UI.red) : null),
+                  h('td', { style:td }, l.operator || ''));
+              }))))),
+      h('div', { style:{ fontSize:12, color:INS_UI.grey } }, list.length + (list.length === 1 ? ' load' : ' loads'))
+    );
+  }
+
+  function renderLoadView(l) {
+    var isTest = kbdcInsIsTestCycle(l.cycle);
+    var its = Array.isArray(l.items) ? l.items : [];
+    var needsRecall = l.result === 'Failed' && !isTest && !l.recallDone && its.length > 0;
+    var facts = [['Date', l.date + ' ' + (l.time || '')], ['Autoclave', (l.autoclaveTag || '') + ' ' + (l.autoclaveName || '')],
+      ['Machine cycle no.', l.machineCycleNo], ['Cycle', l.cycle], ['Temperature', l.temp ? l.temp + ' °C' : ''],
+      ['Pressure', l.pressure ? l.pressure + ' bar' : ''], ['Hold time', l.holdMin ? l.holdMin + ' min' : ''],
+      ['Chemical indicator', l.chem], [/bowie/i.test(l.cycle) ? 'Bowie-Dick' : 'Test result', l.bowieDick],
+      ['Biological indicator', l.bi && l.bi !== 'Not done' ? l.bi + (l.biReadAt ? ' (read ' + l.biReadAt + ')' : '') : ''],
+      ['Operator', l.operator], ['Sterile until', l.result === 'Failed' || l.result === 'Void' ? '' : l.packExpiry],
+      ['Failed on', l.failReason],
+      ['Recall', l.recallDone ? 'Done ' + l.recallAt + (l.recallBy ? ' by ' + l.recallBy : '') + (l.recallNote ? ': ' + l.recallNote : '') : ''],
+      ['Voided', l.voidReason ? l.voidReason + (l.voidBy ? ' (' + l.voidBy + ')' : '') : ''], ['Notes', l.notes]]
+      .filter(function(x){ return x[1] !== '' && x[1] != null; });
+    return h('div', null,
+      h('div', { style:{ marginBottom:12 } }, insChip(l.result, INS_RESULT_COLOR[l.result] || INS_UI.grey)),
+      needsRecall && h('div', { style:{ background:'#FFEBEE', color:INS_UI.red, padding:'10px 12px', borderRadius:8, fontSize:12.5, marginBottom:12, lineHeight:1.5 } },
+        'This load failed. Everything in it is NOT sterile: pull these packs from use, reprocess them, then mark the recall done.'),
+      h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:'8px 14px', marginBottom:14 } },
+        facts.map(function(x){
+          return h('div', { key:x[0] }, h('div', { style:{ fontSize:10.5, fontWeight:600, color:INS_UI.grey } }, x[0]),
+                                        h('div', { style:{ fontSize:13, color:'#263238' } }, String(x[1])));
+        })),
+      !isTest && h('div', { style:{ fontSize:12, fontWeight:700, color:INS_UI.pri, margin:'4px 0 6px' } }, 'Contents (' + its.length + ')'),
+      !isTest && h('div', { style:{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:14 } },
+        its.map(function(it){ return h('span', { key:it.type + it.id, style:{ fontSize:12, padding:'3px 9px', borderRadius:12, background:INS_UI.priL, color:INS_UI.pri } }, it.tag + ' ' + it.name); })),
+      h('div', { style:{ display:'flex', gap:6, flexWrap:'wrap' } },
+        l.result === 'BI pending' && h('button', { id:'ins-bi-pass', onClick:function(){ recordBI(l, 'Pass'); }, style:insBtn('#2E7D32') }, '✅ BI passed'),
+        l.result === 'BI pending' && h('button', { id:'ins-bi-fail', onClick:function(){ recordBI(l, 'Fail'); }, style:insBtn(INS_UI.red, true) }, '❌ BI failed'),
+        needsRecall && h('button', { id:'ins-recall', onClick:function(){ recallDone(l); }, style:insBtn(INS_UI.red) }, '♻️ Mark recall done'),
+        isMgr && l.result !== 'Void' && h('button', { onClick:function(){ voidLoad(l); }, style:Object.assign(insBtn(INS_UI.grey, true), { marginLeft:'auto' }) }, 'Void (entered by mistake)'))
+    );
   }
 
   function renderView(a) {
@@ -13359,7 +13715,10 @@ function InstrumentsPage({ insRole, userName }) {
       ['Price', a.price !== '' && a.price != null ? '₹' + Number(a.price).toLocaleString('en-IN') : ''], ['Vendor', a.vendor],
       ['Warranty until', a.warrantyUntil], ['Service every', a.serviceMonths ? a.serviceMonths + ' months' : ''],
       ['Last service', a.lastService], ['Next service', a.nextService], ['AMC vendor', a.amcVendor], ['AMC expiry', a.amcExpiry],
-      ['In this status since', a.statusSince], ['Notes', a.notes]].filter(function(x){ return x[1] !== '' && x[1] != null; });
+      ['In this status since', a.statusSince],
+      ['Sterility', a.kind === 'Equipment' ? '' : (a.setId && activeSetIds[a.setId])
+        ? 'Goes with ' + activeSetIds[a.setId].tag + ': ' + insSterText(ster['set:' + a.setId]) : insSterText(ster['asset:' + a.id])],
+      ['Notes', a.notes]].filter(function(x){ return x[1] !== '' && x[1] != null; });
     var acts = ACTIONS.filter(function(x){ return (isMgr || !x.mgr) && x.show(a); });
     return h('div', null,
       h('div', { style:{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:12 } },
@@ -13402,6 +13761,16 @@ function InstrumentsPage({ insRole, userName }) {
         h(InsActionForm, { asset:a, action:act, locs:locs, onCancel:function(){ open({ t:'view', id:a.id }); },
           onSave:function(fm){ doAction(a.id, act, fm); } }));
     }
+    if (modal.t === 'loadForm') {
+      return h(InsModal, { key:modal.key, wide:true, onClose:close, title:'Record sterilisation load' },
+        h(InsLoadForm, { autoclaves:autoclaves, cycles:cycles, sets:activeSets, looseAssets:looseInstr, ster:ster, userName:userName,
+          packDays:packDays, onCancel:close, onSave:saveLoad }));
+    }
+    if (modal.t === 'load') {
+      var ld = data.loads.filter(function(l){ return l.id === modal.id; })[0];
+      if (!ld) return null;
+      return h(InsModal, { key:modal.key, wide:true, onClose:close, title:'Load ' + ld.tag + ' · ' + ld.date }, renderLoadView(ld));
+    }
     if (modal.t === 'set') {
       var setRec = modal.id ? data.sets.filter(function(s){ return s.id === modal.id; })[0] : null;
       return h(InsModal, { key:modal.key, wide:true, onClose:close, title: setRec ? setRec.tag + ' · ' + setRec.name : 'New set' },
@@ -13411,7 +13780,7 @@ function InstrumentsPage({ insRole, userName }) {
     return null;
   }
 
-  var tabs = [['dash', '📊 Dashboard'], ['reg', '🦷 Register (' + active.length + ')'], ['sets', '🧰 Sets (' + activeSets.length + ')']]
+  var tabs = [['dash', '📊 Dashboard'], ['reg', '🦷 Register (' + active.length + ')'], ['sets', '🧰 Sets (' + activeSets.length + ')'], ['ster', '🧪 Sterilisation']]
     .concat(isMgr ? [['sett', '⚙️ Lists']] : []);
   return h('div', { style:{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', height:'100%', background:INS_UI.bg, fontFamily:INS_UI.font } },
     toast && h('div', { style:{ position:'fixed', top:16, right:16, zIndex:9999, background: toast.bad ? INS_UI.red : INS_UI.pri, color:'#fff',
@@ -13426,8 +13795,8 @@ function InstrumentsPage({ insRole, userName }) {
                   color: on ? INS_UI.pri : INS_UI.grey, borderBottom:'2.5px solid ' + (on ? INS_UI.pri : 'transparent') } }, t[1]);
       })),
     h('div', { style:{ flex:1, overflowY:'auto', padding:16 } },
-      tab === 'dash' && renderDash(), tab === 'reg' && renderReg(), tab === 'sets' && renderSets(),
-      tab === 'sett' && isMgr && h(InsSettingsForm, { locs:locs, insCats:insCats, eqpCats:eqpCats, onSave:saveLists })),
+      tab === 'dash' && renderDash(), tab === 'reg' && renderReg(), tab === 'sets' && renderSets(), tab === 'ster' && renderSter(),
+      tab === 'sett' && isMgr && h(InsSettingsForm, { locs:locs, insCats:insCats, eqpCats:eqpCats, cycles:cycles, packDays:packDays, onSave:saveLists })),
     renderModal()
   );
 }

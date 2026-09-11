@@ -130,7 +130,11 @@ equipment included.
 - Never deleted — items and sets are `Retired` (the merge cannot carry deletions).
 - Access: owner, `inv` or `instr` = manage; `invout` = view + report damaged/missing/found.
 - Test: `tests/test-instruments.js`.
-- **Phase 2 (next):** sterilisation loads (autoclave cycle, indicators, BI/Bowie-Dick,
+- **Phase 2 shipped 2026-09-11** (app 2026-09-11-3): tab "Sterilisation", `kbdc_ins_loads` →
+  Inventory tab `SterilisationLoads`, test `tests/test-sterilisation.js`. Sterility of a set or
+  loose instrument is DERIVED from its latest non-void load (`kbdcInsSterility`), never stored
+  on the item — keep it that way. "Mark used" stamps `openedAt` on the set/item.
+  Scope of Phase 2 as agreed: sterilisation loads (autoclave cycle, indicators, BI/Bowie-Dick,
   which sets were in the load, pack expiry, failed-load recall). **Phase 3:** reports,
   QR tag labels. The owner has no existing instrument list yet — Excel template/import is
   in the Register tab.
