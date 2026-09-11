@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-11-4';
+var KBDC_APP_VERSION = '2026-09-11-5';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -3733,7 +3733,12 @@ function TaskListView({
       if (nowDone) {
         log.push({
           id: 'tl' + Date.now().toString(36) + Math.random().toString(36).slice(2,5),
-          roleCode: role.code, staffName: role.name || '',
+          // A role card with nobody assigned is named "—" (DAS and ASD on the
+          // live Sheet), which left hundreds of completions credited to no one.
+          // Then the person actually signed in is who did it.
+          roleCode: role.code,
+          staffName: /[A-Za-zऀ-ॿ]/.test(String(role.name || '')) ? role.name
+                     : ((kbdcGetSession() || {}).name || ''),
           taskCode: t.code || '', taskEn: t.en || '', taskHi: t.hi || '', frequency: t.freq || 'Daily',
           // The clock the staff member is looking at, not UTC. `stamp` stays
           // the true instant on the task itself (doneAt) for cross-device
@@ -4997,6 +5002,25 @@ function ManagerDashboard({
   const [mgrRptGenerated, setMgrRptGenerated] = useState(false);
   const [qrStaff, setQrStaff] = useState(null);
   const [copiedIdx, setCopiedIdx] = useState(null);
+  /* The Overview, History and Report are worked out from localStorage while
+     rendering, but nothing re-rendered them when the background sync brought
+     in a colleague's tick: the staff screens listened for 'kbdc-tasks-sync',
+     this one did not. So the owner's dashboard showed whatever it held at the
+     moment it was opened, however much work arrived afterwards, and looked
+     disconnected. Redraw on every sync that changes tasks or staff, and ask
+     for the fast sync pace while someone is watching. */
+  const [, setLiveTick] = useState(0);
+  useEffect(function(){
+    function onSync(){ setLiveTick(function(n){ return n + 1; }); }
+    window.addEventListener('kbdc-tasks-sync', onSync);
+    window.addEventListener('kbdc-staff-sync', onSync);
+    var stopLive = kbdcWatchLive();
+    return function(){
+      window.removeEventListener('kbdc-tasks-sync', onSync);
+      window.removeEventListener('kbdc-staff-sync', onSync);
+      if (typeof stopLive === 'function') stopLive();
+    };
+  }, []);
   const [staffNames, setStaffNames] = useState({});
   /* Initialize roles from ROLE_CARDS + HR Admin — persisted in localStorage */
   const [roles, setRoles] = useState(function() {

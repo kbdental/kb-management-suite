@@ -92,6 +92,17 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
 
 ## Recently fixed — do not re-break
 
+- **Manager Dashboard did not redraw when ticks arrived** (2026-09-11, app 2026-09-11-5).
+  The Sheet was fine (TaskCompletions 1,029 rows); the dashboard just never listened for
+  `kbdc-tasks-sync`. It now does, plus `kbdc-staff-sync` and `kbdcWatchLive()`.
+  Test: `tests/test-manager-overview-live.js`.
+- **Ticks on role cards with nobody assigned were saved as "—"** (DAS, ASD have no entry in
+  RoleEmployees and no HR staff with those designations). New ticks record the signed-in
+  person. The old "—" rows still count toward the role in the clinic-wide score, but no
+  person's row shows them until someone is assigned to DAS / ASD.
+- **Known, not fixed:** `PinEntry` accepts any 4 digits (`|| true`), including the Manager
+  Dashboard. Flagged as a separate task.
+
 - **`fetch` had no timeout.** One hung request left a sync re-entrancy guard raised and the
   device stopped syncing entirely until reload. This was the cause of "it works for two
   days then stops". Now bounded by `KBDC_REQ_TIMEOUT_MS` (45 s).
