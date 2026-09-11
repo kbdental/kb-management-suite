@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-11-3';
+var KBDC_APP_VERSION = '2026-09-11-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -13163,6 +13163,143 @@ function InsLoadForm(props) {
   );
 }
 
+/* ── Reports & QR labels (Phase 3) ── */
+function kbdcInsReports(d, from, to) {
+  function inRange(ds) { ds = String(ds || '').slice(0, 10); return !!ds && (!from || ds >= from) && (!to || ds <= to); }
+  function num(x) { return Number(x) || 0; }
+  function round1(x) { return Math.round(x * 10) / 10; }
+  var active = d.assets.filter(function(a){ return a.status !== 'Retired'; });
+  function group(list, keyFn) {
+    var m = {};
+    list.forEach(function(a){
+      var k = keyFn(a) || '(not set)';
+      var g = m[k] || (m[k] = { key:k, count:0, value:0 });
+      g.count++; g.value += num(a.price);
+    });
+    return Object.keys(m).map(function(k){ return m[k]; }).sort(function(x, y){ return y.value - x.value || y.count - x.count; });
+  }
+  var byId = {}; d.assets.forEach(function(a){ byId[a.id] = a; });
+
+  var costRows = d.log.filter(function(r){ return num(r.cost) > 0 && inRange(r.date); });
+  var months = {}, items = {};
+  costRows.forEach(function(r){
+    var mk = String(r.date).slice(0, 7);
+    var m = months[mk] || (months[mk] = { month:mk, service:0, repair:0, other:0, total:0 });
+    var kind = r.event === 'Serviced' ? 'service' : r.event === 'Repaired' ? 'repair' : 'other';
+    m[kind] += num(r.cost); m.total += num(r.cost);
+    var ik = r.tag || r.assetId;
+    var it = items[ik] || (items[ik] = { tag:r.tag, name:r.name, count:0, total:0 });
+    it.count++; it.total += num(r.cost);
+  });
+
+  var retired = d.log.filter(function(r){ return r.event === 'Retired' && inRange(r.date); }).map(function(r){
+    var a = byId[r.assetId] || {}, start = String(a.purchaseDate || a.createdAt || '').slice(0, 10), yrs = null;
+    if (start) { var t = (new Date(r.date + 'T12:00:00') - new Date(start + 'T12:00:00')) / (365.25 * 864e5); if (!isNaN(t) && t >= 0) yrs = round1(t); }
+    return { tag:r.tag, name:r.name, date:r.date, years:yrs, value:num(a.price), note:r.detail || '' };
+  });
+  var known = retired.filter(function(x){ return x.years !== null; });
+  var missingNow = active.filter(function(a){ return a.status === 'Missing'; });
+
+  var loads = (d.loads || []).filter(function(l){ return l.result !== 'Void' && inRange(l.date); });
+  var packs = loads.filter(function(l){ return !kbdcInsIsTestCycle(l.cycle); }), tests = loads.filter(function(l){ return kbdcInsIsTestCycle(l.cycle); });
+  var failed = packs.filter(function(l){ return l.result === 'Failed'; }).length;
+  var byAc = {}, byMo = {};
+  loads.forEach(function(l){
+    var a = byAc[l.autoclaveId || '?'] || (byAc[l.autoclaveId || '?'] = { key:(l.autoclaveTag || '') + ' ' + (l.autoclaveName || ''), loads:0, failed:0, tests:0, testsFailed:0 });
+    var mk = String(l.date).slice(0, 7), m = byMo[mk] || (byMo[mk] = { month:mk, loads:0, failed:0, tests:0, testsFailed:0 });
+    var isT = kbdcInsIsTestCycle(l.cycle), bad = l.result === 'Failed';
+    [a, m].forEach(function(g){ if (isT) { g.tests++; if (bad) g.testsFailed++; } else { g.loads++; if (bad) g.failed++; } });
+  });
+
+  return {
+    activeCount:active.length,
+    totalValue:active.reduce(function(s, a){ return s + num(a.price); }, 0),
+    unpriced:active.filter(function(a){ return !num(a.price); }).length,
+    byCat:group(active, function(a){ return (a.kind === 'Equipment' ? 'Equipment · ' : '') + (a.cat || 'Uncategorised'); }),
+    byLoc:group(active, function(a){ return a.location; }),
+    spendTotal:costRows.reduce(function(s, r){ return s + num(r.cost); }, 0),
+    spendByMonth:Object.keys(months).sort().map(function(k){ return months[k]; }),
+    spendByItem:Object.keys(items).map(function(k){ return items[k]; }).sort(function(x, y){ return y.total - x.total; }).slice(0, 10),
+    missingReports:d.log.filter(function(r){ return r.event === 'Reported missing' && inRange(r.date); }).length,
+    foundReports:d.log.filter(function(r){ return r.event === 'Found' && inRange(r.date); }).length,
+    missingNow:missingNow.length, missingValue:missingNow.reduce(function(s, a){ return s + num(a.price); }, 0),
+    retired:retired, retiredValue:retired.reduce(function(s, x){ return s + x.value; }, 0),
+    avgLife: known.length ? round1(known.reduce(function(s, x){ return s + x.years; }, 0) / known.length) : null,
+    ster:{ loads:packs.length, released:packs.filter(function(l){ return l.result === 'Released'; }).length,
+      pending:packs.filter(function(l){ return l.result === 'BI pending'; }).length, failed:failed,
+      failRate: packs.length ? round1(failed / packs.length * 100) : 0,
+      biTested:packs.filter(function(l){ return l.bi === 'Pass' || l.bi === 'Fail'; }).length,
+      biFailed:packs.filter(function(l){ return l.bi === 'Fail'; }).length,
+      tests:tests.length, testsFailed:tests.filter(function(l){ return l.result === 'Failed'; }).length,
+      byAutoclave:Object.keys(byAc).map(function(k){ return byAc[k]; }),
+      byMonth:Object.keys(byMo).sort().map(function(k){ return byMo[k]; }) }
+  };
+}
+
+// Loaded only when someone prints labels, so a CDN hiccup never slows the app.
+var KBDC_QR_SRC = 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js';
+function kbdcInsLoadQr() {
+  return new Promise(function(resolve, reject) {
+    if (typeof window.qrcode === 'function') { resolve(window.qrcode); return; }
+    var s = document.createElement('script');
+    s.src = KBDC_QR_SRC;
+    s.onload = function(){ if (typeof window.qrcode === 'function') resolve(window.qrcode); else reject(new Error('The QR library did not load.')); };
+    s.onerror = function(){ reject(new Error('Could not load the QR library. Check the internet connection and try again.')); };
+    document.head.appendChild(s);
+  });
+}
+// What a label's QR code holds: this app's own address, opened at the item.
+function kbdcInsItemUrl(tag) { return String(window.location.href).split('#')[0].split('?')[0] + '#ins=' + encodeURIComponent(tag); }
+function kbdcInsEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function(c){ return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;' }[c]; }); }
+function kbdcInsLabelsHtml(qr, items, size, clinic) {
+  var big = size === 'large';
+  var cells = items.map(function(it) {
+    var q = qr(0, 'M');
+    q.addData(kbdcInsItemUrl(it.tag));
+    q.make();
+    return '<div class="lb"><div class="qr">' + q.createSvgTag({ cellSize:4, margin:0, scalable:true }) + '</div><div class="tx">' +
+      '<div class="tg">' + kbdcInsEsc(it.tag) + '</div><div class="nm">' + kbdcInsEsc(it.name) + '</div>' +
+      (big ? '<div class="cl">' + kbdcInsEsc(clinic) + '</div>' : '') + '</div></div>';
+  }).join('');
+  var w = big ? '63.5mm' : '38mm', ht = big ? '38.1mm' : '21.2mm', qs = big ? '30mm' : '17mm';
+  return '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Instrument labels</title><style>' +
+    '@page{size:A4;margin:10mm}body{margin:0;font-family:Arial,sans-serif}' +
+    '.sheet{display:grid;grid-template-columns:repeat(auto-fill,' + w + ')}' +
+    '.lb{width:' + w + ';height:' + ht + ';box-sizing:border-box;padding:1.5mm;display:flex;align-items:center;gap:2mm;' +
+      'border:0.2mm dashed #bbb;overflow:hidden;break-inside:avoid}' +
+    '.qr{width:' + qs + ';height:' + qs + ';flex-shrink:0}.qr svg{width:100%;height:100%;display:block}' +
+    '.tx{min-width:0}.tg{font-weight:bold;font-size:' + (big ? '15pt' : '9pt') + '}' +
+    '.nm{font-size:' + (big ? '9pt' : '6.5pt') + ';line-height:1.2;max-height:3.6em;overflow:hidden}.cl{font-size:7pt;color:#666;margin-top:1mm}' +
+    '.bar{padding:8px 12px;font-size:12px;background:#FFF8E1}@media print{.bar{display:none}}' +
+    '</style></head><body><div class="bar">' + items.length + (items.length === 1 ? ' label' : ' labels') +
+    '. Print at 100% scale (turn off "fit to page"). Dashed lines are cut marks.</div><div class="sheet">' + cells + '</div></body></html>';
+}
+
+function InsLabelForm(props) {
+  var h = React.createElement;
+  var s = React.useState(props.items.length > 3 ? 'small' : 'large'), size = s[0], setSize = s[1];
+  function opt(val, title, sub) {
+    var on = size === val;
+    return h('label', { key:val, style:{ display:'flex', gap:10, alignItems:'flex-start', padding:'10px 12px', borderRadius:10, cursor:'pointer',
+        border:'1.5px solid ' + (on ? INS_UI.pri : INS_UI.line), background: on ? INS_UI.priL : '#fff', flex:1, minWidth:200 } },
+      h('input', { type:'radio', name:'ins-lsize', checked:on, onChange:function(){ setSize(val); } }),
+      h('div', null, h('div', { style:{ fontSize:13, fontWeight:700, color:'#263238' } }, title), h('div', { style:{ fontSize:11.5, color:INS_UI.grey, marginTop:2 } }, sub)));
+  }
+  var tags = props.items.map(function(i){ return i.tag; });
+  return h('div', null,
+    h('div', { style:{ fontSize:13, color:'#37474F', marginBottom:10 } }, props.items.length + (props.items.length === 1 ? ' label: ' : ' labels: ') +
+      tags.slice(0, 12).join(', ') + (tags.length > 12 ? ' …' : '')),
+    h('div', { style:{ display:'flex', gap:10, flexWrap:'wrap' } },
+      opt('small', 'Small, 38 × 21 mm', '65 per A4 sheet. For trays, pouches and handpieces.'),
+      opt('large', 'Large, 63.5 × 38 mm', '21 per A4 sheet. For equipment and set boxes.')),
+    h('div', { style:{ fontSize:11.5, color:INS_UI.grey, marginTop:10, lineHeight:1.5 } },
+      'Scanning a label with a phone camera opens this app at that item. Staff must be signed in and have Instruments access to see it.'),
+    h('div', { style:{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 } },
+      h('button', { onClick:props.onCancel, style:insBtn(INS_UI.grey, true) }, 'Cancel'),
+      h('button', { id:'ins-labels-print', onClick:function(){ props.onPrint(size); }, style:insBtn(INS_UI.pri) }, '🖨 Print'))
+  );
+}
+
 var KBDC_INS_IMPORT_COLS = ['Type','Name','Category','Brand','Model','Serial No','Quantity','Location','Status','Condition',
   'Purchase Date','Price','Vendor','Warranty Until','Service Interval (months)','Last Service','AMC Vendor','AMC Expiry','Set','Notes','Tag'];
 var KBDC_INS_IMPORT_MAP = { type:'kind', kind:'kind', name:'name', item:'name', category:'cat', brand:'brand', model:'model',
@@ -13180,6 +13317,7 @@ function InstrumentsPage({ insRole, userName }) {
   var s3 = React.useState(null), modal = s3[0], setModal = s3[1];
   var s4 = React.useState(null), toast = s4[0], setToast = s4[1];
   var s5 = React.useState({ month:'', ac:'' }), sf = s5[0], setSf = s5[1];
+  var s6 = React.useState(function(){ return { from:kbdcInsAddDays(kbdcToday(), -365), to:kbdcToday() }; }), rf = s6[0], setRf = s6[1];
   var fileRef = React.useRef(null);
 
   React.useEffect(function(){ return kbdcWatchLive(); }, []);
@@ -13192,6 +13330,20 @@ function InstrumentsPage({ insRole, userName }) {
       if (sig !== last) { last = sig; setData(d); }
     }, 4000);
     return function(){ clearInterval(t); };
+  }, []);
+
+  // A scanned QR label opens the app at #ins=TAG: show that item or set, then
+  // clear the address so a reload does not keep reopening it.
+  React.useEffect(function(){
+    var m = String(window.location.hash || '').match(/^#ins=(.+)$/);
+    if (!m) return;
+    var tag = decodeURIComponent(m[1]).trim().toUpperCase(), d = kbdcInsReadAll();
+    try { window.history.replaceState(null, '', window.location.pathname + window.location.search); } catch (e) {}
+    var a = d.assets.filter(function(x){ return String(x.tag).toUpperCase() === tag; })[0];
+    var st = d.sets.filter(function(x){ return String(x.tag).toUpperCase() === tag; })[0];
+    if (a) open({ t:'view', id:a.id });
+    else if (st) open({ t:'set', id:st.id });
+    else say(tag + ' is not on this device yet. It may still be syncing; try again in a minute.', true);
   }, []);
 
   function say(msg, bad) { setToast({ msg:msg, bad:!!bad }); setTimeout(function(){ setToast(null); }, 3000); }
@@ -13404,6 +13556,37 @@ function InstrumentsPage({ insRole, userName }) {
     XLSX.writeFile(wb, 'KB_Sterilisation_Register.xlsx');
   }
 
+  function printLabels(items, size) {
+    // Opened here, inside the click, or the browser treats it as a pop-up.
+    var w = window.open('', '_blank');
+    if (!w) { say('The browser blocked the label window. Allow pop-ups for this site and try again.', true); return; }
+    w.document.write('<p style="font-family:Arial;padding:20px">Preparing labels…</p>');
+    kbdcInsLoadQr().then(function(qr){
+      w.document.open();
+      w.document.write(kbdcInsLabelsHtml(qr, items, size, 'K.B. Dental Clinic'));
+      w.document.close();
+      setTimeout(function(){ try { w.focus(); w.print(); } catch (e) {} }, 500);
+      close();
+    }).catch(function(err){ try { w.close(); } catch (e) {} say(err.message, true); });
+  }
+  function exportReports(R) {
+    if (typeof XLSX === 'undefined') { say('The Excel library has not loaded. Check the connection and try again.', true); return; }
+    var wb = XLSX.utils.book_new();
+    function add(name, head, rows) {
+      var ws = XLSX.utils.aoa_to_sheet([head].concat(rows));
+      ws['!cols'] = head.map(function(c){ return { wch:Math.max(12, String(c).length + 2) }; });
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    }
+    add('Value by category', ['Category','Items','Value (₹)'], R.byCat.map(function(g){ return [g.key, g.count, g.value]; }));
+    add('Value by location', ['Location','Items','Value (₹)'], R.byLoc.map(function(g){ return [g.key, g.count, g.value]; }));
+    add('Spend by month', ['Month','Service (₹)','Repair (₹)','Other (₹)','Total (₹)'], R.spendByMonth.map(function(m){ return [m.month, m.service, m.repair, m.other, m.total]; }));
+    add('Top spend items', ['Tag','Name','Entries','Spend (₹)'], R.spendByItem.map(function(i){ return [i.tag, i.name, i.count, i.total]; }));
+    add('Retired', ['Tag','Name','Retired on','Years in service','Value (₹)','Note'], R.retired.map(function(x){ return [x.tag, x.name, x.date, x.years === null ? '' : x.years, x.value, x.note]; }));
+    add('Sterilisation by month', ['Month','Loads','Failed','Machine tests','Tests failed'], R.ster.byMonth.map(function(m){ return [m.month, m.loads, m.failed, m.tests, m.testsFailed]; }));
+    add('Sterilisation by autoclave', ['Autoclave','Loads','Failed','Machine tests','Tests failed'], R.ster.byAutoclave.map(function(a){ return [a.key, a.loads, a.failed, a.tests, a.testsFailed]; }));
+    XLSX.writeFile(wb, 'KB_Instruments_Reports_' + (rf.from || 'start') + '_to_' + (rf.to || 'today') + '.xlsx');
+  }
+
   function downloadTemplate() {
     if (typeof XLSX === 'undefined') { say('The Excel library has not loaded. Check the connection and try again.', true); return; }
     var wb = XLSX.utils.book_new();
@@ -13570,7 +13753,9 @@ function InstrumentsPage({ insRole, userName }) {
         h('input', { id:'ins-search', value:f.q, onChange:function(e){ setF(Object.assign({}, f, { q:e.target.value })); },
           placeholder:'Search tag, name, serial…', style:Object.assign({}, insInp, { width:220 }) }),
         fsel('kind', ['Instrument','Equipment'], 'All types'), fsel('status', KBDC_INS_STATUSES, 'All (not retired)'), fsel('loc', locs, 'All locations'),
-        h('div', { style:{ flex:1 } }), managerButtons()),
+        h('div', { style:{ flex:1 } }), managerButtons(),
+        isMgr && rows.length > 0 && h('button', { id:'ins-labels', onClick:function(){ open({ t:'labels', items:rows.map(function(a){ return { tag:a.tag, name:a.name }; }) }); },
+          style:insBtn(INS_UI.pri, true) }, '🏷 Labels (' + rows.length + ')')),
       card(h('div', { style:{ overflowX:'auto' } },
         rows.length === 0
           ? h('div', { style:{ padding:20, textAlign:'center', color:'#90A4AE', fontSize:13 } }, data.assets.length ? 'No items match these filters.' : 'No items yet.')
@@ -13597,6 +13782,8 @@ function InstrumentsPage({ insRole, userName }) {
     return h('div', { style:{ display:'flex', flexDirection:'column', gap:12 } },
       h('div', { style:{ display:'flex', gap:8, alignItems:'center' } },
         h('div', { style:{ flex:1, fontSize:12.5, color:INS_UI.grey } }, 'A set is issued and sterilised as one unit. It can hold tagged instruments and untagged items by count.'),
+        isMgr && activeSets.length > 0 && h('button', { id:'ins-set-labels', onClick:function(){ open({ t:'labels', items:activeSets.map(function(s){ return { tag:s.tag, name:s.name }; }) }); },
+          style:insBtn(INS_UI.pri, true) }, '🏷 Labels'),
         isMgr && h('button', { id:'ins-add-set', onClick:function(){ open({ t:'set', id:null }); }, style:insBtn(INS_UI.pri) }, '+ New set')),
       activeSets.length === 0
         ? card(h('div', { style:{ textAlign:'center', color:'#90A4AE', fontSize:13 } }, 'No sets yet.'))
@@ -13707,6 +13894,59 @@ function InstrumentsPage({ insRole, userName }) {
     );
   }
 
+  function renderReports() {
+    var R = kbdcInsReports(data, rf.from, rf.to);
+    function money(n) { return '₹' + Math.round(n).toLocaleString('en-IN'); }
+    var th = { textAlign:'left', padding:'7px 8px', fontSize:10.5, fontWeight:700, color:INS_UI.grey, whiteSpace:'nowrap', borderBottom:'1px solid ' + INS_UI.line };
+    var td = { padding:'7px 8px', fontSize:12.5, borderBottom:'1px solid ' + INS_UI.line };
+    function table(id, head, rows, numCols) {
+      if (!rows.length) return h('div', { style:{ fontSize:12.5, color:'#90A4AE', padding:'6px 0' } }, 'Nothing in this period.');
+      return h('div', { style:{ overflowX:'auto' } }, h('table', { id:id, style:{ borderCollapse:'collapse', width:'100%' } },
+        h('thead', null, h('tr', null, head.map(function(c, i){ return h('th', { key:c, style:Object.assign({}, th, (numCols || []).indexOf(i) >= 0 ? { textAlign:'right' } : {}) }, c); }))),
+        h('tbody', null, rows.map(function(r, ri){
+          return h('tr', { key:ri }, r.map(function(c, i){ return h('td', { key:i, style:Object.assign({}, td, (numCols || []).indexOf(i) >= 0 ? { textAlign:'right', whiteSpace:'nowrap' } : {}) }, c); }));
+        }))));
+    }
+    function section(id, title, sub, body) {
+      return card([h('div', { key:'t', style:{ fontSize:14, fontWeight:700, color:INS_UI.pri } }, title),
+        h('div', { key:'s', id:id, style:{ fontSize:12.5, color:'#37474F', margin:'3px 0 12px' } }, sub),
+        h('div', { key:'b', style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(300px,1fr))', gap:16 } }, body)]);
+    }
+    function sub(t) { return h('div', { style:{ fontSize:11.5, fontWeight:700, color:INS_UI.grey, marginBottom:4 } }, t); }
+    var S = R.ster;
+    return h('div', { style:{ display:'flex', flexDirection:'column', gap:14 } },
+      h('div', { style:{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' } },
+        h('span', { style:{ fontSize:12.5, color:INS_UI.grey } }, 'From'),
+        h('input', { id:'ins-rep-from', type:'date', value:rf.from, onChange:function(e){ setRf(Object.assign({}, rf, { from:e.target.value })); }, style:Object.assign({}, insInp, { width:'auto' }) }),
+        h('span', { style:{ fontSize:12.5, color:INS_UI.grey } }, 'to'),
+        h('input', { id:'ins-rep-to', type:'date', value:rf.to, onChange:function(e){ setRf(Object.assign({}, rf, { to:e.target.value })); }, style:Object.assign({}, insInp, { width:'auto' }) }),
+        h('div', { style:{ flex:1 } }),
+        h('button', { onClick:function(){ exportReports(R); }, style:insBtn(INS_UI.pri, true) }, '⬇ Export Excel')),
+      h('div', { style:{ fontSize:12, color:INS_UI.grey } }, 'Register value is the register as it stands today. Spend, losses and sterilisation cover the dates above.'),
+      section('ins-rep-value', 'Register value', money(R.totalValue) + ' across ' + R.activeCount + ' items in the register' +
+          (R.unpriced ? ' · ' + R.unpriced + ' without a price, so not counted' : ''), [
+        h('div', { key:'c' }, sub('By category'), table('ins-rep-cat', ['Category','Items','Value'], R.byCat.map(function(g){ return [g.key, g.count, money(g.value)]; }), [1, 2])),
+        h('div', { key:'l' }, sub('By location'), table('ins-rep-loc', ['Location','Items','Value'], R.byLoc.map(function(g){ return [g.key, g.count, money(g.value)]; }), [1, 2]))]),
+      section('ins-rep-spend', 'Repair & service spend', money(R.spendTotal) + ' in the period', [
+        h('div', { key:'m' }, sub('By month'), table('ins-rep-month', ['Month','Service','Repair','Other','Total'],
+          R.spendByMonth.map(function(m){ return [m.month, money(m.service), money(m.repair), money(m.other), money(m.total)]; }), [1, 2, 3, 4])),
+        h('div', { key:'i' }, sub('Items that cost the most'), table('ins-rep-items', ['Item','Entries','Spend'],
+          R.spendByItem.map(function(i){ return [i.tag + ' ' + i.name, i.count, money(i.total)]; }), [1, 2]))]),
+      section('ins-rep-loss', 'Losses & retirements',
+        R.missingReports + ' reported missing (' + R.foundReports + ' found) · ' + R.missingNow + ' missing now, worth ' + money(R.missingValue) +
+        ' · ' + R.retired.length + ' retired, worth ' + money(R.retiredValue) + (R.avgLife !== null ? ' · average ' + R.avgLife + ' years in service' : ''), [
+        h('div', { key:'r', style:{ gridColumn:'1 / -1' } }, sub('Retired in the period'), table('ins-rep-retired', ['Item','Retired on','Years in service','Value','Note'],
+          R.retired.map(function(x){ return [x.tag + ' ' + x.name, x.date, x.years === null ? '—' : x.years, money(x.value), x.note]; }), [2, 3]))]),
+      section('ins-rep-ster', 'Sterilisation',
+        S.loads + ' loads · ' + S.released + ' released · ' + S.failed + ' failed (' + S.failRate + '%)' + (S.pending ? ' · ' + S.pending + ' awaiting BI' : '') +
+        ' · BI tested on ' + S.biTested + (S.biFailed ? ', ' + S.biFailed + ' failed' : '') + ' · ' + S.tests + ' machine tests' + (S.testsFailed ? ', ' + S.testsFailed + ' failed' : ''), [
+        h('div', { key:'a' }, sub('By autoclave'), table('ins-rep-ac', ['Autoclave','Loads','Failed','Tests','Tests failed'],
+          S.byAutoclave.map(function(a){ return [a.key, a.loads, a.failed, a.tests, a.testsFailed]; }), [1, 2, 3, 4])),
+        h('div', { key:'m' }, sub('By month'), table('ins-rep-sm', ['Month','Loads','Failed','Tests','Tests failed'],
+          S.byMonth.map(function(m){ return [m.month, m.loads, m.failed, m.tests, m.testsFailed]; }), [1, 2, 3, 4]))])
+    );
+  }
+
   function renderView(a) {
     var setRec = a.setId ? data.sets.filter(function(s){ return s.id === a.setId; })[0] : null;
     var hist = data.log.filter(function(r){ return r.assetId === a.id; }).sort(function(x, y){ return String(y.updatedAt).localeCompare(String(x.updatedAt)); });
@@ -13730,6 +13970,7 @@ function InstrumentsPage({ insRole, userName }) {
         })),
       h('div', { style:{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:16 } },
         isMgr && h('button', { onClick:function(){ open({ t:'form', isNew:false, init:a }); }, style:insBtn(INS_UI.pri) }, '✏️ Edit'),
+        isMgr && h('button', { onClick:function(){ open({ t:'labels', items:[{ tag:a.tag, name:a.name }] }); }, style:insBtn(INS_UI.pri, true) }, '🏷 Label'),
         acts.map(function(x){
           return h('button', { key:x.k, id:'ins-act-' + x.k, onClick:function(){ open({ t:'action', id:a.id, k:x.k }); },
             style:insBtn(x.k === 'retire' ? INS_UI.red : INS_UI.pri, true) }, x.label);
@@ -13761,6 +14002,10 @@ function InstrumentsPage({ insRole, userName }) {
         h(InsActionForm, { asset:a, action:act, locs:locs, onCancel:function(){ open({ t:'view', id:a.id }); },
           onSave:function(fm){ doAction(a.id, act, fm); } }));
     }
+    if (modal.t === 'labels') {
+      return h(InsModal, { key:modal.key, wide:true, onClose:close, title:'Print QR labels' },
+        h(InsLabelForm, { items:modal.items, onCancel:close, onPrint:function(size){ printLabels(modal.items, size); } }));
+    }
     if (modal.t === 'loadForm') {
       return h(InsModal, { key:modal.key, wide:true, onClose:close, title:'Record sterilisation load' },
         h(InsLoadForm, { autoclaves:autoclaves, cycles:cycles, sets:activeSets, looseAssets:looseInstr, ster:ster, userName:userName,
@@ -13781,7 +14026,7 @@ function InstrumentsPage({ insRole, userName }) {
   }
 
   var tabs = [['dash', '📊 Dashboard'], ['reg', '🦷 Register (' + active.length + ')'], ['sets', '🧰 Sets (' + activeSets.length + ')'], ['ster', '🧪 Sterilisation']]
-    .concat(isMgr ? [['sett', '⚙️ Lists']] : []);
+    .concat(isMgr ? [['rep', '📈 Reports'], ['sett', '⚙️ Lists']] : []);
   return h('div', { style:{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', height:'100%', background:INS_UI.bg, fontFamily:INS_UI.font } },
     toast && h('div', { style:{ position:'fixed', top:16, right:16, zIndex:9999, background: toast.bad ? INS_UI.red : INS_UI.pri, color:'#fff',
       padding:'10px 16px', borderRadius:10, fontSize:13, fontWeight:600, boxShadow:'0 6px 20px rgba(0,0,0,.2)', maxWidth:'80vw' } }, toast.msg),
@@ -13795,7 +14040,7 @@ function InstrumentsPage({ insRole, userName }) {
                   color: on ? INS_UI.pri : INS_UI.grey, borderBottom:'2.5px solid ' + (on ? INS_UI.pri : 'transparent') } }, t[1]);
       })),
     h('div', { style:{ flex:1, overflowY:'auto', padding:16 } },
-      tab === 'dash' && renderDash(), tab === 'reg' && renderReg(), tab === 'sets' && renderSets(), tab === 'ster' && renderSter(),
+      tab === 'dash' && renderDash(), tab === 'reg' && renderReg(), tab === 'sets' && renderSets(), tab === 'ster' && renderSter(), tab === 'rep' && isMgr && renderReports(),
       tab === 'sett' && isMgr && h(InsSettingsForm, { locs:locs, insCats:insCats, eqpCats:eqpCats, cycles:cycles, packDays:packDays, onSave:saveLists })),
     renderModal()
   );
@@ -25556,7 +25801,8 @@ function App() {
   }
     /* Sync HR Admin → role cards on every open */
   React.useEffect(function(){ kbdcMigrateLegacyDentalOpsData(); kbdcSyncRoleEmployeesFromHR(); }, []);
-  const [nav, setNav] = useState('home');
+  // A scanned instrument QR label opens the app at #ins=TAG; start on that screen.
+  const [nav, setNav] = useState(() => /^#ins=/.test(window.location.hash || '') ? 'instr' : 'home');
   const [session, setSession] = useState(()=>kbdcReconcileSession(kbdcGetSession()));
   const [appUser, setAppUser] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile drawer only — irrelevant on desktop

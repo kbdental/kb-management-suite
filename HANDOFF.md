@@ -134,6 +134,11 @@ equipment included.
   Inventory tab `SterilisationLoads`, test `tests/test-sterilisation.js`. Sterility of a set or
   loose instrument is DERIVED from its latest non-void load (`kbdcInsSterility`), never stored
   on the item — keep it that way. "Mark used" stamps `openedAt` on the set/item.
+- **Phase 3 shipped 2026-09-11** (app 2026-09-11-4): "Reports" tab (managers; `kbdcInsReports`)
+  and printable QR labels. A label's QR holds `<app url>#ins=TAG`; the App starts on `instr`
+  when that hash is present and InstrumentsPage opens the item, then clears the hash. The QR
+  library (qrcode-generator 1.4.4, cdnjs) is loaded only when printing. Test:
+  `tests/test-instruments-reports.js`.
   Scope of Phase 2 as agreed: sterilisation loads (autoclave cycle, indicators, BI/Bowie-Dick,
   which sets were in the load, pack expiry, failed-load recall). **Phase 3:** reports,
   QR tag labels. The owner has no existing instrument list yet — Excel template/import is
