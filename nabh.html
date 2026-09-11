@@ -1,0 +1,641 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<title>K.B. Dental Clinic – NABH Accreditation</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  html, body { margin: 0; height: 100%; font-family: 'Poppins', sans-serif; }
+  #root { height: 100vh; display: flex; flex-direction: column; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+/* NABH DHSP self-assessment — standalone app.
+   Split out of the Management Suite (index.html) on 2026-09-11. It is served
+   from the same site, so scores already saved on a device (localStorage keys
+   kbdc_nabh_current / kbdc_nabh_history / kbdc_nabh_settings) carry over. */
+var NABH_APP_VERSION = '2026-09-11-1';
+
+function kbdcToday() {
+  var d = new Date(), m = d.getMonth() + 1, day = d.getDate();
+  return d.getFullYear() + '-' + (m < 10 ? '0' + m : m) + '-' + (day < 10 ? '0' + day : day);
+}
+
+function NabhPage() {
+  var e = React.createElement;
+  var useState = React.useState;
+
+  var B='#1A237E',BL='#E8EAF6',BM='#1357A6',
+      G='#2E7D32',GL='#E8F5E9',R='#C62828',RL='#FFEBEE',
+      AM='#E65100',AL='#FFF3E0',GR='#546E7A',GRL='#F5F6FA',W='#fff';
+
+  var NABH_DATA = [{"id":"AAC","name":"ACCESS, ASSESSMENT AND CONTINUITY OF CARE","standards":[{"code":"AAC.1","title":"AAC.1. The DHSP defines and displays the services that it provides.","mes":[{"code":"AAC.1.a.","desc":"The services being provided are clearly defined and are in consonance with the needs of the community.","type":"Commitment","prev_hco":5.0,"prev_assessor":0.0},{"code":"AAC.1.b.","desc":"Scope of the oral and dental care services of each department is defined.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.1.c.","desc":"The defined services are prominently displayed.","type":"Commitment","prev_hco":5.0,"prev_assessor":1.0}],"hco_avg":5.0,"assessor_avg":3.0},{"code":"AAC.2","title":"AAC.2. The DHSP has a well-defined registration and record-keeping process.","mes":[{"code":"AAC.2.a.","desc":"DHSP uses written guidance for registering and admitting (if required) patients.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.2.b.","desc":"A unique identification number is generated at the end of the registration.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.2.c.","desc":"Patients are accepted only if the DHSP can provide the required service.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.2.d.","desc":"Prioritisation of oral and dental services is done as per the clinical needs of the patients.","type":"Achievement","prev_hco":5.0,"prev_assessor":1.0}],"hco_avg":5.0,"assessor_avg":4.0},{"code":"AAC.3","title":"AAC.3. There is an appropriate mechanism for referral of patients/ requisition of outside specialist services for patients whose treatment needs are not in the scope of the DHSP.","mes":[{"code":"AAC.3.a.","desc":"Written guidance  governs the referral of patients to another facility or requisition of outside specialist to DHSP for patients whose treatment needs are not in the scope of the DHSP.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.3.b.","desc":"The DHSP gives a case summary of the patient’s condition and the treatment given when transferring/ referring patient.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"AAC.4","title":"AC.4. Patients undergo an established initial assessment.","mes":[{"code":"AAC.4.a.","desc":"The DHSP defines the content of the initial assessments for  patients. *","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.4.b","desc":"The initial assessment is performed by a qualified dentist. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.4.c.","desc":"Initial assessment  is performed within a time frame based  a  based on the needs of the patient.*","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.4.d.","desc":"The initial assessment results in a documented plan of care including preventive/ maintenance aspects of the dental care.*","type":"Achievement","prev_hco":1.0,"prev_assessor":1.0}],"hco_avg":4.0,"assessor_avg":3.0},{"code":"AAC.5","title":"AAC.5. Patients cared for by the organisation undergo a regular follow up.","mes":[{"code":"AAC.5.a.","desc":"All patients are followed up at appropriate intervals.","type":"Core","prev_hco":5.0,"prev_assessor":1.0},{"code":"AAC.5.b.","desc":"Out-patients are informed of their next follow-up, where appropriate","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.5.c.","desc":"Staff involved in direct clinical care documents reassessments.","type":"Achievement","prev_hco":5.0,"prev_assessor":0.0},{"code":"AAC.5.d.","desc":"Patients are followed up,  to determine their response to treatment and to plan further treatment/referral.","type":"Commitment","prev_hco":1.0,"prev_assessor":1.0}],"hco_avg":4.0,"assessor_avg":2.3333333333333335},{"code":"AAC.6","title":"AAC.6.  Written guidance governs  the in-house dental laboratory services offered at DHSP, or outsourced to an independent dental laboratory.","mes":[{"code":"AAC.6.a.","desc":"The scope of the dental laboratory services is commensurate to the services provided by the DHSP.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.6.b.","desc":"The infrastructure (physical and equipment) is adequate to provide the defined scope of services.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.6.c.","desc":"Manpower resource is adequate to provide the defined scope of services.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"AAC.6.d.","desc":"Adequately qualified and skilled personnel perform and supervise the work.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.6.e.","desc":"Requisition for patient model and prosthesis, collection, identification, handling, safe transportation, processing and disposal of dental impression and dental waste material is performed according to written guidance.*","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.6.f.","desc":"Dental lab work should be available within a defined time frame.*","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.6.g.","desc":"Good manufacturing practices are used by the dental laboratory in all its practices.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.6.h.","desc":"Corrections and alterations are attended to through a structured and time-based programme.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.6.i.","desc":"Laboratory tests not available in the organisation are outsourced to the organisation(s) based on their quality assurance system. *","type":"Commitment","prev_hco":2.0,"prev_assessor":1.0}],"hco_avg":4.666666666666667,"assessor_avg":3.4444444444444446},{"code":"AAC.7","title":"AAC.7. There is an established dental laboratory quality assurance programme..","mes":[{"code":"AAC.7.a.","desc":"The dental laboratory quality assurance programme is implemented. *","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.7.b.","desc":"The programme includes periodic calibration and maintenance of equipment. *","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.7.c.","desc":"The programme addresses the dento -prosthetic meeting(s).","type":"Excellence","prev_hco":2.0,"prev_assessor":1.0}],"hco_avg":3.6666666666666665,"assessor_avg":3.0},{"code":"AAC.8","title":"AAC. 8. There is an established dental laboratory safety programme.\n* Please select the appropriate response from the drop down menu","mes":[{"code":"AAC.8.a.","desc":"The dental laboratory safety programme is implemented. *","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.8.b.","desc":"This programme is aligned with the organisation’s safety programme.","type":"Commitment","prev_hco":2.0,"prev_assessor":1.0},{"code":"AAC.8.c.","desc":"Laboratory personnel are appropriately trained in safe practices.","type":"Commitment","prev_hco":2.0,"prev_assessor":1.0},{"code":"AAC.8.d.","desc":"Dental laboratory personnel are provided with appropriate safety measures.","type":"Commitment","prev_hco":2.0,"prev_assessor":4.0}],"hco_avg":2.75,"assessor_avg":2.25},{"code":"AAC.9","title":"AAC.9. Pathological laboratory services are provided in house /out-sourced as per the policy of DHSP.","mes":[{"code":"AAC.9.a.","desc":"Scope of the laboratory services is commensurate to the services provided by the DHSP.","type":"Commitment","prev_hco":5.0,"prev_assessor":2.0},{"code":"AAC.9.b.","desc":"The infrastructure (physical and equipment) is adequate to provide the defined scope of oral and dental services.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.9.c.","desc":"If lab services are to be provided in-house, adequately qualified and trained personnel perform and/or supervise the investigations.","type":"Commitment","prev_hco":1.0,"prev_assessor":3.0},{"code":"AAC.9.d.","desc":"Requisition for tests, collection, identification, handling, safe transportation, processing and disposal of a specimen is performed according to written guidance. *","type":"Commitment","prev_hco":1.0,"prev_assessor":3.0},{"code":"AAC.9.e.","desc":"Laboratory results are available within a defined time frame.","type":"Commitment","prev_hco":1.0,"prev_assessor":3.0},{"code":"AAC.9.f.","desc":"Critical results are intimated immediately to the concerned personnel.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0},{"code":"AAC.9.g.","desc":"Laboratory tests are outsourced to DHSP(s) based on their quality assurance system.","type":"Commitment","prev_hco":3.0,"prev_assessor":3.0}],"hco_avg":2.7142857142857144,"assessor_avg":3.142857142857143},{"code":"AAC.10","title":"AAC.10. There is an established quality assurance and safety programme for in house pathological laboratories.","mes":[{"code":"AAC.10.a.","desc":"The laboratory quality assurance program is implemented.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.10.b.","desc":"The programme ensures the quality of test results. *","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.10.c.","desc":"The program includes periodic calibration and maintenance of all equipment.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.10.d.","desc":"The program includes the documentation of corrective and preventive actions.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.10.e.","desc":"The laboratory safety program is implemented.","type":"Commitment","prev_hco":4.0,"prev_assessor":2.0}],"hco_avg":4.2,"assessor_avg":4.0},{"code":"AAC.11","title":"AAC.11. Imaging services are provided as per the requirements of the patients.","mes":[{"code":"AAC.11.a.","desc":"Imaging services comply with legal and other requirements.","type":"Core","prev_hco":2.0,"prev_assessor":3.0},{"code":"AAC.11.b.","desc":"Scope of the imaging services are commensurate to the services provided by the DHSP.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"AAC.11.c.","desc":"The infrastructure (physical and equipment) and human resources are adequate to provide for its defined scope of services.","type":"Commitment","prev_hco":2.0,"prev_assessor":3.0},{"code":"AAC.11.d.","desc":"Adequately qualified and trained personnel perform and/or supervise the investigations.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.11.e.","desc":"Imaging results are available within a defined time frame.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.11.f.","desc":"Critical results are intimated immediately to the concerned personnel.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.11.g.","desc":"Results are reported in a standardised manner.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.11.h.","desc":"Imaging tests not available in the DHSP are outsourced based on their quality assurance system.","type":"Commitment","prev_hco":4.0,"prev_assessor":2.0}],"hco_avg":3.75,"assessor_avg":3.125},{"code":"AAC.12","title":"AAC.12. There is an established quality assurance and radiation safety program for imaging services.","mes":[{"code":"AAC.12.a.","desc":"The quality assurance program for imaging services is implemented.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.12.b.","desc":"Quality assurance programme includes the review of imaging protocols.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.12.c.","desc":"The programme addresses periodic internal/external peer review of imaging results using appropriate sampling.","type":"Achievement","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.12.d.","desc":"The program includes periodic calibration and maintenance of all equipment.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.12.e.","desc":"The program includes the documentation of corrective and preventive actions.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.12.f.","desc":"The radiation safety program is implemented as per AERB guidelines.","type":"Commitment","prev_hco":5.0,"prev_assessor":4.0}],"hco_avg":4.833333333333333,"assessor_avg":3.5},{"code":"AAC.13","title":"AAC.13. The organisation defines the content of the case summary.","mes":[{"code":"AAC.13.a.","desc":"A case summary is provided to the patients.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.13.b.","desc":"Case summary contains the patient’s name, unique identification number, name of the treating doctor.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.13.c.","desc":"Case summary contains the reasons for out patient care, significant findings and diagnosis and the patient’s condition.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.13.d.","desc":"Case summary contains information regarding investigation results, any procedure performed, medication administered, and other treatment given.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.13.e.","desc":"Case summary contains follow-up advice, medication and other instructions in an understandable manner.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.13.f.","desc":"Case summary incorporates instructions about when and how to obtain urgent care.","type":"Achievement","prev_hco":2.0,"prev_assessor":4.0}],"hco_avg":4.333333333333333,"assessor_avg":3.5},{"code":"AAC.14","title":"AAC.14. Patient care is continuous and multidisciplinary in nature","mes":[{"code":"AAC.14.a.","desc":"During all phases of care, there is a qualified individual/ individuals responsible for the patient’s care who co-ordinate the care in all the departments with-in the DHSP.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"AAC.14.b.","desc":"Information about the patient’s care and response to treatment is shared amongst all care providers.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"AAC.14.c.","desc":"Written guidance  governs  the referral of patients to other departments/ specialties.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0}],"hco_avg":4.333333333333333,"assessor_avg":3.6666666666666665}],"hco_avg":4.160544217687076,"assessor_avg":3.354450113378685},{"id":"COP","name":"CARE OF PATIENTS","standards":[{"code":"COP.1","title":"COP.1.Uniform care of patients is provided in all departments of the DHSP and is governed by written guidance, applicable laws, regulations and guidelines.","mes":[{"code":"COP.1.a.","desc":"Care delivery is uniform when similar care is provided in more than one department.*","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.1.b.","desc":"The organisation has a uniform process for identification of patients and at a minimum, uses two identifiers.","type":"Core","prev_hco":5.0,"prev_assessor":1.0},{"code":"COP.1.c.","desc":"Uniform care is guided by written guidance which reflect applicable laws and regulations.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.1.d.","desc":"Evidence based clinical practice guidelines are adopted to guide uniform patient care whenever possible.","type":"Achievement","prev_hco":4.0,"prev_assessor":0.0}],"hco_avg":4.75,"assessor_avg":3.6666666666666665},{"code":"COP.2","title":"COP.2: Emergency services are provided in accordance with written guidance, applicable laws and regulations process.","mes":[{"code":"COP.2.a.","desc":"Emergency care is provided in consonance with statutory requirements and in accordance with the written guidance. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.2.b.","desc":"The organisation manages medico-legal cases in accordance with statutory requirements. *","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"COP.2.c.","desc":"Initiation of appropriate care is guided by a system of triage. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"COP.3","title":"COP.3. Cardio-pulmonary resuscitation services are available, when required, in the DHSP.","mes":[{"code":"COP.3.a.","desc":"Resuscitation services are available to patients at all times.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.3.b.","desc":"During cardio-pulmonary resuscitation, assigned roles and responsibilities are complied with.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.3.c.","desc":"Equipment and medications for use during cardio-pulmonary resuscitation are available in various areas of the organisation.","type":"Commitment","prev_hco":5.0,"prev_assessor":2.0},{"code":"COP.3.d.","desc":"The events during a cardio-pulmonary resuscitation are recorded.","type":"Commitment","prev_hco":5.0,"prev_assessor":2.0},{"code":"COP.3.e.","desc":"A post-event analysis of all cardiac emergencies in dental chair station is done by an expert committee, duly constituted by the head of DHSP.","type":"Achievement","prev_hco":5.0,"prev_assessor":2.0},{"code":"COP.3.f.","desc":"Corrective and preventive measures are taken based on the post-event analysis.","type":"Commitment","prev_hco":2.0,"prev_assessor":2.0},{"code":"COP.3.g.","desc":"Staff providing direct patient care is trained and periodically updated in cardio-pulmonary resuscitation.","type":"Core","prev_hco":5.0,"prev_assessor":2.0}],"hco_avg":4.571428571428571,"assessor_avg":2.857142857142857},{"code":"COP.4","title":"COP.4. Organisation provides safe paediatric services.","mes":[{"code":"COP.4.a.","desc":"Paediatric services are organised and provided safely. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.4.b.","desc":"Provisions are made for special care of children.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"COP.5","title":"COP.5. The organisation identifies and manages patients who are at higher risk of morbidity/mortality.","mes":[{"code":"COP.5.a.","desc":"The organisation identifies and manages vulnerable patients. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.5.b.","desc":"The DHSP provides for a safe and secure environment for the vulnerable patient.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0}],"hco_avg":3.5,"assessor_avg":5.0},{"code":"COP.6","title":"COP.6. Written guidance governs the care of patients undergoing local anaesthesia.","mes":[{"code":"COP.6.a.","desc":"The DHSP formulates a written guidance regarding administration of local anaesthesia and is in consonance with the national/ international guidelines.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.6.b.","desc":"Informed consent for administration of local anaesthesia is obtained.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"COP.6.c.","desc":"Competent and trained dental surgeon administer Local Anaesthesia.","type":"Commitment","prev_hco":4.0,"prev_assessor":1.0}],"hco_avg":4.5,"assessor_avg":3.0},{"code":"COP.7","title":"COP.7 Procedural sedation is provided in a consistent and safe manner.","mes":[{"code":"COP.7.a.","desc":"Dental procedural sedation is administered in a consistent manner. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.7.b.","desc":"Informed consent for administration of procedural sedation is obtained.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"COP.7.c.","desc":"Competent and trained persons administer sedation.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":4.666666666666667,"assessor_avg":5.0},{"code":"COP.8","title":"COP.8. Written guidance governs the care of patients undergoing dental procedures.","mes":[{"code":"COP.8.a.","desc":"Dental surgical services are provided in a consistent and safe manner.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.8.b.","desc":"Dental surgical patients undergo  a preoperative assessment, a documented pre-operative diagnosis, and pre-operative instructions are provided before dental surgery.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.8.c.","desc":"An informed consent is obtained by the treating dental surgeon prior to the procedure.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.8.d.","desc":"Care is taken to prevent adverse events like the wrong site, wrong patient and wrong surgery. *","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"COP.8.e.","desc":"An operative note is documented before transfer out of patient.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"COP.8.f.","desc":"Written guidance guides the post-procedure management with a. specific instructions for the patient and     b. taking care of specific needs of patients.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"COP.8.g.","desc":"A quality assurance program is followed for the surgical services.","type":"Achievement","prev_hco":4.0,"prev_assessor":5.0}],"hco_avg":4.857142857142857,"assessor_avg":4.142857142857143},{"code":"COP.9","title":"COP.9. Written guidance guides appropriate pain management.","mes":[{"code":"COP.9.a.","desc":"Patients in pain are effectively managed. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"COP.9.b.","desc":"Patients are screened for pain.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"COP.9.c.","desc":"Patients with pain undergo detailed assessment and periodic reassessment.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.333333333333333}],"hco_avg":4.6494708994708995,"assessor_avg":4.222222222222223},{"id":"MOM","name":"Management of Medication","standards":[{"code":"MOM.1","title":"MOM.1. The DHSP develops, updates and implements a formulary.","mes":[{"code":"MOM.1.a.","desc":"A list of dental material and medications appropriate for patients as per the scope of the DHSP’s clinical services is developed collaboratively by a multi-disciplinary committee.","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"MOM.1.b.","desc":"The list is reviewed and updated collaboratively by the multidisciplinary committee at least annually.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.1.c.","desc":"The current formulary is available for dentists/ dental surgeons to refer to.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"MOM.1.d.","desc":"Dentists/ dental surgeons adhere to the current formulary.","type":"Excellence","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.1.e.","desc":"The DHSP adheres to the written guidance for acquisition of formulary medications. *","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"MOM.1.f.","desc":"The DHSP adheres to the procedure to obtain medications not listed in the formulary. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":4.8,"assessor_avg":4.6},{"code":"MOM.2","title":"MOM.2. Medications are stored appropriately and are available where required.","mes":[{"code":"MOM.2.a.","desc":"Medications are stored in a clean, safe and secure environment; and incorporating the manufacturer’s recommendation(s).","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"MOM.2.b.","desc":"Sound inventory control practices guide storage of the medications.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0},{"code":"MOM.2.c.","desc":"The DHSP defines a list of high-risk medication(s). *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.2.d.","desc":"High-risk medications are stored in areas of the DHSP where it is clinically necessary.","type":"Achievement","prev_hco":0.0,"prev_assessor":0.0},{"code":"MOM.2.e.","desc":"High-risk medications including look-alike, sound-alike medications and different concentrations of the same medication are stored physically apart from each other. *","type":"Core","prev_hco":5.0,"prev_assessor":1.0},{"code":"MOM.2.f.","desc":"The list of emergency medications is defined and is stored uniformly. *","type":"Commitment","prev_hco":5.0,"prev_assessor":1.0},{"code":"MOM.2.g.","desc":"Emergency medications and dental materials are available at all times and are replenished promptly when used.","type":"Core","prev_hco":3.0,"prev_assessor":5.0}],"hco_avg":4.5,"assessor_avg":3.0},{"code":"MOM.3","title":"MOM.3. Medications are prescribed safely and rationally.","mes":[{"code":"MOM.3.a.","desc":"Medication prescription is in consonance with good practices/guidelines for the rational prescription of medications.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"MOM.3.b.","desc":"The DHSP adheres to the determined minimum requirements of a prescription. *","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"MOM.3.c.","desc":"Drug allergies and previous adverse drug reactions are ascertained before prescribing.","type":"Commitment","prev_hco":5.0,"prev_assessor":2.0},{"code":"MOM.3.d.","desc":"The DHSP has a mechanism to assist the clinician in prescribing appropriate medication.","type":"Excellence","prev_hco":5.0,"prev_assessor":0.0},{"code":"MOM.3.e.","desc":"Written guidance governs implementation of verbal orders and ensures safe medication management practices. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.3.f.","desc":"Audit of medication orders/prescription is carried out to check for safe and rational prescription of medications.","type":"Achievement","prev_hco":5.0,"prev_assessor":3.0},{"code":"MOM.3.g.","desc":"Corrective and/or preventive action(s) is taken based on the audit, where appropriate.","type":"Achievement","prev_hco":3.0,"prev_assessor":3.0},{"code":"MOM.3.h.","desc":"Reconciliation of medications occurs at transition points patient care","type":"Core","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":4.75,"assessor_avg":3.4285714285714284},{"code":"MOM.4","title":"MOM.4. Medications orders are written in a uniform manner.","mes":[{"code":"MOM.4.a.","desc":"The DHSP ensures that only authorised personnel write orders. *","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"MOM.4.b.","desc":"Orders for medicines are written in a uniform location in the medical records, which also reflects the patient’s name and unique identification number.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0}],"hco_avg":4.0,"assessor_avg":4.0},{"code":"MOM.5","title":"MOM.5. MOM.5. Medications are dispensed in a safe manner (if applicable).","mes":[{"code":"MOM.5.a.","desc":"Dispensing of medications is done safely. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.5.b.","desc":"Medication and dental material recalls are handled effectively. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.5.c.","desc":"Near-expiry medications are handled effectively. *","type":"Commitment","prev_hco":3.0,"prev_assessor":3.0},{"code":"MOM.5.d.","desc":"Dispensed medications are labelled. *","type":"Core","prev_hco":3.0,"prev_assessor":3.0},{"code":"MOM.5.e.","desc":"High-risk medication orders are verified before dispensing.","type":"Core","prev_hco":3.0,"prev_assessor":3.0}],"hco_avg":3.8,"assessor_avg":3.8},{"code":"MOM.6","title":"MOM.6. Medications are administered safely.","mes":[{"code":"MOM.6.a.","desc":"Medications are administered by those who are permitted by law to do so.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.6.b.","desc":"Prepared medication is labelled prior to preparation of a second drug.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.6.c.","desc":"The patient is identified prior to administration.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.6.d.","desc":"Medication is verified from the prescription  and physically inspected before administration.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.6.e.","desc":"Strength, route and timing is verified from the order and medication administration is documented.","type":"Commitment","prev_hco":5.0,"prev_assessor":1.0}],"hco_avg":5.0,"assessor_avg":4.2},{"code":"MOM.7","title":"MOM.7. Patients are monitored after medication administration.","mes":[{"code":"MOM.7.a.","desc":"Patients are monitored after medication administration","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.7.b.","desc":"Medications are changed where appropriate based on the monitoring.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"MOM.7.c.","desc":"The DHSP captures near miss, medication error and adverse drug reaction. *","type":"Core","prev_hco":5.0,"prev_assessor":1.0},{"code":"MOM.7.d.","desc":"Near misses, medication error and adverse drug reaction are reported within a specified time frame. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.7.e.","desc":"Near misses, medication errors and adverse drug reactions are collected and analysed.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.7.f.","desc":"Corrective and/or preventive action(s) are taken based on the analysis.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.0},{"code":"MOM.8","title":"MOM.8: Implantable prosthesis and dental devices are used in accordance with laid down criteria.","mes":[{"code":"MOM.8.a.","desc":"Usage of the implantable prosthesis and dental devices is guided by scientific criteria for each item and national/international recognised guidelines/approvals for such specific item(s).","type":"Commitment","prev_hco":5.0,"prev_assessor":2.0},{"code":"MOM.8.b.","desc":"The DHSP implements a mechanism for the usage of the implantable prosthesis and dental devices. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.8.c.","desc":"Patient and his/her family are counselled for the usage of the implantable prosthesis and dental device, including precautions if any.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.8.d.","desc":"The batch and serial number of the implantable prosthesis are recorded in the patient’s medical record and the master logbook.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.8.e.","desc":"Recall of implantable prosthesis and dental devices are handled effectively. *","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.4},{"code":"MOM.9","title":"MOM.9 : Dental  supplies  and consumables are stored appropriately and are  available where required.","mes":[{"code":"MOM.9.a.","desc":"The organisation adheres to the defined process for the acquisition of medical supplies and consumables. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.9.b.","desc":"Medical supplies and consumables are used in a safe manner, where appropriate.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.9.c.","desc":"Medical supplies and consumables are stored in a clean, safe and secure environment; and incorporating the manufacturer’s recommendation(s).","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.9.d.","desc":"Sound inventory control practices guide storage of medical supplies and consumables.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"MOM.9.e.","desc":"There is a mechanism in place to verify the condition of medical supplies and consumables.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0}],"hco_avg":4.65,"assessor_avg":4.0476190476190474},{"id":"PRE","name":"Patient Rights and Education","standards":[{"code":"PRE.1","title":"PRE.1. The organisation protects and promotes patient and family rights and informs them about their responsibilities during care.","mes":[{"code":"PRE.1.a.","desc":"Patient and family rights and responsibilities are documented, displayed, and they are made aware of the same. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.1.b.","desc":"Patient and family rights and responsibilities are actively promoted. *","type":"Achievement","prev_hco":0.0,"prev_assessor":0.0},{"code":"PRE.1.c.","desc":"The organisation has a mechanism to report a violation of patient and family rights.","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"PRE.1.d.","desc":"Violation of patient and family rights are monitored, analysed, and corrective/preventive action taken by the top leadership of the DHSP.","type":"Core","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.333333333333333},{"code":"PRE.2","title":"PRE.2. Patient and family rights support individual beliefs, values and involve the patient and family in decision-making processes.","mes":[{"code":"PRE.2.a.","desc":"Patients and family rights include respecting values and beliefs, any special preferences, cultural needs, and responding to requests for spiritual needs.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.b.","desc":"Patient rights include respect for personal dignity and privacy during examination, procedures and treatment.","type":"Commitment","prev_hco":5.0,"prev_assessor":1.0},{"code":"PRE.2.c.","desc":"Patient and family rights include protection from neglect or abuse.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.d.","desc":"Patient rights include treating patient information as confidential.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.e.","desc":"Patient and family rights include the refusal of treatment.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.f.","desc":"Patient and family rights include a right to seek an additional opinion regarding clinical care.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.g.","desc":"Patient and family rights include informed consent before the transfusion of blood and blood components, anaesthesia, surgery, initiation of any research protocol and any other invasive / high risk procedures / treatment.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.h.","desc":"Patient and family rights include a right to complain and information on how to voice a complaint.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.i.","desc":"Patient and family rights include information on the expected cost of the treatment.","type":"Achievement","prev_hco":5.0,"prev_assessor":0.0},{"code":"PRE.2.j.","desc":"Patient and family rights include access to their clinical records.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.k.","desc":"Patient and family rights include information on the name of the treating doctor, care plan, progress and information on their health care needs.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.2.l.","desc":"Patient rights include determining what information regarding their care would be provided to self and family.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.636363636363637},{"code":"PRE.3","title":"PRE.3. The patient and/or family members are educated to make informed decisions and are involved in the care planning and delivery process.","mes":[{"code":"PRE.3.a.","desc":"The patient and/or family members are explained about the proposed care, including the risks, alternatives and benefits.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.3.b.","desc":"The patient and/or family members are explained about the expected results.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.3.c.","desc":"The patient and/or family members are explained about the possible complications.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.3.d.","desc":"The care plan is prepared and modified in consultation with the patient and/or family members.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.3.e.","desc":"The patient and/or family members are informed about the results of diagnostic tests and the diagnosis.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.3.f.","desc":"The patient and/or family members are explained about any change in the patient’s condition in a timely manner.","type":"Commitment","prev_hco":5.0,"prev_assessor":0.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"PRE.4","title":"PRE.4. Informed consent is obtained from the patient or family about their care.","mes":[{"code":"PRE.4.a.","desc":"The DHSP obtains informed consent from the patient or family for situations where informed consent is required. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.4.b.","desc":"Informed consent process adheres to statutory norms.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.4.c.","desc":"Informed consent includes information on risks, benefits, alternatives and as to who will perform the requisite procedure in a language that they can understand.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.4.d.","desc":"The organisation describes who can give consent when a patient is incapable of independent decision making and implements the same. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.4.e.","desc":"Informed consent is taken by the person performing the procedure.","type":"Core","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"PRE.5","title":"PRE.5.Patient and families have a right to information and education about their healthcare needs.","mes":[{"code":"PRE.5.a.","desc":"During initial appointment, patient and families are educated about good oral hygiene methods, their dental ailments and different treatment options available along with their benefits and disadvantages.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.5.b.","desc":"Patient and families are educated about deleterious habits like smoking and tobacco chewing.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"PRE.5.c.","desc":"Patient and families are educated about the prevention of dental diseases and importance of periodic maintenance visits post-treatment.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.5.d.","desc":"Patient and family are educated about safe and effective use of materials/ prosthesis e.g., denture adhesives, dentures etc.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"PRE.5.e.","desc":"Patient and/or family are educated about diet and nutrition.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":4.4,"assessor_avg":4.6},{"code":"PRE.6","title":"PRE.6. Patient and families have a right to information on expected costs","mes":[{"code":"PRE.6.a.","desc":"There is uniform pricing policy in a given setting.","type":"Core","prev_hco":2.0,"prev_assessor":5.0},{"code":"PRE.6.b.","desc":"The tariff list is available to patients.","type":"Commitment","prev_hco":3.0,"prev_assessor":3.0},{"code":"PRE.6.c.","desc":"Patients are explained about the estimated costs of treatment before initiating treatment and also any revised costs, if necessary, during treatment.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"PRE.6.d.","desc":"Patients are informed about the financial implications when there is a change in the care plan.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0}],"hco_avg":2.5,"assessor_avg":4.5},{"code":"PRE.7","title":"PRE.7. The organisation has a mechanism to capture patient’s feedback and to redress complaints.","mes":[{"code":"PRE.7.a.","desc":"The organisation has a mechanism to capture feedback from patients, which includes patient satisfaction.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.7.b.","desc":"The organisation redresses patient complaints as per the defined mechanism. *","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"PRE.7.c.","desc":"Patient and/or family members are made aware of the procedure for giving feedback and/or lodging complaints.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.7.d.","desc":"Feedback and complaints are reviewed and/or analysed within a defined time frame.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"PRE.7.e.","desc":"Corrective and/or preventive action(s) are taken based on the analysis where appropriate.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0}],"hco_avg":4.0,"assessor_avg":4.6},{"code":"PRE.8","title":"PRE.8. The organisation has a system for effective communication with patients and/or families.","mes":[{"code":"PRE.8.a.","desc":"Communication with the patients and/or families is done effectively. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.8.b.","desc":"The organisation shall identify special situations where enhanced communication with patients and/or families would be required. *","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"PRE.8.c.","desc":"Enhanced communication with the patients and/or families is done effectively. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.8.d.","desc":"The organisation ensures that there is no unacceptable communication.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PRE.8.e.","desc":"The organisation has a system to monitor and review the implementation of effective communication.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.6}],"hco_avg":4.4875,"assessor_avg":4.658712121212122},{"id":"IPC","name":"Infection Prevention and Control","standards":[{"code":"IPC.1","title":"IPC.1. The DHSP has a comprehensive and coordinated Infection Prevention Control (IC) programme aimed at preventing reducing / eliminating risks to patients, visitors, care providers and the community.","mes":[{"code":"IPC.1.a.","desc":"The DHSP infection prevention and control programme is documented, which aims at preventing and reducing the risk of healthcare associated infections in the organisation. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.1.b.","desc":"The infection prevention and control programme identify high-risk activities, and has written guidance to prevent and manage infections for these activities. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.1.c.","desc":"The infection prevention and control programme is reviewed and updated at least once a year.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"IPC.1.d.","desc":"The infection prevention and control programme is reviewed based on infection control assessment tool.","type":"Achievement","prev_hco":0.0,"prev_assessor":0.0},{"code":"IPC.1.e.","desc":"The DHSP has a multidisciplinary infection control committee, which co-ordinates all infection prevention and control activities. *","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"IPC.1.f.","desc":"The DHSP has an infection control team, which coordinates the implementation of all infection prevention and control activities. *","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"IPC.1.g.","desc":"The DHSP has a designated infection control nurse(s) as part of the infection control team. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.1.h.","desc":"The DHSP implements information, education and communication programme for infection prevention and control activities for the community.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.1.i.","desc":"The  DHSP  participates in managing community outbreaks.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":4.833333333333333,"assessor_avg":5.0},{"code":"IPC.2","title":"IPC.2. The DHSP provides adequate and appropriate resources for infection prevention and control.","mes":[{"code":"IPC.2.a.","desc":"DHSP management makes available resources required for the infection prevention and control program.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.2.b.","desc":"The DHSP regularly earmarks adequate funds from its annual budget in this regard.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.2.c.","desc":"It also conducts regular “in-service” training sessions for all concerned categories of staff at least once in a year.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"IPC.2.d.","desc":"Appropriate pre- and post- exposure prophylaxis is provided to all concerned staff members.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"IPC.2.e.","desc":"Adequate and appropriate facilities for hand hygiene in all patient-care areas are accessible to healthcare providers.","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"IPC.2.f.","desc":"Compliance with proper hand washing/scrubbing is monitored regularly.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.2.g.","desc":"Adequate and appropriate personal protective equipment, soaps, and disinfectants are available and used correctly.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0}],"hco_avg":5.0,"assessor_avg":3.857142857142857},{"code":"IPC.3","title":"IPC.3. The DHSP implements the infection prevention and control programme in clinical areas.","mes":[{"code":"IPC.3.a.","desc":"The DHSP adheres to standard precautions at all times. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.3.b.","desc":"The DHSP adheres to hand-hygiene guidelines. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.3.c.","desc":"The DHSP adheres to safe injection and infusion practices.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.3.d.","desc":"Appropriate antimicrobial usage policy is established and documented *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.3.e.","desc":"The organisation implements the antimicrobial usage policy and monitors the rational use of antimicrobial agents.","type":"Core","prev_hco":2.0,"prev_assessor":1.0},{"code":"IPC.3.f.","desc":"The DHSP implements an antibiotic stewardship programme. *","type":"Excellence","prev_hco":2.0,"prev_assessor":1.0}],"hco_avg":4.0,"assessor_avg":3.6666666666666665},{"code":"IPC.4","title":"IPC.4. The DHSP implements the infection prevention and control programme in non-clinical areas.","mes":[{"code":"IPC.4.a.","desc":"The organisation has appropriate engineering controls to prevent infections. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.4.b.","desc":"The organisation designs and implements a plan to reduce the risk of infection during construction and renovation. *","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"IPC.4.c.","desc":"The organisation adheres to housekeeping procedures. *","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"IPC.4.d.","desc":"Biomedical waste (BMW) is handled appropriately and safely.","type":"Core","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":4.25,"assessor_avg":4.5},{"code":"IPC.5","title":"IPC.5. The organisation performs surveillance to capture and monitor infection prevention and control data.","mes":[{"code":"IPC.5.a.","desc":"Surveillance activities are appropriately directed towards the identified high-risk areas.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.5.b.","desc":"Verification of data is done regularly by the infection control team.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.5.c.","desc":"Scope of surveillance incorporates tracking and analysing of infection rates and trends.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.5.d.","desc":"Surveillance includes monitoring compliance with hand-hygiene guidelines.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.5.e.","desc":"Surveillance activities include monitoring the effectiveness of house-keeping services.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.5.f.","desc":"Feedback regarding surveillance data is provided regularly to the appropriate health care provider.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.5.g.","desc":"The organisation identifies and takes appropriate action to control outbreaks of infections. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.5.h.","desc":"Surveillance data is analysed, and appropriate corrective and preventive actions are taken.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"IPC.6","title":"IPC.6. Infection prevention measures include sterilisation and/or disinfection of instruments, equipment and devices.","mes":[{"code":"IPC.6.a.","desc":"The organisation provides adequate space and appropriate zoning for sterilisation activities. *","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"IPC.6.b.","desc":"Cleaning, packing, disinfection and/or sterilisation, storing and the issue of items is done as per the written guidance. *","type":"Core","prev_hco":2.0,"prev_assessor":5.0},{"code":"IPC.6.c.","desc":"Reprocessing of single-use instruments, equipment and devices are done as per written guidance. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.6.d.","desc":"Regular validation tests for sterilization are carried out and documented.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IPC.6.e.","desc":"There is an established recall and corrective audit procedure in case of breakdown in the sterilization system.","type":"Commitment","prev_hco":5.0,"prev_assessor":1.0}],"hco_avg":3.8,"assessor_avg":4.2}],"hco_avg":4.480555555555555,"assessor_avg":4.370634920634921},{"id":"PSQ","name":"Patient Safety and Quality Improvement","standards":[{"code":"PSQ.1","title":"PSQ.1: There is a structured quality assurance and continuous monitoring program in the DHSP.","mes":[{"code":"PSQ.1.a.","desc":"The quality improvement programme is developed, implemented and maintained by a committee. *","type":"Core","prev_hco":5.0,"prev_assessor":2.0},{"code":"PSQ.1.b.","desc":"There are designated personnel for coordinating and implementing the quality assurance program.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.1.c.","desc":"The quality assurance program is comprehensive and covers all the major elements related to quality assurance and risk management.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.1.d.","desc":"The quality improvement programme improves process efficiency and effectiveness.","type":"Excellence","prev_hco":3.0,"prev_assessor":1.0},{"code":"PSQ.1.e.","desc":"The quality improvement programme identifies opportunities for improvement based on the review at pre-defined intervals.*","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"PSQ.1.f.","desc":"The quality assurance program is a continuous process and updated at least once in a year.","type":"Commitment","prev_hco":3.0,"prev_assessor":2.0},{"code":"PSQ.1.g.","desc":"Audits are conducted at regular intervals as a means of continuous monitoring. *","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0}],"hco_avg":4.2,"assessor_avg":3.0},{"code":"PSQ.2","title":"PSQ.2. The organisation identifies key indicators to monitor the structures, processes and outcomes, which are used as tools for continual improvement.","mes":[{"code":"PSQ.2.a.","desc":"The organisation identifies and monitors key indicators to oversee the clinical structures, processes and outcomes.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0},{"code":"PSQ.2.b.","desc":"The organisation identifies and monitors key indicators to oversee patient safety activities.","type":"Core","prev_hco":4.0,"prev_assessor":5.0},{"code":"PSQ.2.c.","desc":"The organisation identifies and monitors the key indicators to oversee infection control activities.","type":"Core","prev_hco":0.0,"prev_assessor":0.0},{"code":"PSQ.2.d.","desc":"The organisation identifies and monitors key indicators to oversee the managerial structures, processes and outcomes.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.2.e.","desc":"Verification of data is done regularly by the quality team.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.2.f.","desc":"There is a mechanism for analysis of data which results in identifying opportunities for improvement.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.2.g.","desc":"The improvements are implemented and evaluated.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.2.h.","desc":"Feedback about care and service is communicated to staff.","type":"Achievement","prev_hco":3.0,"prev_assessor":2.0}],"hco_avg":4.285714285714286,"assessor_avg":4.571428571428571},{"code":"PSQ.3","title":"PSQ.3. The quality improvement program is supported by the management.","mes":[{"code":"PSQ.3.a.","desc":"The management creates a culture of safety.","type":"Achievement","prev_hco":4.0,"prev_assessor":5.0},{"code":"PSQ.3.b.","desc":"DHSP management makes available adequate resources including annual budget required for quality improvement program.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"PSQ.3.c.","desc":"The management identifies organisational performance improvement targets.","type":"Achievement","prev_hco":4.0,"prev_assessor":3.0},{"code":"PSQ.3.d.","desc":"The management uses the feedback obtained from the workforce to improve patient safety and quality improvement programme.","type":"Achievement","prev_hco":4.0,"prev_assessor":5.0}],"hco_avg":4.0,"assessor_avg":4.5},{"code":"PSQ.4","title":"PSQ.4. There is an established system for clinical audit.","mes":[{"code":"PSQ.4.a.","desc":"Clinical audits are performed to improve the quality of patient care.","type":"Commitment","prev_hco":4.0,"prev_assessor":1.0},{"code":"PSQ.4.b.","desc":"Medical/Dental staff participates in this system.","type":"Achievement","prev_hco":4.0,"prev_assessor":2.0},{"code":"PSQ.4.c.","desc":"The parameters to be audited are defined by the DHSP.","type":"Commitment","prev_hco":4.0,"prev_assessor":2.0},{"code":"PSQ.4.d.","desc":"Patient, clinician and staff anonymity are maintained.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.4.e.","desc":"Clinical audits are documented.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"PSQ.4.f.","desc":"Remedial measures are implemented.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0}],"hco_avg":4.333333333333333,"assessor_avg":3.0},{"code":"PSQ.5","title":"PSQ.5. Incidents are collected and analysed to ensure continuous patient safety and quality improvement.","mes":[{"code":"PSQ.5.a.","desc":"The organisation implements an incident management system. *","type":"Core","prev_hco":2.0,"prev_assessor":5.0},{"code":"PSQ.5.b.","desc":"The organisation has a mechanism to identify sentinel events. *","type":"Commitment","prev_hco":2.0,"prev_assessor":4.0},{"code":"PSQ.5.c.","desc":"The DHSP has established processes for intense analysis of such events.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"PSQ.5.d.","desc":"Corrective and Preventive Actions (CAPA) are taken upon findings of such analysis.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":3.0,"assessor_avg":4.666666666666667}],"hco_avg":3.963809523809524,"assessor_avg":3.9476190476190474},{"id":"ROM","name":"Responsibilities of Management","standards":[{"code":"ROM.1","title":"ROM.1.The responsibilities of the management are defined.","mes":[{"code":"ROM.1.a.","desc":"Those responsible for governance are identified, and their roles and responsibilities are defined and documented. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.1.b.","desc":"Those responsible for governance lay down the organisation’s vision, mission and values. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.1.c.","desc":"Those responsible for governance approve the strategic and operational plans and the organisation’s annual budget.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"ROM.1.d.","desc":"Those responsible for governance establish the DHSP’s organogram.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"ROM.1.e.","desc":"Those responsible for governance appoint the senior leaders in the DHSP.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"ROM.1.f.","desc":"Those responsible for governance support safety initiatives and quality improvement plans.","type":"Commitment","prev_hco":2.0,"prev_assessor":5.0},{"code":"ROM.1.g.","desc":"Those responsible for governance inform the public of the quality and performance of services.","type":"Excellence","prev_hco":2.0,"prev_assessor":5.0}],"hco_avg":2.857142857142857,"assessor_avg":5.0},{"code":"ROM.2","title":"ROM.2. The leaders manage the organisation in an ethical manner.","mes":[{"code":"ROM.2.a.","desc":"The leaders make public the vision, mission and values of the organisation.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.2.b.","desc":"The leaders establish the DHSP’s ethical management framework.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.2.c.","desc":"The DHSP discloses its ownership.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"ROM.2.d.","desc":"The DHSP honestly portrays its affiliations and accreditations.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"ROM.3","title":"ROM.3. A suitably qualified and experienced individual heads the DHSP.","mes":[{"code":"ROM.3.a.","desc":"The designated individual has requisite and appropriate administrative qualifications.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.3.b.","desc":"The designated individual has requisite and appropriate administrative experience.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"ROM.4","title":"ROM.4: The organisation displays professionalism in its functioning.","mes":[{"code":"ROM.4.a.","desc":"The organisation has strategic and operational plans, including long-term and short-term goals commensurate to the organisation’s vision, mission and values in consultation with the various stakeholders.","type":"Excellence","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.4.b.","desc":"The functioning of committees is reviewed for their effectiveness.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.4.c.","desc":"The organisation documents staff rights and responsibilities. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"ROM.5","title":"ROM.5: Leaders ensure that patient safety aspects and risk management issues are an integral part of patient care and management.","mes":[{"code":"ROM.5.a.","desc":"Management ensures proactive risk management across the organisation. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.5.b.","desc":"Management ensures implementation of systems for internal and external reporting of system and process failures.","type":"Achievement","prev_hco":0.0,"prev_assessor":0.0},{"code":"ROM.5.c.","desc":"Management provides resources for proactive risk assessment and risk reduction activities.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"ROM.5.d.","desc":"Management ensures that it has a documented agreement for all outsourced services that include service parameters.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0}],"hco_avg":4.571428571428571,"assessor_avg":5.0},{"id":"FMS","name":"Facility Management and Safety","standards":[{"code":"FMS.1","title":"FMS.1. The DHSP has a system in place to provide a safe and secure environment.","mes":[{"code":"FMS.1.a.","desc":"Patient-safety devices and infrastructure are installed across the organisation and inspected periodically.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.1.b.","desc":"The organisation has facilities for the differently-abled.","type":"Commitment","prev_hco":5.0,"prev_assessor":1.0},{"code":"FMS.1.c.","desc":"Facility inspection rounds to ensure safety are conducted at least once a month.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.1.d.","desc":"The DHSP defines its polices to eliminate smoking.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.0},{"code":"FMS.2","title":"FMS.2. The organisation’s environment and facilities operate in a planned manner and promotes environment-friendly measures.","mes":[{"code":"FMS.2.a.","desc":"Facilities and space provisions are appropriate to the scope of services.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.2.b.","desc":"As-built and updated drawings are maintained as per statutory requirements.","type":"Excellence","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.2.c.","desc":"There are internal and external sign postings in the organisation in a manner understood by the patient, families and community.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.2.d.","desc":"Potable water and electricity are available round the clock.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.2.e.","desc":"The organisation takes initiatives towards an energy-efficient and environmentally friendly DHSP. *","type":"Excellence","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"FMS.3","title":"FMS.3. The DHSP’s environment and facilities operate to ensure safety of patients, their families, staff and visitors.","mes":[{"code":"FMS.3.a.","desc":"Operational planning identifies areas which need to have extra security and describes access to different areas in the hospital by staff, patients, and visitors.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"FMS.3.b.","desc":"The organisation conducts electrical safety audits for the facility.","type":"Achievement","prev_hco":2.0,"prev_assessor":5.0},{"code":"FMS.3.c.","desc":"There is a procedure which addresses the identification and disposal of material(s) not in use in the organisation. *","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"FMS.3.d.","desc":"Hazardous materials are identified and used safely within the organisation. *","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"FMS.3.e.","desc":"The plan for managing spills of hazardous materials is implemented. *","type":"Commitment","prev_hco":5.0,"prev_assessor":2.0}],"hco_avg":4.0,"assessor_avg":3.3333333333333335},{"code":"FMS.4","title":"FMS.4. The organisation has a programme for medical and support service equipment management.","mes":[{"code":"FMS.4.a.","desc":"The organisation plans for medical and support service equipment in accordance with its services and strategic plan.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.4.b.","desc":"Medical equipment and support service equipment are inventoried, and proper logs are maintained as required.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.4.c.","desc":"The documented operational and maintenance (preventive and breakdown) plan for medical and support service equipment is implemented. *","type":"Core","prev_hco":4.0,"prev_assessor":3.0},{"code":"FMS.4.d.","desc":"Medical and support service equipment are periodically inspected and calibrated for their proper functioning.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0},{"code":"FMS.4.e.","desc":"Qualified and trained personnel operate and maintain medical and support service equipment.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0},{"code":"FMS.4.f.","desc":"There is monitoring of medical equipment and medical devices related to adverse events, and compliance hazard notices on recalls. *","type":"Achievement","prev_hco":4.0,"prev_assessor":3.0},{"code":"FMS.4.g.","desc":"Downtime for critical equipment breakdown is monitored from reporting to inspection and implementation of corrective actions","type":"Achievement","prev_hco":4.0,"prev_assessor":5.0}],"hco_avg":4.285714285714286,"assessor_avg":3.857142857142857},{"code":"FMS.5","title":"FMS.5. The organisation has a programme for medical gases, vacuum and compressed air.","mes":[{"code":"FMS.5.a.","desc":"The DHSP procedures for medical gasses address the safety issues at all levels.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.5.b.","desc":"The written guidance governs the handling, storage, distribution and use of medical gases in a safe manner","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.5.c.","desc":"The organisation regularly tests the functioning of these alternate sources.","type":"Commitment","prev_hco":4.0,"prev_assessor":3.0},{"code":"FMS.5.d.","desc":"There is a maintenance plan for centralized compressed air supply system, if installed.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":4.75,"assessor_avg":4.5},{"code":"FMS.6","title":"FMS.6: The DHSP has plans for fire and non-fire emergencies within the facilities.","mes":[{"code":"FMS.6.a.","desc":"The DHSP has plans and provisions for early detection, abatement and containment of fire and non-fire emergences.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.6.b.","desc":"The DHSP has a documented safe exit plan in case of fire and non-fire emergencies.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"FMS.6.c.","desc":"Staff is trained for their role in case of such emergencies.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0},{"code":"FMS.6.d.","desc":"Mock drills are held at least twice in a year.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0}],"hco_avg":4.25,"assessor_avg":5.0}],"hco_avg":4.5476190476190474,"assessor_avg":4.281746031746032},{"id":"HRM","name":"Human Resource Management","standards":[{"code":"HRM.1","title":"HRM.1: The DHSP has a documented system of human resource planning.","mes":[{"code":"HRM.1.a.","desc":"The DHSP maintains an adequate number and mix of staff to meet the care, treatment and service needs of the patient.","type":"Core","prev_hco":0.0,"prev_assessor":0.0},{"code":"HRM.1.b.","desc":"The DHSP has contingency plans to manage long- and short-term workforce shortages, including unplanned shortages.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.1.c.","desc":"The required job specifications and job description are well defined for each category of staff.","type":"Commitment","prev_hco":5.0,"prev_assessor":0.0},{"code":"HRM.1.d.","desc":"The organisation performs a background check of new staff.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"HRM.1.e.","desc":"Reporting relationships are defined for each category of staff. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.333333333333333},{"code":"HRM.2","title":"HRM.2. The organisation implements a defined process for staff recruitment.","mes":[{"code":"HRM.2.a.","desc":"Written guidance governs the process of recruitment. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.2.b.","desc":"A pre-employment medical examination is conducted on the staff.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"HRM.2.c.","desc":"The organisation defines and implements a code of conduct for its staff.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.2.d.","desc":"Administrative procedures for human resource management are documented. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":4.5},{"code":"HRM.3","title":"HRM.3. Staff are provided induction training at the time of joining the organisation.","mes":[{"code":"HRM.3.a.","desc":"Staff are provided with induction training.","type":"Core","prev_hco":3.0,"prev_assessor":5.0},{"code":"HRM.3.b.","desc":"The induction training includes orientation to the DHSP’s vision, mission and values.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0},{"code":"HRM.3.c.","desc":"The induction training includes training on safety.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0},{"code":"HRM.3.d.","desc":"The induction training includes training on cardio-pulmonary resuscitation for staff providing direct patient care.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0},{"code":"HRM.3.e.","desc":"The induction training includes training in infection prevention and control.","type":"Commitment","prev_hco":3.0,"prev_assessor":4.0},{"code":"HRM.3.f.","desc":"All employees are oriented to the service standards of the DHSP.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":3.3333333333333335,"assessor_avg":4.833333333333333},{"code":"HRM.4","title":"HRM.4. There is an ongoing program for professional training and development of the staff.","mes":[{"code":"HRM.4.a.","desc":"Written guidance governs training and development policy for the staff. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.4.b.","desc":"The organisation maintains the training record.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.4.c.","desc":"Training also occurs when job responsibilities change/new equipment is introduced.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.4.d.","desc":"Feedback mechanisms are in place for improvement of training and development programme.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.4.e.","desc":"The organisation supports continuing professional development and learning.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"HRM.5","title":"HRM.5. Staff are trained in safety and quality-related aspects.","mes":[{"code":"HRM.5.a.","desc":"Staff are trained in the organisation’s safety programme.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.5.b.","desc":"Staff are provided training in the detection, handling, minimisation and elimination of identified risks within the organisation’s environment.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.5.c","desc":"Staff members are made aware of procedures to follow in the event of an untoward incident.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.5.d.","desc":"Staff are trained in occupational safety aspects","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.5.e.","desc":"Staff are trained in handling fire and non-fire emergencies.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.5.f.","desc":"Staff are trained in the organisation’s quality improvement programme.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"HRM.6","title":"HRM.6. An appraisal system for evaluating the performance of an employee exists as an integral part of the human resource management process.","mes":[{"code":"HRM.6.a.","desc":"Performance appraisal is done for staff within the organisation. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.6.b.","desc":"The employees are made aware of the system of appraisal at the time of induction.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.6.c.","desc":"Performance is evaluated based on the pre-determined criteria.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.6.d.","desc":"The appraisal system is used as a tool for further development.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.6.e.","desc":"Performance appraisal is carried out at pre defined intervals and is documented.","type":"Commitment","prev_hco":3.0,"prev_assessor":5.0}],"hco_avg":4.6,"assessor_avg":5.0},{"code":"HRM.7","title":"HRM.7. Process for disciplinary and grievance handling is defined and implemented in the organisation.","mes":[{"code":"HRM.7.a.","desc":"Written guidance governs disciplinary and grievance handling mechanisms. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.7.b.","desc":"The disciplinary policy and procedure is based on the principles of natural justice.","type":"Commitment","prev_hco":1.0,"prev_assessor":5.0},{"code":"HRM.7.c.","desc":"The disciplinary and grievance handling mechanism is known to all categories of staff of the organisation.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.7.d.","desc":"The disciplinary and grievance procedure is in consonance with the prevailing laws.","type":"Core","prev_hco":0.0,"prev_assessor":0.0},{"code":"HRM.7.e.","desc":"There is a provision for appeals in all disciplinary cases.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"HRM.7.f.","desc":"Actions are taken to redress the grievance.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0}],"hco_avg":3.6666666666666665,"assessor_avg":5.0},{"code":"HRM.8","title":"HRM.8. The organisation promotes staff well-being and addresses their health and safety needs.","mes":[{"code":"HRM.8.a.","desc":"Staff well-being is promoted.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.8.b.","desc":"Health problems of the staff, including occupational health hazards, are taken care of in accordance with the organisation’s policy.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.8.c.","desc":"Health checks of staff dealing with direct patient care are done at least once a year and the findings/results are documented.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.8.d.","desc":"Organisation provides treatment to staff who sustain workplace-related injuries.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.8.e.","desc":"The organisation has measures in place for prevention and handling workplace violence.","type":"Core","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"HRM.9","title":"HRM.9. There is a documented personal record for each staff member.","mes":[{"code":"HRM.9.a.","desc":"Personal files are maintained with respect to all staff, and their confidentiality is ensured","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.9.b.","desc":"The personal files contain personal information regarding the staff’s qualification, job description, verification of credentials and health status.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.9.c.","desc":"All records of in-service training and education are contained in the personal files.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.9.d.","desc":"Personal files contain results of all evaluations.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"HRM.10","title":"HRM.10. There is a process for collecting, verifying and evaluating the credentials (education, registration, training and experience) of dental/medical professionals permitted to provide patient care without supervision.","mes":[{"code":"HRM.10.a.","desc":"Dental/Medical professionals permitted by law/regulation in the DHSP to provide patient care without supervision are identified.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.10.b.","desc":"The education, registration, training and experience of the identified Dental/Medical professionals is documented and updated periodically.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.10.c.","desc":"All such information pertaining to the dental/ medical professionals is appropriately verified when possible.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.10.d.","desc":"Dental/medical professionals are granted privileges to  care for patients in consonance with their qualification, training, experience and registration.","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.10.e.","desc":"The requisite services to be provided by the medical professionals are known to them as well as the various departments/units of the organisation.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.10.f.","desc":"Dental/ medical professionals admit and care for patients as per their privileging.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"HRM.11","title":"HRM.11: There is a process for collecting, verifying and evaluating the credentials (education, registration, training and experience) of para-dental staff (nursing staff/dental hygienist /dental technician and dental assistant.)","mes":[{"code":"HRM.11.a.","desc":"The education, registration, training and experience of nursing staff/dental hygienist and assistant is documented and updated periodically.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0},{"code":"HRM.11.b.","desc":"Para-clinical professionals are granted privileges in consonance with their qualification, training, experience and registration.","type":"Core","prev_hco":4.0,"prev_assessor":3.0},{"code":"HRM.11.c.","desc":"The requisite services to be provided by the para-clinical professionals are known to them as well as the various departments/units of the organisation.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.11.d.","desc":"Para-clinical professionals care for patients as per their privileging.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"HRM.11.e.","desc":"All such information pertaining to the para-dental staff is appropriately verified when possible.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0}],"hco_avg":4.5,"assessor_avg":4.5}],"hco_avg":4.645454545454546,"assessor_avg":4.833333333333333},{"id":"IMS","name":"Information Management System","standards":[{"code":"IMS.2","title":"IMS.2. The organisation has processes in place for management and control of data and information.","mes":[{"code":"IMS.2.a.","desc":"Processes for data collection are standardised.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"IMS.2.b.","desc":"Data is analysed to meet the information needs.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"IMS.2.c.","desc":"The organisation disseminates the information in a timely and accurate manner.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"IMS.2.d.","desc":"The organisation stores and retrieves data according to its information needs. *","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0},{"code":"IMS.2.e.","desc":"Clinical and managerial staff participate in selecting, integrating and using data for meeting the information needs.","type":"Commitment","prev_hco":4.0,"prev_assessor":5.0}],"hco_avg":4.0,"assessor_avg":5.0},{"code":"IMS.2","title":"IMS.3: The DHSP has a complete and accurate dental record of every patient.","mes":[{"code":"IMS.3.a.","desc":"A unique identifier is assigned to the dental record.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.3.b.","desc":"Authorised staff make the entry in the dental record. *","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.3.c.","desc":"Entry in the dental record is signed, dated and timed.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.3.d.","desc":"The author of the entry can be identified.","type":"Achievement","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.3.e.","desc":"The contents of dental record are identified and documented.","type":"Commitment","prev_hco":3.0,"prev_assessor":3.0},{"code":"IMS.3.f.","desc":"The record provides an up-to-date and chronological account of patient care.","type":"Core","prev_hco":4.0,"prev_assessor":3.0}],"hco_avg":4.5,"assessor_avg":4.333333333333333},{"code":"IMS.4","title":"IMS.4. The clinical record reflects continuity of care.","mes":[{"code":"IMS.4.a.","desc":"The clinical record contains information regarding diagnosis and plan of care.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.4.b.","desc":"The clinical record contains the results of investigations and the details of the care provided.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.4.c.","desc":"Operative and other procedures performed are incorporated in the clinical record.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.4.d.","desc":"When a patient is transferred to another organisation, the clinical record contains the details of the transfer.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.4.e.","desc":"The clinical record contains a copy of the case summary.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.4.f.","desc":"All dental care providers attending to the patient should have access to current and past clinical record.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0}],"hco_avg":5.0,"assessor_avg":5.0},{"code":"IMS.4","title":"IMS.5: The DHSP maintains confidentiality, integrity and security of records, data and information.","mes":[{"code":"IMS.5.a.","desc":"The organisation maintains the confidentiality of records, data and information. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.5.b.","desc":"The organisation maintains the integrity of records, data and information. *","type":"Core","prev_hco":5.0,"prev_assessor":1.0},{"code":"IMS.5.c.","desc":"The organisation maintains the security of records, data and information. *","type":"Core","prev_hco":5.0,"prev_assessor":3.0},{"code":"IMS.5.d.","desc":"The DHSP uses developments in appropriate technology for improving confidentiality, integrity and security.","type":"Achievement","prev_hco":5.0,"prev_assessor":3.0},{"code":"IMS.5.e.","desc":"A documented procedure for responding to patients/physicians and other public agencies requests for access to information in the clinical record exists.","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0}],"hco_avg":5.0,"assessor_avg":3.0},{"code":"IMS.6","title":"IMS.6.  The DHSP ensures availability of current and relevant documents, records, data and information and provides for retention of the same.","mes":[{"code":"IMS.6.a.","desc":"The organisation has an effective process for document control. *","type":"Core","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.6.b.","desc":"The DHSP retains patient’s clinical records, data and information according to its requirements. *","type":"Core","prev_hco":5.0,"prev_assessor":1.0},{"code":"IMS.6.c.","desc":"The retention process provides expected confidentiality and security.","type":"Commitment","prev_hco":5.0,"prev_assessor":3.0},{"code":"IMS.6.d.","desc":"The destruction of medical records, data and information are in accordance with the written guidance. *","type":"Commitment","prev_hco":0.0,"prev_assessor":0.0}],"hco_avg":5.0,"assessor_avg":3.0},{"code":"IMS.7","title":"IMS.7. The DHSP regularly carries out review of clinical records.","mes":[{"code":"IMS.7.a.","desc":"The clinical records are reviewed periodically.","type":"Core","prev_hco":4.0,"prev_assessor":3.0},{"code":"IMS.7.b.","desc":"The review uses a representative sample based on statistical principles.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.7.c.","desc":"The review is conducted by identified care providers.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.7.d.","desc":"The review focuses on the timeliness, legibility and completeness of the clinical records.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.7.e.","desc":"The review points out and documents any deficiencies in records.","type":"Commitment","prev_hco":5.0,"prev_assessor":5.0},{"code":"IMS.7.f.","desc":"Appropriate corrective and preventive measures undertaken are documented.","type":"Commitment","prev_hco":5.0,"prev_assessor":0.0}],"hco_avg":4.833333333333333,"assessor_avg":4.6}],"hco_avg":4.333333333333333,"assessor_avg":4.133333333333333}];
+
+  var SCORE_LABELS={0:'N/A',1:'No system\n≤20%',2:'Elementary\n21-40%',3:'Partial\n41-60%',4:'Good\n61-80%',5:'Full\n81-100%'};
+  var SCORE_BG   ={0:'#90A4AE',1:'#C62828',2:'#E65100',3:'#F9A825',4:'#2E7D32',5:'#1A237E'};
+  var TYPE_COLOR ={Core:'#B71C1C',Commitment:'#1A237E',Achievement:'#E65100',Excellence:'#4A148C'};
+  var TYPE_BG    ={Core:'#FFEBEE',Commitment:'#E8EAF6',Achievement:'#FFF3E0',Excellence:'#F3E5F5'};
+
+  var KEYS={cur:'kbdc_nabh_current',history:'kbdc_nabh_history',settings:'kbdc_nabh_settings'};
+  function lsG(k){try{return JSON.parse(localStorage.getItem(k)||'null');}catch(e2){return null;}}
+  function lsS(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e2){}}
+
+  function emptySheet(label){
+    var sc={},asc={};
+    NABH_DATA.forEach(function(ch){ch.standards.forEach(function(std){std.mes.forEach(function(me){sc[me.code]=null;asc[me.code]=null;});});});
+    return{id:'ass_'+Date.now(),label:label||'Self Assessment '+new Date().getFullYear(),
+           date:kbdcToday(),scores:sc,assessor_scores:asc,notes:{},locked:false};
+  }
+
+  function prevSeed(){
+    var sc={},asc={};
+    NABH_DATA.forEach(function(ch){ch.standards.forEach(function(std){std.mes.forEach(function(me){
+      sc[me.code]=me.prev_hco;
+      asc[me.code]=me.prev_assessor;
+    });});});
+    return{id:'ass_prev_2024',label:'Self Assessment 2024 (Imported)',date:'2024-01-01',scores:sc,assessor_scores:asc,notes:{},locked:true};
+  }
+
+  var sv=useState(function(){
+    var cur=lsG(KEYS.cur);
+    var hist=lsG(KEYS.history);
+    var sets=lsG(KEYS.settings)||{clinicName:'K.B. Dental Clinic',certNo:'',validUpto:'',nextDue:''};
+    if(!hist){hist=[prevSeed()];lsS(KEYS.history,hist);}
+    if(!cur){cur=emptySheet();lsS(KEYS.cur,cur);}
+    return{tab:'dashboard',cur:cur,history:hist,settings:sets,
+           selChapter:'AAC',histView:null,toast:null,selYear:null};
+  });
+  var st=sv[0],setSt=sv[1];
+  function upd(p){setSt(function(prev){return Object.assign({},prev,typeof p==='function'?p(prev):p);});}
+  function toast(msg,ok){upd({toast:{msg:msg,ok:ok!==false}});setTimeout(function(){upd({toast:null});},2600);}
+
+  function setScore(code,val,isAssessor){
+    upd(function(prev){
+      if(prev.cur.locked)return {};
+      if(isAssessor){
+        var asc=Object.assign({},prev.cur.assessor_scores||{});
+        asc[code]=asc[code]===val?null:val;
+        var nc=Object.assign({},prev.cur,{assessor_scores:asc});
+        lsS(KEYS.cur,nc);return{cur:nc};
+      }
+      var sc=Object.assign({},prev.cur.scores);
+      sc[code]=sc[code]===val?null:val;
+      var nc=Object.assign({},prev.cur,{scores:sc});
+      lsS(KEYS.cur,nc);return{cur:nc};
+    });
+  }
+  function setNote(code,val){
+    upd(function(prev){
+      if(prev.cur.locked)return {};
+      var nt=Object.assign({},prev.cur.notes);
+      nt[code]=val;
+      var nc=Object.assign({},prev.cur,{notes:nt});
+      lsS(KEYS.cur,nc);return{cur:nc};
+    });
+  }
+
+  function calcCh(chId,scores){
+    var ch=NABH_DATA.find(function(c){return c.id===chId;});
+    if(!ch)return{pct:0,s:0,p:0,done:0,tot:0,flags:0};
+    var s=0,p=0,done=0,tot=0,flags=0;
+    ch.standards.forEach(function(std){std.mes.forEach(function(me){
+      var v=scores[me.code]; tot++;
+      if(v!==null){done++;}
+      if(v===null||v===0)return;
+      p+=5;s+=v;
+      if(v<=3)flags++;
+    });});
+    return{pct:p>0?Math.round(s/p*100):0,s:s,p:p,done:done,tot:tot,flags:flags};
+  }
+  function calcAll(scores){
+    var s=0,p=0,done=0,tot=0;
+    var bt={Core:{s:0,p:0},Commitment:{s:0,p:0},Achievement:{s:0,p:0},Excellence:{s:0,p:0}};
+    NABH_DATA.forEach(function(ch){ch.standards.forEach(function(std){std.mes.forEach(function(me){
+      var v=scores[me.code]; tot++;
+      if(v!==null)done++;
+      if(v===null||v===0)return;
+      p+=5;s+=v;
+      if(bt[me.type]){bt[me.type].s+=v;bt[me.type].p+=5;}
+    });});});
+    return{pct:p>0?Math.round(s/p*100):0,s:s,p:p,done:done,tot:tot,bt:bt};
+  }
+  function sc(pct){return pct>=80?G:pct>=60?AM:pct>=40?'#F9A825':R;}
+
+  var ov=calcAll(st.cur.scores);
+  var prevOv=st.history[0]?calcAll(st.history[0].scores):null;
+
+  /* ═══ DASHBOARD ═══ */
+  function renderDash(){
+    return e('div',{style:{flex:1,overflowY:'auto',padding:'18px 20px',display:'flex',flexDirection:'column',gap:14}},
+
+      e('div',{style:{background:'linear-gradient(135deg,#0D1B6E,'+B+')',borderRadius:14,padding:'18px 22px',display:'flex',alignItems:'center',gap:16}},
+        e('div',{style:{flex:1}},
+          e('div',{style:{fontSize:11,fontWeight:700,color:'rgba(255,255,255,.55)',letterSpacing:'.1em',marginBottom:4}},'NABH DHSP 3RD EDITION · SELF ASSESSMENT TOOL'),
+          e('div',{style:{fontSize:18,fontWeight:700,color:W}},st.settings.clinicName||'K.B. Dental Clinic'),
+          e('div',{style:{fontSize:12,color:'rgba(255,255,255,.65)',marginTop:2}},st.cur.label+' · '+st.cur.date+(st.cur.locked?' 🔒':''))
+        ),
+        e('div',{style:{textAlign:'center',padding:'0 16px'}},
+          e('div',{style:{fontSize:42,fontWeight:800,color:W,lineHeight:1}},ov.pct+'%'),
+          e('div',{style:{fontSize:11,color:'rgba(255,255,255,.65)'}},ov.done+'/'+ov.tot+' MEs scored'),
+          prevOv&&e('div',{style:{fontSize:10.5,color:'rgba(255,255,255,.5)',marginTop:2}},'prev: '+prevOv.pct+'%')
+        )
+      ),
+
+      /* KPI row */
+      e('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:10}},
+        [{l:'Compliance',v:ov.pct+'%',sub:ov.s+'/'+ov.p+' pts',c:sc(ov.pct)},
+         {l:'MEs Scored',v:ov.done,sub:'of '+ov.tot+' total',c:B},
+         {l:'Flags (≤3)',v:NABH_DATA.reduce(function(a,ch){return a+ch.standards.reduce(function(b,s){return b+s.mes.filter(function(m){var v=st.cur.scores[m.code];return v!==null&&v>0&&v<=3;}).length;},0);},0),sub:'need attention',c:AM},
+         prevOv&&{l:'Previous',v:prevOv.pct+'%',sub:st.history[0].label.slice(0,18),c:GR}
+        ].filter(Boolean).map(function(k){
+          return e('div',{key:k.l,style:{background:W,borderRadius:12,border:'1px solid #E8EAF6',padding:'14px 16px'}},
+            e('div',{style:{fontSize:10,fontWeight:700,color:GR,letterSpacing:'.07em',marginBottom:4}},k.l.toUpperCase()),
+            e('div',{style:{fontSize:26,fontWeight:800,color:k.c,marginBottom:2}},k.v),
+            e('div',{style:{fontSize:10.5,color:GR}},k.sub)
+          );
+        })
+      ),
+
+      /* Chapter bars */
+      e('div',{style:{background:W,borderRadius:14,border:'1px solid #E8EAF6',padding:'16px 20px'}},
+        e('div',{style:{fontSize:13,fontWeight:700,color:B,marginBottom:12}},'Chapter Compliance'),
+        e('div',{style:{display:'flex',flexDirection:'column',gap:8}},
+          NABH_DATA.map(function(ch){
+            var cs=calcCh(ch.id,st.cur.scores);
+            var ps=st.history[0]?calcCh(ch.id,st.history[0].scores):null;
+            return e('div',{key:ch.id,style:{display:'flex',alignItems:'center',gap:10,cursor:'pointer',
+              padding:'5px 8px',borderRadius:8},
+              onClick:function(){upd({tab:'assessment',selChapter:ch.id});}},
+              e('div',{style:{width:50,fontSize:10.5,fontWeight:700,color:B,flexShrink:0}},ch.id),
+              e('div',{style:{flex:1,fontSize:11,color:GR,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}},ch.name),
+              e('div',{style:{width:160,flexShrink:0}},
+                e('div',{style:{height:7,background:'#E8EAF6',borderRadius:4,overflow:'hidden'}},
+                  e('div',{style:{height:'100%',width:cs.pct+'%',background:sc(cs.pct),borderRadius:4}})
+                )
+              ),
+              e('div',{style:{width:34,fontSize:11,fontWeight:700,color:sc(cs.pct),flexShrink:0,textAlign:'right'}},cs.pct+'%'),
+              ps&&e('div',{style:{width:50,fontSize:10,color:GR,flexShrink:0,textAlign:'right'}},'('+ps.pct+'%)'),
+              cs.flags>0&&e('span',{style:{background:RL,color:R,borderRadius:10,padding:'1px 6px',fontSize:9,fontWeight:700,flexShrink:0,marginLeft:2}},cs.flags+'⚑')
+            );
+          })
+        )
+      ),
+
+      /* Type breakdown */
+      e('div',{style:{display:'grid',gridTemplateColumns:'repeat(4,1fr)',gap:10}},
+        ['Core','Commitment','Achievement','Excellence'].map(function(type){
+          var bt=ov.bt[type];var pct=bt.p>0?Math.round(bt.s/bt.p*100):0;
+          return e('div',{key:type,style:{background:W,borderRadius:12,border:'1px solid #E8EAF6',padding:'12px 14px'}},
+            e('div',{style:{fontSize:10,fontWeight:700,color:TYPE_COLOR[type],marginBottom:5}},type.toUpperCase()),
+            e('div',{style:{height:5,background:'#E8EAF6',borderRadius:3,overflow:'hidden',marginBottom:5}},
+              e('div',{style:{height:'100%',width:pct+'%',background:TYPE_COLOR[type],borderRadius:3}})
+            ),
+            e('div',{style:{fontSize:18,fontWeight:700,color:TYPE_COLOR[type]}},pct+'%'),
+            e('div',{style:{fontSize:10,color:GR}},bt.s+'/'+bt.p)
+          );
+        })
+      ),
+
+      /* Settings */
+      e('div',{style:{background:BL,borderRadius:12,border:'1px solid #C5CAE9',padding:'14px 18px'}},
+        e('div',{style:{fontSize:12,fontWeight:700,color:B,marginBottom:10}},'⚙️ Accreditation Details'),
+        e('div',{style:{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10}},
+          [{k:'clinicName',l:'Clinic Name',t:'text'},{k:'certNo',l:'Certificate No.',t:'text'},
+           {k:'validUpto',l:'Valid Upto',t:'date'},{k:'nextDue',l:'Next Assessment Due',t:'date'}
+          ].map(function(f){
+            return e('div',{key:f.k},
+              e('label',{style:{fontSize:10.5,fontWeight:600,color:GR,display:'block',marginBottom:3}},f.l),
+              e('input',{type:f.t,value:st.settings[f.k]||'',
+                onChange:function(ev){var s=Object.assign({},st.settings);s[f.k]=ev.target.value;lsS(KEYS.settings,s);upd({settings:s});},
+                style:{width:'100%',padding:'7px 10px',border:'1px solid #C5CAE9',borderRadius:7,
+                  fontSize:12,fontFamily:"'Poppins',sans-serif",outline:'none',boxSizing:'border-box',background:W}})
+            );
+          })
+        )
+      )
+    );
+  }
+
+  /* ═══ ASSESSMENT — SPREADSHEET FORMAT ═══ */
+  function renderAssessment(srcScores,srcNotes,readOnly,srcAssessorScores){
+    var scores=srcScores||st.cur.scores;
+    var notes=srcNotes||st.cur.notes;
+    var aScores=srcAssessorScores||(st.cur.assessor_scores||{});
+    var locked=readOnly||st.cur.locked;
+    var ch=NABH_DATA.find(function(c){return c.id===st.selChapter;})||NABH_DATA[0];
+    var cs=calcCh(ch.id,scores);
+
+    return e('div',{style:{flex:1,display:'flex',overflow:'hidden'}},
+
+      /* Chapter sidebar */
+      e('div',{style:{width:182,flexShrink:0,background:W,borderRight:'1px solid #E8EAF6',overflowY:'auto'}},
+        NABH_DATA.map(function(c){
+          var csc=calcCh(c.id,scores);
+          var act=c.id===st.selChapter;
+          return e('div',{key:c.id,onClick:function(){upd({selChapter:c.id});},
+            style:{padding:'8px 12px',cursor:'pointer',
+              borderLeft:'3px solid '+(act?B:'transparent'),
+              background:act?BL:'transparent',borderBottom:'1px solid #F5F6FA'}},
+            e('div',{style:{fontSize:10.5,fontWeight:700,color:act?B:GR}},c.id),
+            e('div',{style:{fontSize:9.5,color:act?B:'#90A4AE',lineHeight:1.3,marginBottom:4}},c.name),
+            e('div',{style:{display:'flex',alignItems:'center',gap:4}},
+              e('div',{style:{flex:1,height:4,background:'#E8EAF6',borderRadius:2,overflow:'hidden'}},
+                e('div',{style:{height:'100%',width:csc.pct+'%',background:sc(csc.pct),borderRadius:2}})
+              ),
+              e('span',{style:{fontSize:9,fontWeight:700,color:sc(csc.pct),flexShrink:0}},csc.pct+'%')
+            )
+          );
+        })
+      ),
+
+      /* Spreadsheet table */
+      e('div',{style:{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}},
+
+        /* Chapter title bar */
+        e('div',{style:{background:B,padding:'10px 16px',flexShrink:0,display:'flex',alignItems:'center',gap:10}},
+          e('div',{style:{background:'rgba(255,255,255,.2)',borderRadius:6,padding:'3px 10px',fontSize:11,fontWeight:700,color:W}},ch.id),
+          e('div',{style:{flex:1,fontSize:12.5,fontWeight:700,color:W}},ch.name),
+          e('div',{style:{fontSize:11,color:'rgba(255,255,255,.7)'}},cs.pct+'% · '+cs.done+'/'+cs.tot+' scored'),
+          locked&&e('span',{style:{background:'rgba(255,255,255,.2)',color:W,borderRadius:12,padding:'3px 10px',fontSize:10.5,fontWeight:600}},'🔒 Read Only')
+        ),
+
+        /* Table header */
+        e('div',{style:{display:'flex',background:'#111827',flexShrink:0,borderBottom:'2px solid '+B}},
+          e('div',{style:{width:90,flexShrink:0,padding:'8px 10px',fontSize:10,fontWeight:700,color:'#9CA3AF',letterSpacing:'.06em'}},'CODE'),
+          e('div',{style:{width:60,flexShrink:0,padding:'8px 6px',fontSize:10,fontWeight:700,color:'#9CA3AF',letterSpacing:'.06em'}},'TYPE'),
+          e('div',{style:{flex:1,padding:'8px 10px',fontSize:10,fontWeight:700,color:'#9CA3AF',letterSpacing:'.06em'}},'OBJECTIVE ELEMENT / DESCRIPTION'),
+          e('div',{style:{width:44*6,flexShrink:0,padding:'8px 4px',fontSize:10,fontWeight:700,color:'#60A5FA',textAlign:'center',letterSpacing:'.06em',borderLeft:'1px solid #374151'}},'SELF SCORE'),
+          e('div',{style:{width:44*6,flexShrink:0,padding:'8px 4px',fontSize:10,fontWeight:700,color:'#34D399',textAlign:'center',letterSpacing:'.06em',borderLeft:'1px solid #374151'}},'ASSESSOR SCORE'),
+          e('div',{style:{width:160,flexShrink:0,padding:'8px 10px',fontSize:10,fontWeight:700,color:'#9CA3AF',letterSpacing:'.06em'}},'NOTE / EVIDENCE')
+        ),
+
+        /* Scrollable rows */
+        e('div',{style:{flex:1,overflowY:'auto'}},
+          ch.standards.map(function(std){
+            var sdone=std.mes.filter(function(m){return scores[m.code]!==null;}).length;
+            var svalid=std.mes.filter(function(m){var v=scores[m.code];return v!==null&&v>0;});
+            var savg=svalid.length>0?(svalid.reduce(function(a,m){return a+(scores[m.code]||0);},0)/svalid.length).toFixed(1):null;
+            var asvalid=std.mes.filter(function(m){var v=aScores[m.code];return v!==null&&v>0;});
+            var asavg=asvalid.length>0?(asvalid.reduce(function(a,m){return a+(aScores[m.code]||0);},0)/asvalid.length).toFixed(1):null;
+            var sflag=std.mes.some(function(m){var v=scores[m.code];return v!==null&&v>0&&v<=3;});
+
+            return e('div',{key:std.code},
+              /* Standard header row */
+              e('div',{style:{display:'flex',alignItems:'center',background:'#1E3A5F',padding:'7px 10px',
+                borderBottom:'1px solid #2D5186',borderTop:'2px solid #2D5186'}},
+                e('div',{style:{width:90,flexShrink:0,fontSize:10.5,fontWeight:700,color:'#93C5FD'}},std.code),
+                e('div',{style:{width:60,flexShrink:0}}),
+                e('div',{style:{flex:1,fontSize:11.5,fontWeight:600,color:'#DBEAFE',lineHeight:1.4}},
+                  std.title.replace(/^[A-Z0-9]+\.[0-9]+\.?\s*/,'').replace(/^\*\s*/,'').slice(0,120)
+                ),
+                e('div',{style:{width:264,flexShrink:0,display:'flex',alignItems:'center',gap:8,justifyContent:'flex-end',paddingRight:10}},
+                  sflag&&e('span',{style:{background:RL,color:R,borderRadius:10,padding:'2px 8px',fontSize:9.5,fontWeight:700}},'⚑ Flag'),
+                  savg&&e('span',{style:{background:'rgba(96,165,250,.25)',color:'#93C5FD',borderRadius:10,padding:'2px 8px',fontSize:10,fontWeight:700}},'Self: '+savg),
+                  asavg&&e('span',{style:{background:'rgba(52,211,153,.25)',color:'#34D399',borderRadius:10,padding:'2px 8px',fontSize:10,fontWeight:700}},'Assessor: '+asavg),
+                  e('span',{style:{color:'rgba(255,255,255,.5)',fontSize:10}},sdone+'/'+std.mes.length+' done')
+                )
+              ),
+
+              /* ME rows */
+              std.mes.map(function(me, mi){
+                var v=scores[me.code];
+                var note=notes[me.code]||'';
+                var rowBg=v!==null&&v>0&&v<=3?'#FFFDE7':mi%2===0?W:'#FAFBFF';
+                return e('div',{key:me.code,style:{display:'flex',alignItems:'center',
+                  borderBottom:'1px solid #F0F2F8',background:rowBg,minHeight:40}},
+
+                  e('div',{style:{width:90,flexShrink:0,padding:'6px 10px',fontSize:10,fontWeight:600,color:B}},me.code),
+
+                  e('div',{style:{width:60,flexShrink:0,padding:'6px 6px'}},
+                    e('span',{style:{background:TYPE_BG[me.type],color:TYPE_COLOR[me.type],
+                      borderRadius:5,padding:'2px 6px',fontSize:9,fontWeight:700,whiteSpace:'nowrap'}},
+                      me.type==='Commitment'?'Commit':me.type==='Achievement'?'Achieve':me.type)
+                  ),
+
+                  e('div',{style:{flex:1,padding:'6px 10px',fontSize:11.5,color:'#374151',lineHeight:1.5}},me.desc),
+
+                  /* HCO self scores */
+                  e('div',{style:{display:'flex',borderLeft:'1px solid #F0F4FF'}},
+                    [0,1,2,3,4,5].map(function(score){
+                      var active=v===score;
+                      var bg=active?SCORE_BG[score]:W;
+                      var col=active?W:score===0?'#90A4AE':SCORE_BG[score];
+                      return e('div',{key:score,style:{width:44,flexShrink:0,padding:'4px 3px',textAlign:'center'}},
+                        e('button',{
+                          onClick:function(){if(!locked)setScore(me.code,score,false);},
+                          disabled:locked&&!active,title:SCORE_LABELS[score],
+                          style:{width:34,height:28,borderRadius:6,
+                            border:'1.5px solid '+(active?SCORE_BG[score]:'#DDE3F0'),
+                            background:bg,color:col,fontSize:11,fontWeight:active?700:400,
+                            cursor:locked?'default':'pointer',
+                            opacity:locked&&!active?0.4:1,transition:'all .12s'}},
+                          score===0?'N/A':score));
+                    })
+                  ),
+                  /* Assessor scores */
+                  e('div',{style:{display:'flex',borderLeft:'1px solid #DCFCE7',background:'#F0FDF4'}},
+                    [0,1,2,3,4,5].map(function(score){
+                      var av=aScores[me.code]!=null?aScores[me.code]:null;
+                      var active=av===score;
+                      var bg=active?SCORE_BG[score]:'#F0FDF4';
+                      var col=active?W:score===0?'#90A4AE':SCORE_BG[score];
+                      return e('div',{key:score,style:{width:44,flexShrink:0,padding:'4px 3px',textAlign:'center'}},
+                        e('button',{
+                          onClick:function(){if(!locked)setScore(me.code,score,true);},
+                          disabled:locked&&!active,title:'Assessor: '+SCORE_LABELS[score],
+                          style:{width:34,height:28,borderRadius:6,
+                            border:'1.5px solid '+(active?SCORE_BG[score]:'#BBF7D0'),
+                            background:bg,color:col,fontSize:11,fontWeight:active?700:400,
+                            cursor:locked?'default':'pointer',
+                            opacity:locked&&!active?0.4:1,transition:'all .12s'}},
+                          score===0?'N/A':score));
+                    })
+                  ),
+
+                  e('div',{style:{width:160,flexShrink:0,padding:'4px 8px'}},
+                    !locked
+                      ? e('input',{type:'text',value:note,
+                          onChange:function(ev){setNote(me.code,ev.target.value);},
+                          placeholder:'Note / reference...',
+                          style:{width:'100%',padding:'4px 7px',border:'1px solid #E8EAF6',
+                            borderRadius:6,fontSize:10.5,fontFamily:"'Poppins',sans-serif",
+                            outline:'none',boxSizing:'border-box',background:'#FAFAFA',color:GR}})
+                      : e('div',{style:{fontSize:10.5,color:GR,fontStyle:'italic',lineHeight:1.4}},note||'—')
+                  )
+                );
+              })
+            );
+          })
+        )
+      )
+    );
+  }
+
+  /* ═══ HISTORY ═══ */
+  function renderHistory(){
+    if(st.histView){
+      var rec=st.history.find(function(h){return h.id===st.histView;});
+      if(!rec)return null;
+      var ov2=calcAll(rec.scores);
+      return e('div',{style:{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}},
+        e('div',{style:{background:W,borderBottom:'1px solid #E8EAF6',padding:'10px 16px',
+          display:'flex',alignItems:'center',gap:10,flexShrink:0}},
+          e('button',{onClick:function(){upd({histView:null});},
+            style:{padding:'5px 12px',background:BL,color:B,border:'none',borderRadius:7,fontSize:11,fontWeight:600,cursor:'pointer'}},'← Back'),
+          e('div',{style:{flex:1}},
+            e('div',{style:{fontSize:13,fontWeight:700,color:B}},rec.label),
+            e('div',{style:{fontSize:11,color:GR}},rec.date+' · '+ov2.pct+'% · '+ov2.done+'/'+ov2.tot+' MEs scored')
+          ),
+          e('span',{style:{background:GRL,color:GR,padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:600}},'🔒 Historical')
+        ),
+        renderAssessment(rec.scores,rec.notes,true,rec.assessor_scores||{})
+      );
+    }
+
+    /* ── Excel import parser ── */
+    function importExcel(file){
+      var reader = new FileReader();
+      reader.onload = function(ev){
+        try{
+          var wb = XLSX.read(ev.target.result, {type:'array'});
+          var ws = wb.Sheets['Sheet1'] || wb.Sheets[wb.SheetNames[0]];
+          var rows = XLSX.utils.sheet_to_json(ws, {header:1, defval:''});
+
+          var hcoScores={}, assessorScores={};
+          var mePattern = /^([A-Z0M]+\.\d+[a-z]?\.?\s*[a-z]?\.?)$/;
+
+          rows.forEach(function(row){
+            var code = String(row[0]||'').trim();
+            var hco  = parseFloat(row[5]);
+            var asst = parseFloat(row[9]);
+            // ME row: col0 is code like AAC.1.a. and col1 has description
+            if(row[1] && code && /^[A-Z0M]+\.\d+/.test(code) && code.length < 20){
+              var cleanCode = code.replace(/\s+/g,'');
+              if(!isNaN(hco))  hcoScores[cleanCode]  = hco;
+              if(!isNaN(asst)) assessorScores[cleanCode] = asst;
+            }
+          });
+
+          var count = Object.keys(hcoScores).length;
+          if(count < 10){
+            toast('Could not read scores from this file ('+count+' found). Check it is the NABH assessment sheet.',false);
+            return;
+          }
+
+          var label = file.name.replace(/\.[^.]+$/,'').replace(/_/g,' ') || 'Imported Assessment';
+          var rec = {
+            id:'ass_import_'+Date.now(),
+            label:label,
+            date:kbdcToday(),
+            scores:hcoScores,
+            assessor_scores:assessorScores,
+            notes:{},
+            locked:true
+          };
+
+          upd(function(prev){
+            var hist=[rec].concat(prev.history);
+            lsS(KEYS.history,hist);
+            return{history:hist};
+          });
+          toast('✓ Imported '+count+' ME scores from '+file.name);
+        }catch(err){
+          toast('Import failed: '+err.message,false);
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    return e('div',{style:{flex:1,overflowY:'auto',padding:'16px 20px',display:'flex',flexDirection:'column',gap:12}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:10,marginBottom:4}},
+        e('div',{style:{flex:1,fontSize:14,fontWeight:700,color:B}},'📚 Assessment History'),
+        e('label',{style:{display:'flex',alignItems:'center',gap:6,padding:'7px 14px',
+          background:'linear-gradient(135deg,'+B+','+BM+')',color:W,borderRadius:8,
+          fontSize:12,fontWeight:700,cursor:'pointer'}},
+          '⬆️ Import Excel',
+          e('input',{type:'file',accept:'.xlsx,.xls',style:{display:'none'},
+            onChange:function(ev){
+              var f=ev.target.files[0];
+              if(f){importExcel(f);}
+              ev.target.value='';
+            }})
+        )
+      ),
+      st.history.length===0
+        ? e('div',{style:{textAlign:'center',padding:'40px',color:GR}},
+            e('div',{style:{fontSize:32,marginBottom:10}},'📋'),
+            e('div',{style:{fontSize:13}},'No past assessments yet.'))
+        : st.history.map(function(rec){
+          var ov2=calcAll(rec.scores);
+          return e('div',{key:rec.id,style:{background:W,borderRadius:14,border:'1px solid #E8EAF6',overflow:'hidden'}},
+            e('div',{style:{padding:'14px 18px',display:'flex',alignItems:'center',gap:12,cursor:'pointer',background:BL},
+              onClick:function(){upd({histView:rec.id,selChapter:'AAC'});}},
+              e('div',{style:{flex:1}},
+                e('div',{style:{fontSize:13,fontWeight:700,color:B,marginBottom:2}},rec.label),
+                e('div',{style:{fontSize:11,color:GR}},rec.date+(rec.locked?' · 🔒':' · Draft'))
+              ),
+              e('div',{style:{textAlign:'center',marginRight:8}},
+                e('div',{style:{fontSize:22,fontWeight:800,color:sc(ov2.pct)}},ov2.pct+'%'),
+                e('div',{style:{fontSize:10,color:GR}},ov2.done+'/'+ov2.tot+' scored')
+              ),
+              e('span',{style:{fontSize:11,color:B,fontWeight:600}},'View →')
+            ),
+            e('div',{style:{padding:'10px 18px',display:'flex',gap:6,flexWrap:'wrap',borderTop:'1px solid #F0F4FF'}},
+              NABH_DATA.map(function(ch){
+                var cp=calcCh(ch.id,rec.scores);
+                return e('div',{key:ch.id,style:{display:'flex',flexDirection:'column',alignItems:'center',gap:2}},
+                  e('div',{style:{width:38,height:5,background:'#E8EAF6',borderRadius:3,overflow:'hidden'}},
+                    e('div',{style:{height:'100%',width:cp.pct+'%',background:sc(cp.pct),borderRadius:3}})
+                  ),
+                  e('div',{style:{fontSize:8.5,color:GR,fontWeight:600}},ch.id),
+                  e('div',{style:{fontSize:8.5,color:sc(cp.pct),fontWeight:700}},cp.pct+'%')
+                );
+              })
+            )
+          );
+        })
+    );
+  }
+
+  /* ── Year tab wrapper ── */
+  function renderAssessmentWithYears(){
+    var curYear = (st.cur.date||'').slice(0,4) || String(new Date().getFullYear());
+
+    // Collect all history years (deduplicated)
+    var seen={};
+    var histEntries=[];
+    st.history.forEach(function(h){
+      var yr=(h.date||'').slice(0,4)||((h.label||'').match(/\d{4}/)||[])[0]||'?';
+      if(!seen[yr]){ seen[yr]=true; histEntries.push({year:yr,rec:h}); }
+    });
+    // Sort descending
+    histEntries.sort(function(a,b){return b.year.localeCompare(a.year);});
+
+    var selYear = st.selYear || curYear;
+    var selRec  = selYear===curYear ? null : (st.history.find(function(h){
+      var yr=(h.date||'').slice(0,4)||((h.label||'').match(/\d{4}/)||[])[0]||'?';
+      return yr===selYear;
+    })||null);
+
+    return e('div',{style:{flex:1,display:'flex',flexDirection:'column',overflow:'hidden'}},
+
+      /* Year selector bar */
+      e('div',{style:{background:'#fff',borderBottom:'1.5px solid #E8EAF6',
+        display:'flex',alignItems:'center',flexShrink:0,padding:'0 12px',gap:0,overflowX:'auto'}},
+
+        /* Current year tab */
+        e('div',{onClick:function(){upd({selYear:curYear,selChapter:'AAC'});},
+          style:{padding:'9px 16px',cursor:'pointer',whiteSpace:'nowrap',
+            borderBottom:'2.5px solid '+(selYear===curYear?'#1A237E':'transparent'),
+            fontSize:12,fontWeight:selYear===curYear?700:400,
+            color:selYear===curYear?'#1A237E':'#546E7A',
+            display:'flex',alignItems:'center',gap:6}},
+          e('span',null,'✍️'),
+          e('span',null,curYear),
+          selYear===curYear&&e('span',{style:{background:'#E8F5E9',color:'#2E7D32',
+            borderRadius:10,padding:'1px 7px',fontSize:9.5,fontWeight:700}},'Active')
+        ),
+
+        /* History year tabs */
+        histEntries.map(function(hy){
+          var act=selYear===hy.year;
+          return e('div',{key:hy.year,
+            onClick:function(){upd({selYear:hy.year,selChapter:'AAC'});},
+            style:{padding:'9px 16px',cursor:'pointer',whiteSpace:'nowrap',
+              borderBottom:'2.5px solid '+(act?'#1A237E':'transparent'),
+              fontSize:12,fontWeight:act?700:400,
+              color:act?'#1A237E':'#546E7A',
+              display:'flex',alignItems:'center',gap:6}},
+            e('span',null,'🔒'),
+            e('span',null,hy.year),
+            act&&e('span',{style:{background:'#E8EAF6',color:'#546E7A',
+              borderRadius:10,padding:'1px 7px',fontSize:9.5,fontWeight:700}},'Read Only')
+          );
+        }),
+
+        /* Spacer + New Year button */
+        e('div',{style:{flex:1}}),
+        e('button',{
+          onClick:function(){
+            var yr=window.prompt('Enter assessment year (e.g. 2027):',String(parseInt(curYear)+1));
+            if(!yr||isNaN(parseInt(yr)))return;
+            yr=yr.trim();
+            if(yr===curYear){toast('Already on '+yr,false);return;}
+            // Check if that year already has a history record
+            var exists=st.history.some(function(h){
+              return ((h.date||'').slice(0,4)||((h.label||'').match(/\d{4}/)||[])[0]||'?')===yr;
+            });
+            if(exists&&!window.confirm(yr+' already exists in History. Still start a new current assessment for '+yr+'?'))return;
+            upd(function(prev){
+              var nc=emptySheet('Self Assessment '+yr);
+              nc.date=yr+'-01-01';
+              lsS(KEYS.cur,nc);
+              return{cur:nc,selYear:yr,selChapter:'AAC'};
+            });
+            toast('Started new assessment for '+yr+' ✓');
+          },
+          style:{margin:'6px 0 6px 8px',padding:'5px 14px',flexShrink:0,
+            background:'#1A237E',color:'#fff',border:'none',borderRadius:8,
+            fontSize:11,fontWeight:700,cursor:'pointer',whiteSpace:'nowrap'}
+        },'+ New Year')
+      ),
+
+      /* Assessment content */
+      selRec
+        ? renderAssessment(selRec.scores,selRec.notes,true,selRec.assessor_scores||{})
+        : renderAssessment()
+    );
+  }
+
+    var TABS=[{id:'dashboard',icon:'📊',label:'Dashboard'},
+            {id:'assessment',icon:'✍️',label:'Assessment'},
+            {id:'history',icon:'📚',label:'History ('+st.history.length+')'}];
+
+  return e('div',{style:{flex:1,display:'flex',flexDirection:'column',overflow:'hidden',fontFamily:"'Poppins',sans-serif",background:GRL}},
+    st.toast&&e('div',{style:{position:'fixed',top:16,right:16,zIndex:9999,
+      background:st.toast.ok!==false?G:R,color:W,padding:'10px 18px',borderRadius:10,
+      fontSize:12.5,fontWeight:600,boxShadow:'0 4px 16px rgba(0,0,0,.2)'}},st.toast.msg),
+
+    e('div',{style:{background:'linear-gradient(135deg,#0D1B6E,'+B+')',padding:'11px 18px',flexShrink:0}},
+      e('div',{style:{display:'flex',alignItems:'center',gap:12}},
+        e('div',{style:{background:'rgba(255,255,255,.15)',borderRadius:8,padding:'5px 11px',
+          fontSize:13,fontWeight:700,color:W,border:'1.5px solid rgba(255,255,255,.25)'}},'NABH'),
+        e('div',{style:{flex:1}},
+          e('div',{style:{fontSize:13.5,fontWeight:700,color:W}},'NABH DHSP Accreditation · 3rd Edition'),
+          e('div',{style:{fontSize:10.5,color:'rgba(255,255,255,.6)'}},st.cur.label+(st.cur.locked?' 🔒':' ✍️')+' · '+st.cur.date)
+        ),
+        e('div',{style:{background:sc(ov.pct)+'CC',color:W,padding:'6px 14px',borderRadius:20,fontSize:12,fontWeight:700}},
+          ov.pct+'% Compliant')
+      )
+    ),
+
+    e('div',{style:{background:W,borderBottom:'1px solid #E8EAF6',display:'flex',padding:'0 16px',flexShrink:0}},
+      TABS.map(function(tab){
+        var act=st.tab===tab.id;
+        return e('div',{key:tab.id,onClick:function(){upd({tab:tab.id});},
+          style:{padding:'10px 16px',cursor:'pointer',borderBottom:'2.5px solid '+(act?B:'transparent'),
+            fontSize:12,fontWeight:act?700:400,color:act?B:GR,
+            display:'flex',alignItems:'center',gap:5,whiteSpace:'nowrap'}},
+          tab.icon,' ',tab.label);
+      })
+    ),
+
+    e('div',{style:{flex:1,display:'flex',overflow:'hidden'}},
+      st.tab==='dashboard'  && renderDash(),
+      st.tab==='assessment' && renderAssessmentWithYears(),
+      st.tab==='history'    && renderHistory()
+    )
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(React.createElement(NabhPage, null));
+</script>
+</body>
+</html>
