@@ -117,6 +117,24 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
   The Manage screen's "Correct Stock" card is the remedy for a wrong figure; it records
   the change as a visible Adjustment and asks for confirmation first.
 
+## Instruments & Equipment (Phase 1 shipped 2026-09-11)
+
+Sidebar app `instr` (`InstrumentsPage` in `index.html`). Reusable items, one record per
+physical piece, plus sets and clinic equipment. Owner chose: inside the suite (not
+standalone), individual items mostly with some sets, sterilisation tracking wanted,
+equipment included.
+
+- Data: `kbdc_ins_assets` / `_sets` / `_log` / `_settings` → Inventory Sheet tabs
+  `InstrumentRegister` / `InstrumentSets` / `InstrumentLog` / `InstrumentSettings`, via
+  `KBDC_INVENTORY_MODULES`. No backend change was needed: every row carries an `id`.
+- Never deleted — items and sets are `Retired` (the merge cannot carry deletions).
+- Access: owner, `inv` or `instr` = manage; `invout` = view + report damaged/missing/found.
+- Test: `tests/test-instruments.js`.
+- **Phase 2 (next):** sterilisation loads (autoclave cycle, indicators, BI/Bowie-Dick,
+  which sets were in the load, pack expiry, failed-load recall). **Phase 3:** reports,
+  QR tag labels. The owner has no existing instrument list yet — Excel template/import is
+  in the Register tab.
+
 ## Known open
 
 - Manager Overview percentages stay 0% until completion rows actually arrive.

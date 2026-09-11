@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-11-1';
+var KBDC_APP_VERSION = '2026-09-11-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -1337,6 +1337,7 @@ const ICONS = {
     x2: "12",
     y2: "12"
   })),
+  instr: /*#__PURE__*/React.createElement("path", {d:"M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"}),
   nabh: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("path", {d:"M12 2L3 7v5c0 5.25 3.75 10.15 9 11.35C17.25 22.15 21 17.25 21 12V7L12 2z"}), /*#__PURE__*/React.createElement("path", {d:"M9 12l2 2 4-4"})),
   idea: /*#__PURE__*/React.createElement("path", {
     d: "M9 21h6M12 3a6 6 0 016 6c0 2.2-1.2 4.15-3 5.2V17H9v-2.8A6 6 0 016 9a6 6 0 016-6z"
@@ -1536,6 +1537,8 @@ const APPS = [{
   id: 'hradmin', name: 'HR Admin',      icon: 'hr',       color: '#E8EAF6', ic: '#3949AB', bc: '#3949AB', live: true, stats: 'Staff Profiles\nDocuments & Records',             btn: 'b', desc: 'Manage staff profiles, payroll, documents, appraisals and HR processes for your clinic.'
 }, {
   id: 'inv',    name: 'Inventory',      icon: 'inv',      color: '#FFF3E0', ic: '#E65100', bc: '#E65100', live: true, stats: 'Live Inventory App\nGoogle Sheets Connected',     btn: 'o', desc: 'Track clinic supplies, dental materials and equipment. Get low-stock alerts and reorder reminders.'
+}, {
+  id: 'instr',  name: 'Instruments & Equipment', icon: 'instr', color: '#E0F2F1', ic: '#00695C', bc: '#00695C', live: true, stats: 'Tagged instruments & sets\nService & AMC reminders', btn: 'b', desc: 'Register every instrument, set and piece of clinic equipment. Track location, condition, repairs, and service and AMC due dates.'
 }, {
   id: 'idea',   name: 'Idea Board',     icon: 'idea',     color: '#EDE7F6', ic: '#6A1B9A', bc: '#6A1B9A', live: true, stats: 'Post & upvote ideas\nAdmin review workflow',      btn: 'b', desc: 'Capture, vote and collaborate on ideas with your team. Turn great ideas into actionable plans.'
 }, {
@@ -2285,7 +2288,7 @@ function CalendarPicker({
 /* ── Sidebar ── */
 /* ── Global App Access System ── */
 var KBDC_SESSION_KEY='kbdc_suite_session';
-var KBDC_APP_LIST=[{id:'tasks',label:'Task Management'},{id:'leave',label:'Leave & Attendance'},{id:'inv',label:'Inventory Manager (full access)'},{id:'invout',label:'Inventory User (Stock Out only)'},{id:'idea',label:'Idea Board'},{id:'form',label:'Form Builder'},{id:'ach',label:'Achievers Club'},{id:'hradmin',label:'HR Admin'},{id:'financial',label:'Financial'},{id:'myteam',label:'My Team'},{id:'settings',label:'Settings'}];
+var KBDC_APP_LIST=[{id:'tasks',label:'Task Management'},{id:'leave',label:'Leave & Attendance'},{id:'inv',label:'Inventory Manager (full access)'},{id:'invout',label:'Inventory User (Stock Out only)'},{id:'instr',label:'Instruments & Equipment (manage)'},{id:'idea',label:'Idea Board'},{id:'form',label:'Form Builder'},{id:'ach',label:'Achievers Club'},{id:'hradmin',label:'HR Admin'},{id:'financial',label:'Financial'},{id:'myteam',label:'My Team'},{id:'settings',label:'Settings'}];
 var KBDC_OWNER_ROLES=['OWN','MDD','CLD','ADH','MGR'];
 // Banks available for salary setup & transfer. Used as a pick-list on the
 // employee Bank Details form; a clinic can still type any bank not listed.
@@ -2425,6 +2428,9 @@ function kbdcHasAppAccess(id, isOwner, access){
   if(!access) return false;
   if(access.indexOf(id)>=0) return true;
   if(id==='inv' && access.indexOf('invout')>=0) return true;
+  // Anyone who works the inventory sees instruments too: Inventory Users can
+  // report an item damaged, missing or found; managing needs 'inv' or 'instr'.
+  if(id==='instr' && (access.indexOf('inv')>=0 || access.indexOf('invout')>=0)) return true;
   return false;
 }
 
@@ -2543,7 +2549,7 @@ function Sidebar({active, onNav, session, onLogout, mobileOpen, onCloseMobile}) 
   const isOwner = session && (session.isOwner || KBDC_OWNER_ROLES.indexOf(session.roleCode)>=0);
   const access = isOwner ? KBDC_ALL_IDS : (session ? (session.appAccess||[]) : []);
   const navMain = [{id:'home',l:'HOME',n:'home'},{id:'myapps',l:'MY APPS',n:'apps'}];
-  const navApps = [{id:'tasks',l:'TASK MANAGEMENT',n:'task'},{id:'leave',l:'LEAVE & ATTENDANCE',n:'leave'},{id:'inv',l:'INVENTORY',n:'inv'},{id:'idea',l:'IDEA BOARD',n:'idea'},{id:'form',l:'FORM BUILDER',n:'form'},{id:'ach',l:'ACHIEVERS CLUB',n:'ach'},{id:'hradmin',l:'HR ADMIN',n:'hr'},{id:'financial',l:'FINANCIAL',n:'finance'}].filter(n=>kbdcHasAppAccess(n.id,isOwner,access));
+  const navApps = [{id:'tasks',l:'TASK MANAGEMENT',n:'task'},{id:'leave',l:'LEAVE & ATTENDANCE',n:'leave'},{id:'inv',l:'INVENTORY',n:'inv'},{id:'instr',l:'INSTRUMENTS & EQUIPMENT',n:'instr'},{id:'idea',l:'IDEA BOARD',n:'idea'},{id:'form',l:'FORM BUILDER',n:'form'},{id:'ach',l:'ACHIEVERS CLUB',n:'ach'},{id:'hradmin',l:'HR ADMIN',n:'hr'},{id:'financial',l:'FINANCIAL',n:'finance'}].filter(n=>kbdcHasAppAccess(n.id,isOwner,access));
   const navAcct = [{id:'myteam',l:'MY TEAM',n:'team'},{id:'settings',l:'SETTINGS',n:'settings'}].filter(n=>isOwner||access.indexOf(n.id)>=0);
   const userName = session ? session.name : 'K.B. Dental';
   const userInitials = userName.trim().split(' ').map(w=>w[0]||'').join('').toUpperCase().slice(0,2)||'KB';
@@ -2929,7 +2935,7 @@ function Topbar({ active, onToggleSidebar }) {
   const isHome = active === 'home';
   const titles = {
     myapps:'My Applications', tasks:'Task Management', leave:'Leave & Attendance',
-    inv:'Inventory', idea:'Idea Board', form:'Form Builder', ach:'Achievers Club', hradmin:'HR Admin',
+    inv:'Inventory', instr:'Instruments & Equipment', idea:'Idea Board', form:'Form Builder', ach:'Achievers Club', hradmin:'HR Admin',
     financial:'Financial', myteam:'My Team', settings:'Settings'
   };
   const [activeBranch, setActiveBranchState] = useState(() => getActiveBranch());
@@ -10676,6 +10682,14 @@ var KBDC_INVENTORY_MODULES = [
   { id:'invitems', label:'Inventory Items',      sheet:'InventoryItems',    localKey:'kbdc_inv_items', get: function(){ return kbdcLsArray('kbdc_inv_items'); } },
   { id:'invtxin',  label:'Stock IN Transactions',  sheet:'InventoryStockIn',  localKey:'kbdc_inv_tx', get: kbdcInvTxIn },
   { id:'invtxout', label:'Stock OUT Transactions', sheet:'InventoryStockOut', localKey:'kbdc_inv_tx', get: kbdcInvTxOut },
+  // Instruments & Equipment. Reusable items, one row per physical piece, on
+  // their own tabs of the INVENTORY Sheet. Every row carries an id, so the
+  // backend never falls back to its name+category key and two identical
+  // mouth mirrors stay two records.
+  { id:'insassets',   label:'Instrument & Equipment Register', sheet:'InstrumentRegister', localKey:'kbdc_ins_assets',   get: function(){ return kbdcLsArray('kbdc_ins_assets'); } },
+  { id:'inssets',     label:'Instrument Sets',                 sheet:'InstrumentSets',     localKey:'kbdc_ins_sets',     get: function(){ return kbdcLsArray('kbdc_ins_sets'); } },
+  { id:'inslog',      label:'Instrument Activity Log',         sheet:'InstrumentLog',      localKey:'kbdc_ins_log',      get: function(){ return kbdcLsArray('kbdc_ins_log'); } },
+  { id:'inssettings', label:'Instrument Settings',             sheet:'InstrumentSettings', localKey:'kbdc_ins_settings', get: function(){ return kbdcLsArray('kbdc_ins_settings'); } },
 ];
 
 /* ═══════════════ LIVE AUTO-SYNC — keeps every device's Tasks + Inventory
@@ -12686,6 +12700,735 @@ function InventoryPage({ invRole, userName }) {
         "What you record here is safe on this device. \u00b7 App " + KBDC_APP_VERSION)
     ),
     React.createElement("iframe", { ref:ref, sandbox:"allow-scripts allow-same-origin allow-forms allow-modals", style:{ width:"100%", height:"100%", border:"none" }, title:"KB Dental Inventory" })
+  );
+}
+
+/* ═══════════════ INSTRUMENTS & EQUIPMENT ═══════════════
+   Reusable items (hand instruments, handpieces, sets and clinic equipment),
+   tracked one physical piece at a time. Consumables are quantities that go
+   down; these are things that move, break, get serviced and go missing.
+   Stored on their own tabs of the INVENTORY Sheet through the inventory sync
+   (KBDC_INVENTORY_MODULES), never the Management Sheet.
+   Nothing is ever deleted: an item leaves service as status 'Retired'. The
+   Sheet merge cannot carry a deletion between devices, and the history is
+   worth keeping anyway. */
+var KBDC_INS_KEYS = { assets:'kbdc_ins_assets', sets:'kbdc_ins_sets', log:'kbdc_ins_log', settings:'kbdc_ins_settings' };
+var KBDC_INS_STATUSES = ['In use','In store','Sterilising','Under repair','Missing','Retired'];
+var KBDC_INS_CONDITIONS = ['Good','Fair','Poor','Damaged'];
+var KBDC_INS_DEFAULTS = {
+  locations: ['Operatory 1','Operatory 2','Operatory 3','CSSD / Sterilisation','Store','Lab','Reception'],
+  insCats: ['Diagnostic','Restorative','Endodontic','Periodontic','Surgical / Extraction','Prosthodontic','Orthodontic','Pedodontic','Implant','Handpiece','Other'],
+  eqpCats: ['Dental Chair','Autoclave / Sterilisation','X-ray / Imaging','Compressor / Suction','Scaler / Light Cure','Lab Equipment','IT / Electrical','Furniture','Other']
+};
+var INS_UI = { pri:'#00695C', priL:'#E0F2F1', red:'#C62828', amb:'#E65100', grey:'#546E7A', line:'#E3E8EE', bg:'#F5F7FA', font:"'Poppins',sans-serif" };
+var INS_STATUS_COLOR = { 'In use':'#2E7D32', 'In store':'#1565C0', 'Sterilising':'#6A1B9A', 'Under repair':'#E65100', 'Missing':'#C62828', 'Retired':'#78909C' };
+var insInp = { width:'100%', padding:'8px 10px', border:'1px solid #CFD8DC', borderRadius:8, fontSize:13, fontFamily:INS_UI.font, boxSizing:'border-box', background:'#fff' };
+
+function kbdcInsReadAll() {
+  return { assets:kbdcLsArray(KBDC_INS_KEYS.assets), sets:kbdcLsArray(KBDC_INS_KEYS.sets),
+           log:kbdcLsArray(KBDC_INS_KEYS.log), settings:kbdcLsArray(KBDC_INS_KEYS.settings) };
+}
+function kbdcInsList(settings, id) {
+  var row = (settings || []).filter(function(r){ return r && r.id === id; })[0];
+  return (row && Array.isArray(row.list) && row.list.length) ? row.list : KBDC_INS_DEFAULTS[id];
+}
+function kbdcInsUid(p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function kbdcInsAddMonths(dateStr, months) {
+  var m = Number(months);
+  if (!dateStr || !m) return '';
+  var d = new Date(String(dateStr).slice(0, 10) + 'T00:00:00');
+  if (isNaN(d.getTime())) return '';
+  var day = d.getDate();
+  d.setDate(1); d.setMonth(d.getMonth() + m);
+  d.setDate(Math.min(day, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  return kbdcLocalDate(d);
+}
+function kbdcInsDaysUntil(dateStr) {
+  if (!dateStr) return null;
+  var a = new Date(String(dateStr).slice(0, 10) + 'T00:00:00'), b = new Date(kbdcToday() + 'T00:00:00');
+  if (isNaN(a.getTime())) return null;
+  return Math.round((a - b) / 86400000);
+}
+// From the last service; an item never serviced counts from its purchase date.
+function kbdcInsNextService(a) { return kbdcInsAddMonths(a.lastService || a.purchaseDate, a.serviceMonths); }
+// Tags are what staff read off a label, so they are short and sequential. The
+// record's identity is its id, not its tag: two devices adding at once can
+// both mint INS-0042, which is a labelling nuisance, never lost data.
+function kbdcInsNextTag(list, prefix, width) {
+  var max = 0;
+  (list || []).forEach(function(a){
+    var t = String(a.tag || '');
+    if (t.indexOf(prefix) === 0) { var n = parseInt(t.slice(prefix.length), 10); if (n > max) max = n; }
+  });
+  return prefix + String(max + 1).padStart(width, '0');
+}
+function kbdcInsAssetTag(assets, kind) { return kbdcInsNextTag(assets, kind === 'Equipment' ? 'EQP-' : 'INS-', 4); }
+function kbdcInsSetIssues(set, assets) {
+  return assets.filter(function(a){
+    return a.setId === set.id && a.status !== 'Retired' &&
+      (a.status === 'Missing' || a.status === 'Under repair' || a.condition === 'Damaged');
+  });
+}
+function kbdcInsAlerts(d) {
+  var out = [];
+  d.assets.filter(function(a){ return a.status !== 'Retired'; }).forEach(function(a) {
+    var lbl = a.tag + ' ' + a.name;
+    var ns = kbdcInsDaysUntil(a.nextService);
+    if (ns !== null && ns < 0) out.push({ sev:2, text:lbl + ': service overdue by ' + (-ns) + (ns === -1 ? ' day' : ' days'), assetId:a.id });
+    else if (ns !== null && ns <= 30) out.push({ sev:1, text:lbl + ': service due ' + (ns === 0 ? 'today' : 'in ' + ns + (ns === 1 ? ' day' : ' days')), assetId:a.id });
+    var amc = kbdcInsDaysUntil(a.amcExpiry);
+    if (amc !== null && amc < 0) out.push({ sev:2, text:lbl + ': AMC expired on ' + a.amcExpiry, assetId:a.id });
+    else if (amc !== null && amc <= 30) out.push({ sev:1, text:lbl + ': AMC expires in ' + amc + (amc === 1 ? ' day' : ' days'), assetId:a.id });
+    var w = kbdcInsDaysUntil(a.warrantyUntil);
+    if (w !== null && w >= 0 && w <= 30) out.push({ sev:1, text:lbl + ': warranty ends in ' + w + (w === 1 ? ' day' : ' days'), assetId:a.id });
+    if (a.status === 'Missing') out.push({ sev:2, text:lbl + ': missing' + (a.statusSince ? ' since ' + a.statusSince : ''), assetId:a.id });
+    var since = kbdcInsDaysUntil(a.statusSince);
+    if (a.status === 'Under repair' && since !== null && -since > 14) out.push({ sev:1, text:lbl + ': under repair for ' + (-since) + ' days', assetId:a.id });
+    if (a.condition === 'Damaged' && a.status !== 'Under repair') out.push({ sev:1, text:lbl + ': reported damaged', assetId:a.id });
+  });
+  d.sets.filter(function(s){ return s.status !== 'Retired'; }).forEach(function(s) {
+    var iss = kbdcInsSetIssues(s, d.assets);
+    if (iss.length) out.push({ sev:1, setId:s.id, text:s.tag + ' ' + s.name + ': ' + iss.length + (iss.length === 1 ? ' item' : ' items') +
+      ' not usable (' + iss.map(function(a){ return a.tag; }).join(', ') + ')' });
+  });
+  return out.sort(function(x, y){ return y.sev - x.sev; });
+}
+function kbdcInsNormDate(v) {
+  function p(n){ n = String(n); return n.length < 2 ? '0' + n : n; }
+  // Excel dates arrive as local midnight, sometimes a few seconds short of it;
+  // reading them at midday keeps them on the right calendar day.
+  if (v instanceof Date) return isNaN(v.getTime()) ? '' : kbdcLocalDate(new Date(v.getTime() + 12 * 3600000));
+  var s = String(v == null ? '' : v).trim(), m;
+  if (!s) return '';
+  if ((m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/))) return m[1] + '-' + p(m[2]) + '-' + p(m[3]);
+  if ((m = s.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{2,4})$/))) return (m[3].length === 2 ? '20' + m[3] : m[3]) + '-' + p(m[2]) + '-' + p(m[1]);
+  return '';
+}
+
+function insBtn(bg, ghost) {
+  return { padding:'8px 14px', borderRadius:8, border: ghost ? '1px solid ' + bg : 'none', background: ghost ? '#fff' : bg,
+           color: ghost ? bg : '#fff', fontSize:12.5, fontWeight:600, cursor:'pointer', fontFamily:INS_UI.font, whiteSpace:'nowrap' };
+}
+function insField(label, child, full) {
+  return React.createElement('label', { style:{ display:'block', gridColumn: full ? '1 / -1' : undefined } },
+    React.createElement('div', { style:{ fontSize:11, fontWeight:600, color:INS_UI.grey, marginBottom:3 } }, label), child);
+}
+function insChip(text, color) {
+  return React.createElement('span', { style:{ display:'inline-block', padding:'2px 9px', borderRadius:12, fontSize:11,
+    fontWeight:600, color:color, background:color + '1A', whiteSpace:'nowrap' } }, text);
+}
+function insOptions(opts, blank) {
+  return [React.createElement('option', { key:'', value:'' }, blank || '— choose —')].concat(
+    opts.map(function(o){ return React.createElement('option', { key:o, value:o }, o); }));
+}
+function InsModal(props) {
+  var h = React.createElement;
+  return h('div', { onClick:props.onClose, style:{ position:'fixed', inset:0, background:'rgba(15,23,42,.45)', zIndex:9000,
+      display:'flex', alignItems:'flex-start', justifyContent:'center', padding:'5vh 12px', overflowY:'auto' } },
+    h('div', { onClick:function(e){ e.stopPropagation(); }, style:{ background:'#fff', borderRadius:14, width:'100%',
+        maxWidth: props.wide ? 760 : 560, boxShadow:'0 20px 50px rgba(0,0,0,.25)', fontFamily:INS_UI.font } },
+      h('div', { style:{ padding:'14px 18px', borderBottom:'1px solid ' + INS_UI.line, display:'flex', alignItems:'center', gap:10 } },
+        h('div', { style:{ flex:1, fontSize:15, fontWeight:700, color:INS_UI.pri } }, props.title),
+        h('button', { onClick:props.onClose, style:{ border:'none', background:'none', fontSize:18, cursor:'pointer', color:INS_UI.grey } }, '✕')),
+      h('div', { style:{ padding:18 } }, props.children)));
+}
+
+function InsAssetForm(props) {
+  var h = React.createElement;
+  var s = React.useState(function(){
+    return Object.assign({ kind:'Instrument', name:'', cat:'', brand:'', model:'', serial:'', location:'', status:'In use',
+      condition:'Good', purchaseDate:'', price:'', vendor:'', warrantyUntil:'', serviceMonths:'', lastService:'',
+      amcVendor:'', amcExpiry:'', notes:'', qty:1 }, props.init);
+  });
+  var v = s[0], setV = s[1];
+  function set(k) { return function(e){ var x = {}; x[k] = e.target.value; setV(function(p){ return Object.assign({}, p, x); }); }; }
+  function inp(k, type, extra) {
+    return h('input', Object.assign({ id:'ins-f-' + k, type:type || 'text', value:v[k] == null ? '' : v[k], onChange:set(k), style:insInp }, extra || {}));
+  }
+  function sel(k, opts) { return h('select', { id:'ins-f-' + k, value:v[k] || '', onChange:set(k), style:insInp }, insOptions(opts)); }
+  function sec(t) {
+    return h('div', { style:{ gridColumn:'1 / -1', fontSize:11.5, fontWeight:700, color:INS_UI.pri, marginTop:6,
+      borderTop:'1px solid ' + INS_UI.line, paddingTop:10 } }, t);
+  }
+  var isEq = v.kind === 'Equipment';
+  var next = kbdcInsNextService(v);
+  var qty = Number(v.qty) || 1;
+  return h('div', null,
+    h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))', gap:10 } },
+      props.isNew && insField('Type', sel('kind', ['Instrument','Equipment'])),
+      insField('Name *', inp('name', 'text', { placeholder: isEq ? 'e.g. Autoclave' : 'e.g. Mouth mirror' })),
+      insField('Category', sel('cat', isEq ? props.eqpCats : props.insCats)),
+      props.isNew && insField('How many pieces?', inp('qty', 'number', { min:1, max:200 })),
+      insField('Location', sel('location', props.locs)),
+      insField('Status', sel('status', KBDC_INS_STATUSES)),
+      insField('Condition', sel('condition', KBDC_INS_CONDITIONS)),
+      insField('Brand', inp('brand')), insField('Model', inp('model')), insField('Serial No.', inp('serial')),
+      sec('Purchase'),
+      insField('Purchase date', inp('purchaseDate', 'date')), insField('Price (₹ each)', inp('price', 'number', { min:0 })),
+      insField('Vendor', inp('vendor')), insField('Warranty until', inp('warrantyUntil', 'date')),
+      sec(isEq ? 'Service & AMC' : 'Service (optional, e.g. handpieces)'),
+      insField('Service every (months)', inp('serviceMonths', 'number', { min:0 })), insField('Last service', inp('lastService', 'date')),
+      insField('Next service', h('div', { style:Object.assign({}, insInp, { background:INS_UI.bg, color: next ? '#263238' : '#90A4AE' }) },
+        next || 'set an interval')),
+      isEq && insField('AMC vendor', inp('amcVendor')), isEq && insField('AMC expiry', inp('amcExpiry', 'date')),
+      insField('Notes', h('textarea', { value:v.notes || '', onChange:set('notes'), rows:2, style:insInp }), true)
+    ),
+    props.isNew && qty > 1 && h('div', { style:{ marginTop:10, fontSize:12, color:INS_UI.grey } },
+      'This adds ' + Math.min(qty, 200) + ' items, each with its own tag, one for every physical piece.'),
+    h('div', { style:{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 } },
+      h('button', { onClick:props.onCancel, style:insBtn(INS_UI.grey, true) }, 'Cancel'),
+      h('button', { id:'ins-save', onClick:function(){ props.onSave(v); }, style:insBtn(INS_UI.pri) }, props.isNew ? 'Add' : 'Save'))
+  );
+}
+
+function InsActionForm(props) {
+  var h = React.createElement, act = props.action;
+  var s = React.useState({ date:kbdcToday(), cost:'', vendor:'', location:props.asset.location || '', note:'' });
+  var v = s[0], setV = s[1];
+  function set(k) { return function(e){ var x = {}; x[k] = e.target.value; setV(function(p){ return Object.assign({}, p, x); }); }; }
+  var F = {
+    date: insField('Date', h('input', { type:'date', value:v.date, onChange:set('date'), style:insInp })),
+    cost: insField('Cost (₹)', h('input', { type:'number', min:0, value:v.cost, onChange:set('cost'), style:insInp })),
+    vendor: insField('Vendor / technician', h('input', { value:v.vendor, onChange:set('vendor'), style:insInp })),
+    location: insField(act.k === 'found' ? 'Found at' : 'Move to',
+      h('select', { value:v.location, onChange:set('location'), style:insInp }, insOptions(props.locs))),
+    note: insField('Note', h('textarea', { id:'ins-act-note', value:v.note, onChange:set('note'), rows:2, style:insInp }), true)
+  };
+  return h('div', null,
+    h('div', { style:{ fontSize:12.5, color:INS_UI.grey, marginBottom:12 } }, props.asset.tag + ' · ' + props.asset.name),
+    h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(180px,1fr))', gap:10 } },
+      act.fields.map(function(k){ return h(React.Fragment, { key:k }, F[k]); })),
+    h('div', { style:{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 } },
+      h('button', { onClick:props.onCancel, style:insBtn(INS_UI.grey, true) }, 'Cancel'),
+      h('button', { id:'ins-act-save', onClick:function(){ props.onSave(v); }, style:insBtn(act.k === 'retire' ? INS_UI.red : INS_UI.pri) }, 'Confirm'))
+  );
+}
+
+function InsSetForm(props) {
+  var h = React.createElement, init = props.init || {}, ro = !props.canEdit;
+  var s1 = React.useState({ name:init.name || '', location:init.location || '', notes:init.notes || '' }), v = s1[0], setV = s1[1];
+  var s2 = React.useState(function(){
+    return props.assets.filter(function(a){ return init.id && a.setId === init.id; }).map(function(a){ return a.id; });
+  }), mem = s2[0], setMem = s2[1];
+  var s3 = React.useState(function(){
+    var l = (Array.isArray(init.loose) ? init.loose : []).map(function(x){ return { name:x.name, qty:x.qty }; });
+    return ro ? l : l.concat([{ name:'', qty:1 }]);
+  }), loose = s3[0], setLoose = s3[1];
+  var s4 = React.useState(''), q = s4[0], setQ = s4[1];
+  function set(k) { return function(e){ var x = {}; x[k] = e.target.value; setV(function(p){ return Object.assign({}, p, x); }); }; }
+  function toggle(id) { setMem(function(m){ return m.indexOf(id) >= 0 ? m.filter(function(x){ return x !== id; }) : m.concat([id]); }); }
+  function setLooseAt(i, k, val) {
+    setLoose(function(l){
+      var n = l.map(function(x, j){ if (j !== i) return x; var y = Object.assign({}, x); y[k] = val; return y; });
+      if (i === n.length - 1 && k === 'name' && String(val).trim()) n.push({ name:'', qty:1 });
+      return n;
+    });
+  }
+  // An item can sit in one set at a time; one whose set was retired is free again.
+  var pickable = props.assets.filter(function(a){
+    if (a.status === 'Retired' || a.kind === 'Equipment') return false;
+    if (a.setId && a.setId !== init.id && props.activeSetIds[a.setId]) return false;
+    if (ro) return mem.indexOf(a.id) >= 0;
+    if (!q) return true;
+    return (a.tag + ' ' + a.name + ' ' + (a.cat || '')).toLowerCase().indexOf(q.toLowerCase()) >= 0;
+  }).sort(function(x, y){
+    var dx = mem.indexOf(x.id) >= 0 ? 0 : 1, dy = mem.indexOf(y.id) >= 0 ? 0 : 1;
+    return dx - dy || String(x.tag).localeCompare(String(y.tag));
+  });
+  return h('div', null,
+    h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(200px,1fr))', gap:10 } },
+      insField('Set name *', h('input', { id:'ins-set-name', value:v.name, onChange:set('name'), disabled:ro, placeholder:'e.g. Extraction Set 3', style:insInp })),
+      insField('Kept at', h('select', { value:v.location, onChange:set('location'), disabled:ro, style:insInp }, insOptions(props.locs)))),
+    h('div', { style:{ fontSize:12, fontWeight:700, color:INS_UI.pri, margin:'16px 0 6px' } }, 'Tagged items in this set (' + mem.length + ')'),
+    !ro && h('input', { value:q, onChange:function(e){ setQ(e.target.value); }, placeholder:'Search instruments to add…', style:Object.assign({}, insInp, { marginBottom:6 }) }),
+    h('div', { style:{ maxHeight:220, overflowY:'auto', border:'1px solid ' + INS_UI.line, borderRadius:8 } },
+      pickable.length === 0
+        ? h('div', { style:{ padding:12, fontSize:12, color:'#90A4AE' } }, ro ? 'No tagged items.' : 'No free instruments match. Add instruments in the Register first.')
+        : pickable.map(function(a){
+            var on = mem.indexOf(a.id) >= 0;
+            return h('label', { key:a.id, style:{ display:'flex', alignItems:'center', gap:8, padding:'7px 10px', fontSize:12.5,
+                borderBottom:'1px solid ' + INS_UI.line, background: on ? INS_UI.priL : '#fff', cursor: ro ? 'default' : 'pointer' } },
+              !ro && h('input', { type:'checkbox', checked:on, onChange:function(){ toggle(a.id); } }),
+              h('b', { style:{ color:INS_UI.pri, minWidth:74 } }, a.tag), h('span', { style:{ flex:1 } }, a.name),
+              a.status !== 'In use' && insChip(a.status, INS_STATUS_COLOR[a.status] || INS_UI.grey),
+              a.condition === 'Damaged' && insChip('Damaged', INS_UI.red));
+          })),
+    h('div', { style:{ fontSize:12, fontWeight:700, color:INS_UI.pri, margin:'16px 0 6px' } }, 'Untagged items (counted, not labelled)'),
+    loose.length === 0 && h('div', { style:{ fontSize:12, color:'#90A4AE' } }, 'None.'),
+    loose.map(function(x, i){
+      return h('div', { key:i, style:{ display:'flex', gap:6, marginBottom:6 } },
+        h('input', { value:x.name, disabled:ro, onChange:function(e){ setLooseAt(i, 'name', e.target.value); }, placeholder:'e.g. Cotton pliers', style:Object.assign({}, insInp, { flex:1 }) }),
+        h('input', { type:'number', min:1, value:x.qty, disabled:ro, onChange:function(e){ setLooseAt(i, 'qty', e.target.value); }, style:Object.assign({}, insInp, { width:80 }) }));
+    }),
+    insField('Notes', h('textarea', { value:v.notes, onChange:set('notes'), disabled:ro, rows:2, style:insInp }), true),
+    h('div', { style:{ display:'flex', gap:8, justifyContent:'flex-end', marginTop:16 } },
+      props.canEdit && init.id && h('button', { onClick:props.onRetire, style:Object.assign(insBtn(INS_UI.red, true), { marginRight:'auto' }) }, 'Retire set'),
+      h('button', { onClick:props.onCancel, style:insBtn(INS_UI.grey, true) }, ro ? 'Close' : 'Cancel'),
+      !ro && h('button', { id:'ins-set-save', onClick:function(){ props.onSave(v, mem, loose); }, style:insBtn(INS_UI.pri) }, init.id ? 'Save' : 'Create set'))
+  );
+}
+
+function InsSettingsForm(props) {
+  var h = React.createElement;
+  var s = React.useState({ locations:props.locs.join('\n'), insCats:props.insCats.join('\n'), eqpCats:props.eqpCats.join('\n') });
+  var v = s[0], setV = s[1];
+  function box(k, label) {
+    return insField(label, h('textarea', { rows:9, value:v[k], style:insInp,
+      onChange:function(e){ var x = {}; x[k] = e.target.value; setV(function(p){ return Object.assign({}, p, x); }); } }));
+  }
+  function lines(t) { return t.split('\n').map(function(x){ return x.trim(); }).filter(Boolean); }
+  return h('div', { style:{ background:'#fff', borderRadius:12, border:'1px solid ' + INS_UI.line, padding:16, maxWidth:900 } },
+    h('div', { style:{ fontSize:12.5, color:INS_UI.grey, marginBottom:12 } }, 'One per line. Renaming a location here does not move items already recorded there.'),
+    h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(220px,1fr))', gap:12 } },
+      box('locations', 'Rooms / locations'), box('insCats', 'Instrument categories'), box('eqpCats', 'Equipment categories')),
+    h('div', { style:{ textAlign:'right', marginTop:12 } },
+      h('button', { onClick:function(){ props.onSave({ locations:lines(v.locations), insCats:lines(v.insCats), eqpCats:lines(v.eqpCats) }); }, style:insBtn(INS_UI.pri) }, 'Save lists')));
+}
+
+var KBDC_INS_IMPORT_COLS = ['Type','Name','Category','Brand','Model','Serial No','Quantity','Location','Status','Condition',
+  'Purchase Date','Price','Vendor','Warranty Until','Service Interval (months)','Last Service','AMC Vendor','AMC Expiry','Set','Notes','Tag'];
+var KBDC_INS_IMPORT_MAP = { type:'kind', kind:'kind', name:'name', item:'name', category:'cat', brand:'brand', model:'model',
+  serialno:'serial', serial:'serial', quantity:'qty', qty:'qty', location:'location', status:'status', condition:'condition',
+  purchasedate:'purchaseDate', price:'price', pricers:'price', vendor:'vendor', warrantyuntil:'warrantyUntil',
+  serviceintervalmonths:'serviceMonths', serviceinterval:'serviceMonths', lastservice:'lastService',
+  amcvendor:'amcVendor', amcexpiry:'amcExpiry', set:'set', notes:'notes', tag:'tag' };
+
+function InstrumentsPage({ insRole, userName }) {
+  var h = React.createElement;
+  var isMgr = insRole === 'manager';
+  var s0 = React.useState(kbdcInsReadAll), data = s0[0], setData = s0[1];
+  var s1 = React.useState('dash'), tab = s1[0], setTab = s1[1];
+  var s2 = React.useState({ q:'', kind:'', status:'', loc:'' }), f = s2[0], setF = s2[1];
+  var s3 = React.useState(null), modal = s3[0], setModal = s3[1];
+  var s4 = React.useState(null), toast = s4[0], setToast = s4[1];
+  var fileRef = React.useRef(null);
+
+  React.useEffect(function(){ return kbdcWatchLive(); }, []);
+  // A colleague's change arrives through the background inventory sync, which
+  // writes localStorage; pick it up without anyone having to leave the screen.
+  React.useEffect(function(){
+    var last = JSON.stringify(kbdcInsReadAll());
+    var t = setInterval(function(){
+      var d = kbdcInsReadAll(), sig = JSON.stringify(d);
+      if (sig !== last) { last = sig; setData(d); }
+    }, 4000);
+    return function(){ clearInterval(t); };
+  }, []);
+
+  function say(msg, bad) { setToast({ msg:msg, bad:!!bad }); setTimeout(function(){ setToast(null); }, 3000); }
+  function close() { setModal(null); }
+  function open(m) { setModal(Object.assign({ key:kbdcInsUid('m') }, m)); }
+  function stamp(r) { r.updatedAt = new Date().toISOString(); r.updatedBy = userName || ''; return r; }
+  function logRow(a, event, detail, cost, date) {
+    return stamp({ id:kbdcInsUid('il_'), assetId:a.id, tag:a.tag, name:a.name, event:event, detail:detail || '',
+                   cost:cost === '' || cost == null ? '' : Number(cost) || 0, date:date || kbdcToday(), by:userName || '' });
+  }
+  // Always edit what is on the device NOW, not the copy this screen rendered
+  // from: the background sync may have merged a colleague's change since.
+  function commit(next) {
+    Object.keys(next).forEach(function(k){ localStorage.setItem(KBDC_INS_KEYS[k], JSON.stringify(next[k])); });
+    setData(kbdcInsReadAll());
+    try { kbdcAutoSyncInventory(); } catch (e) {}
+  }
+
+  var locs = kbdcInsList(data.settings, 'locations'), insCats = kbdcInsList(data.settings, 'insCats'), eqpCats = kbdcInsList(data.settings, 'eqpCats');
+  var active = data.assets.filter(function(a){ return a.status !== 'Retired'; });
+  var activeSets = data.sets.filter(function(s){ return s.status !== 'Retired'; });
+  var activeSetIds = {}; activeSets.forEach(function(s){ activeSetIds[s.id] = s; });
+
+  var ACTIONS = [
+    { k:'service',  label:'🔧 Record service',    mgr:true,  fields:['date','cost','vendor','note'], event:'Serviced',
+      show:function(a){ return a.status !== 'Retired'; }, apply:function(a, fm){ return { lastService:fm.date }; } },
+    { k:'repair',   label:'🛠 Send for repair',    mgr:true,  fields:['date','vendor','note'], event:'Sent for repair',
+      show:function(a){ return a.status !== 'Under repair' && a.status !== 'Retired'; }, apply:function(){ return { status:'Under repair' }; } },
+    { k:'repaired', label:'✅ Back from repair',   mgr:true,  fields:['date','cost','note'], event:'Repaired',
+      show:function(a){ return a.status === 'Under repair'; }, apply:function(){ return { status:'In use', condition:'Good' }; } },
+    { k:'move',     label:'📍 Move',               mgr:true,  fields:['location','note'], event:'Moved',
+      show:function(a){ return a.status !== 'Retired'; }, apply:function(a, fm){ return { location:fm.location }; } },
+    { k:'damaged',  label:'⚠️ Report damaged',     mgr:false, fields:['note'], event:'Reported damaged',
+      show:function(a){ return a.condition !== 'Damaged' && a.status !== 'Retired'; }, apply:function(){ return { condition:'Damaged' }; } },
+    { k:'missing',  label:'❓ Report missing',     mgr:false, fields:['note'], event:'Reported missing',
+      show:function(a){ return a.status !== 'Missing' && a.status !== 'Retired'; }, apply:function(){ return { status:'Missing' }; } },
+    { k:'found',    label:'🎉 Found',              mgr:false, fields:['location','note'], event:'Found',
+      show:function(a){ return a.status === 'Missing'; }, apply:function(a, fm){ return { status:'In use', location:fm.location || a.location }; } },
+    { k:'retire',   label:'🗄 Retire',             mgr:true,  fields:['date','note'], event:'Retired',
+      show:function(a){ return a.status !== 'Retired'; }, apply:function(){ return { status:'Retired', setId:'' }; } }
+  ];
+
+  function saveAsset(v, isNew) {
+    var d = kbdcInsReadAll(), today = kbdcToday();
+    var name = String(v.name || '').trim();
+    if (!name) { say('Please enter a name.', true); return; }
+    var serial = String(v.serial || '').trim().toLowerCase();
+    if (serial && d.assets.some(function(a){ return a.id !== v.id && String(a.serial || '').trim().toLowerCase() === serial; }) &&
+        !window.confirm('Another item already has serial number "' + v.serial + '". Save anyway?')) return;
+    var rec = Object.assign({}, v, { name:name, price: v.price === '' ? '' : Number(v.price) || 0,
+      serviceMonths: v.serviceMonths === '' ? '' : parseInt(v.serviceMonths, 10) || '' });
+    delete rec.qty;
+    rec.nextService = kbdcInsNextService(rec);
+    var assets = d.assets.slice(), log = d.log.slice();
+    if (isNew) {
+      var n = Math.min(200, Math.max(1, parseInt(v.qty, 10) || 1));
+      for (var i = 0; i < n; i++) {
+        var a = stamp(Object.assign({}, rec, { id:kbdcInsUid('ia_'), tag:kbdcInsAssetTag(assets, rec.kind), statusSince:today,
+                                               createdAt:today, createdBy:userName || '' }));
+        assets.push(a); log.push(logRow(a, 'Added', ''));
+      }
+      commit({ assets:assets, log:log });
+      say(n === 1 ? 'Added ' + assets[assets.length - 1].tag : 'Added ' + n + ' items');
+    } else {
+      var idx = -1;
+      assets.forEach(function(a, j){ if (a.id === v.id) idx = j; });
+      if (idx < 0) { say('That item is no longer on this device.', true); return; }
+      var old = assets[idx];
+      if (old.status !== rec.status) rec.statusSince = today;
+      assets[idx] = stamp(rec);
+      log.push(logRow(rec, 'Edited', old.status !== rec.status ? 'Status: ' + old.status + ' → ' + rec.status : ''));
+      commit({ assets:assets, log:log });
+      say('Saved ' + rec.tag);
+    }
+    close();
+  }
+
+  function doAction(id, act, fm) {
+    var d = kbdcInsReadAll(), assets = d.assets.slice(), idx = -1;
+    assets.forEach(function(a, j){ if (a.id === id) idx = j; });
+    if (idx < 0) { say('That item is no longer on this device.', true); return; }
+    if (act.k === 'retire' && !window.confirm('Retire ' + assets[idx].tag + ' ' + assets[idx].name + '? It stays in the history but leaves the register.')) return;
+    var cur = assets[idx], patch = act.apply(cur, fm);
+    if (patch.status && patch.status !== cur.status) patch.statusSince = fm.date || kbdcToday();
+    var next = stamp(Object.assign({}, cur, patch));
+    next.nextService = kbdcInsNextService(next);
+    assets[idx] = next;
+    var detail = [fm.vendor ? 'By: ' + fm.vendor : '', (act.k === 'move' || act.k === 'found') && fm.location ? 'To: ' + fm.location : '', fm.note || '']
+      .filter(Boolean).join(' · ');
+    commit({ assets:assets, log:d.log.concat([logRow(next, act.event, detail, act.fields.indexOf('cost') >= 0 ? fm.cost : '', fm.date)]) });
+    say(act.event + ': ' + next.tag);
+    open({ t:'view', id:id });
+  }
+
+  function saveSet(v, members, loose, existing) {
+    var d = kbdcInsReadAll(), today = kbdcToday();
+    var name = String(v.name || '').trim();
+    if (!name) { say('Please give the set a name.', true); return; }
+    var sets = d.sets.slice();
+    var rec = existing ? Object.assign({}, existing) : { id:kbdcInsUid('is_'), tag:kbdcInsNextTag(sets, 'SET-', 3), status:'Active', createdAt:today, createdBy:userName || '' };
+    Object.assign(rec, { name:name, location:v.location || '', notes:v.notes || '',
+      loose:loose.filter(function(x){ return String(x.name || '').trim(); }).map(function(x){ return { name:String(x.name).trim(), qty:Math.max(1, parseInt(x.qty, 10) || 1) }; }) });
+    stamp(rec);
+    if (existing) sets = sets.map(function(s){ return s.id === rec.id ? rec : s; }); else sets.push(rec);
+    var assets = d.assets.map(function(a){
+      var want = members.indexOf(a.id) >= 0;
+      if (want && a.setId !== rec.id) return stamp(Object.assign({}, a, { setId:rec.id }));
+      if (!want && a.setId === rec.id) return stamp(Object.assign({}, a, { setId:'' }));
+      return a;
+    });
+    commit({ sets:sets, assets:assets });
+    say((existing ? 'Saved ' : 'Created ') + rec.tag + ' ' + rec.name);
+    close();
+  }
+  function retireSet(set) {
+    if (!window.confirm('Retire ' + set.tag + ' ' + set.name + '? Its instruments are released back to the register.')) return;
+    var d = kbdcInsReadAll();
+    commit({
+      sets: d.sets.map(function(s){ return s.id === set.id ? stamp(Object.assign({}, s, { status:'Retired' })) : s; }),
+      assets: d.assets.map(function(a){ return a.setId === set.id ? stamp(Object.assign({}, a, { setId:'' })) : a; })
+    });
+    say('Retired ' + set.tag);
+    close();
+  }
+  function saveLists(lists) {
+    var d = kbdcInsReadAll();
+    var rows = d.settings.filter(function(r){ return !(r && lists[r.id]); });
+    Object.keys(lists).forEach(function(id){ rows.push(stamp({ id:id, list:lists[id] })); });
+    commit({ settings:rows });
+    say('Lists saved');
+  }
+
+  function downloadTemplate() {
+    if (typeof XLSX === 'undefined') { say('The Excel library has not loaded. Check the connection and try again.', true); return; }
+    var wb = XLSX.utils.book_new();
+    var ws = XLSX.utils.aoa_to_sheet([KBDC_INS_IMPORT_COLS,
+      ['Instrument','Mouth mirror','Diagnostic','GDC','','',6,'Operatory 1','In use','Good','2025-04-01',250,'','','','','','','Examination Set 1','',''],
+      ['Equipment','Autoclave','Autoclave / Sterilisation','','','',1,'CSSD / Sterilisation','In use','Good','2023-06-15','','','',6,'','','','','','']]);
+    ws['!cols'] = KBDC_INS_IMPORT_COLS.map(function(c){ return { wch:Math.max(12, c.length + 2) }; });
+    XLSX.utils.book_append_sheet(wb, ws, 'Items');
+    var help = [['How to fill this in'],
+      ['One row per kind of item. "Quantity" makes that many separately tagged items.'],
+      ['Type: Instrument or Equipment. Dates: YYYY-MM-DD or DD/MM/YYYY.'],
+      ['Set: a set name; the set is created if it does not exist yet.'],
+      ['Tag: leave blank for new items. Fill it (e.g. INS-0012) only to update an item already in the app.'],
+      ['Delete the two example rows before importing.'],
+      [''], ['Locations'].concat(locs), ['Instrument categories'].concat(insCats), ['Equipment categories'].concat(eqpCats),
+      ['Status'].concat(KBDC_INS_STATUSES), ['Condition'].concat(KBDC_INS_CONDITIONS)];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(help), 'Help');
+    XLSX.writeFile(wb, 'KB_Instruments_Import_Template.xlsx');
+  }
+
+  function importFile(file) {
+    var rd = new FileReader();
+    rd.onload = function(ev) {
+      try {
+        var wb = XLSX.read(ev.target.result, { type:'array', cellDates:true });
+        var rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { defval:'' });
+        var d = kbdcInsReadAll(), today = kbdcToday();
+        var assets = d.assets.slice(), sets = d.sets.slice(), log = d.log.slice(), added = 0, updated = 0, skipped = 0;
+        function str(x) { return String(x == null ? '' : x).trim(); }
+        rows.forEach(function(raw) {
+          var r = {};
+          Object.keys(raw).forEach(function(k){ var m = KBDC_INS_IMPORT_MAP[k.toLowerCase().replace(/[^a-z]/g, '')]; if (m) r[m] = raw[k]; });
+          var name = str(r.name);
+          if (!name) { skipped++; return; }
+          var kind = /equip/i.test(str(r.kind)) ? 'Equipment' : 'Instrument';
+          var price = str(r.price).replace(/[^0-9.]/g, '');
+          var rec = { name:name, cat:str(r.cat), brand:str(r.brand), model:str(r.model), serial:str(r.serial), location:str(r.location),
+            status: KBDC_INS_STATUSES.indexOf(str(r.status)) >= 0 ? str(r.status) : '',
+            condition: KBDC_INS_CONDITIONS.indexOf(str(r.condition)) >= 0 ? str(r.condition) : '',
+            purchaseDate:kbdcInsNormDate(r.purchaseDate), price: price === '' ? '' : Number(price) || 0, vendor:str(r.vendor),
+            warrantyUntil:kbdcInsNormDate(r.warrantyUntil), serviceMonths: parseInt(r.serviceMonths, 10) || '',
+            lastService:kbdcInsNormDate(r.lastService), amcVendor:str(r.amcVendor), amcExpiry:kbdcInsNormDate(r.amcExpiry), notes:str(r.notes) };
+          var setName = str(r.set);
+          if (setName) {
+            var st = sets.filter(function(s){ return s.status !== 'Retired' && String(s.name).toLowerCase() === setName.toLowerCase(); })[0];
+            if (!st) {
+              st = stamp({ id:kbdcInsUid('is_'), tag:kbdcInsNextTag(sets, 'SET-', 3), name:setName, location:rec.location, status:'Active',
+                           loose:[], notes:'', createdAt:today, createdBy:userName || '' });
+              sets.push(st);
+            }
+            rec.setId = st.id;
+          }
+          var tag = str(r.tag).toUpperCase();
+          var ex = tag ? assets.filter(function(a){ return String(a.tag).toUpperCase() === tag; })[0] : null;
+          if (ex) {
+            // Updating: only what the row actually fills in, so a blank cell
+            // never wipes a value already recorded in the app.
+            var patch = {};
+            Object.keys(rec).forEach(function(k){ if (rec[k] !== '' && rec[k] != null) patch[k] = rec[k]; });
+            var nx = stamp(Object.assign({}, ex, patch));
+            if (patch.status && patch.status !== ex.status) nx.statusSince = today;
+            nx.nextService = kbdcInsNextService(nx);
+            assets[assets.indexOf(ex)] = nx;
+            log.push(logRow(nx, 'Edited', 'Excel import'));
+            updated++;
+            return;
+          }
+          rec.kind = kind;
+          rec.status = rec.status || 'In use';
+          rec.condition = rec.condition || 'Good';
+          rec.nextService = kbdcInsNextService(rec);
+          var n = Math.min(200, Math.max(1, parseInt(r.qty, 10) || 1));
+          for (var i = 0; i < n; i++) {
+            var a = stamp(Object.assign({}, rec, { id:kbdcInsUid('ia_'), tag:kbdcInsAssetTag(assets, kind), statusSince:today,
+                                                   createdAt:today, createdBy:userName || '' }));
+            assets.push(a); log.push(logRow(a, 'Added', 'Excel import')); added++;
+          }
+        });
+        if (!added && !updated) { say('Nothing imported. Check the file has a "Name" column with items in it.', true); return; }
+        commit({ assets:assets, sets:sets, log:log });
+        say('Imported: ' + added + ' added' + (updated ? ', ' + updated + ' updated' : '') + (skipped ? ', ' + skipped + ' rows without a name skipped' : ''));
+      } catch (err) { say('Import failed: ' + err.message, true); }
+    };
+    rd.readAsArrayBuffer(file);
+  }
+
+  function card(children, extra) {
+    return h('div', { style:Object.assign({ background:'#fff', borderRadius:12, border:'1px solid ' + INS_UI.line, padding:16 }, extra || {}) }, children);
+  }
+  function managerButtons() {
+    if (!isMgr) return null;
+    return [
+      h('button', { key:'ai', id:'ins-add-instrument', onClick:function(){ open({ t:'form', isNew:true, init:{ kind:'Instrument' } }); }, style:insBtn(INS_UI.pri) }, '+ Instrument'),
+      h('button', { key:'ae', id:'ins-add-equipment', onClick:function(){ open({ t:'form', isNew:true, init:{ kind:'Equipment' } }); }, style:insBtn(INS_UI.pri) }, '+ Equipment'),
+      h('button', { key:'tp', onClick:downloadTemplate, style:insBtn(INS_UI.pri, true) }, '⬇ Excel template'),
+      h('button', { key:'im', onClick:function(){ if (fileRef.current) fileRef.current.click(); }, style:insBtn(INS_UI.pri, true) }, '⬆ Import Excel')
+    ];
+  }
+
+  function renderDash() {
+    var alerts = kbdcInsAlerts(data);
+    var value = active.reduce(function(sum, a){ return sum + (Number(a.price) || 0); }, 0);
+    var tiles = [['Instruments', active.filter(function(a){ return a.kind !== 'Equipment'; }).length],
+                 ['Equipment', active.filter(function(a){ return a.kind === 'Equipment'; }).length],
+                 ['Sets', activeSets.length], ['Register value', '₹' + value.toLocaleString('en-IN')]];
+    var recent = data.log.slice().sort(function(x, y){ return String(y.updatedAt).localeCompare(String(x.updatedAt)); }).slice(0, 12);
+    return h('div', { style:{ display:'flex', flexDirection:'column', gap:14 } },
+      data.assets.length === 0 && card([
+        h('div', { key:'t', style:{ fontSize:15, fontWeight:700, color:INS_UI.pri, marginBottom:6 } }, 'Nothing registered yet'),
+        h('div', { key:'d', style:{ fontSize:13, color:INS_UI.grey, marginBottom:12, lineHeight:1.6 } }, isMgr
+          ? 'Add items one at a time, or download the Excel template, fill in what the clinic has, and import it. Each physical piece gets its own tag (INS-0001, EQP-0001) to write or stick on it.'
+          : 'An Inventory Manager has not added any instruments or equipment yet.'),
+        h('div', { key:'b', style:{ display:'flex', gap:8, flexWrap:'wrap' } }, managerButtons())
+      ], { borderColor:INS_UI.pri }),
+      h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(150px,1fr))', gap:10 } },
+        tiles.map(function(t){
+          return card([h('div', { key:'l', style:{ fontSize:10.5, fontWeight:700, color:INS_UI.grey, letterSpacing:'.06em' } }, t[0].toUpperCase()),
+                       h('div', { key:'v', style:{ fontSize:24, fontWeight:800, color:INS_UI.pri, marginTop:4 } }, t[1])], { key:t[0] });
+        })),
+      card([
+        h('div', { key:'t', style:{ fontSize:13.5, fontWeight:700, color:INS_UI.pri, marginBottom:10 } }, 'Needs attention (' + alerts.length + ')'),
+        alerts.length === 0
+          ? h('div', { key:'n', style:{ fontSize:13, color:'#2E7D32' } }, '✅ Nothing needs attention.')
+          : h('div', { key:'l', id:'ins-alerts' }, alerts.map(function(al, i){
+              return h('div', { key:i, onClick:function(){ if (al.assetId) open({ t:'view', id:al.assetId }); else open({ t:'set', id:al.setId }); },
+                style:{ display:'flex', alignItems:'center', gap:10, padding:'8px 4px', borderBottom:'1px solid ' + INS_UI.line, cursor:'pointer', fontSize:13 } },
+                h('span', { style:{ width:9, height:9, borderRadius:5, flexShrink:0, background: al.sev === 2 ? INS_UI.red : INS_UI.amb } }),
+                h('span', null, al.text));
+            }))
+      ]),
+      card([
+        h('div', { key:'t', style:{ fontSize:13.5, fontWeight:700, color:INS_UI.pri, marginBottom:10 } }, 'Recent activity'),
+        recent.length === 0 ? h('div', { key:'n', style:{ fontSize:13, color:'#90A4AE' } }, 'No activity yet.')
+          : h('div', { key:'l' }, recent.map(function(r){
+              return h('div', { key:r.id, style:{ fontSize:12.5, padding:'6px 0', borderBottom:'1px solid ' + INS_UI.line, color:'#37474F' } },
+                h('span', { style:{ color:INS_UI.grey } }, r.date + ' · '), h('b', null, r.tag + ' ' + r.name), ' · ' + r.event,
+                r.detail ? ' · ' + r.detail : '', r.by ? h('span', { style:{ color:INS_UI.grey } }, ' · ' + r.by) : null);
+            }))
+      ])
+    );
+  }
+
+  function renderReg() {
+    var setById = {}; data.sets.forEach(function(s){ setById[s.id] = s; });
+    var rows = data.assets.filter(function(a){
+      if (f.status) { if (a.status !== f.status) return false; } else if (a.status === 'Retired') return false;
+      if (f.kind && a.kind !== f.kind) return false;
+      if (f.loc && a.location !== f.loc) return false;
+      if (f.q && [a.tag, a.name, a.brand, a.model, a.serial, a.cat].join(' ').toLowerCase().indexOf(f.q.toLowerCase()) < 0) return false;
+      return true;
+    }).sort(function(x, y){ return String(x.tag).localeCompare(String(y.tag)); });
+    function fsel(k, opts, blank) {
+      return h('select', { value:f[k], onChange:function(e){ var x = {}; x[k] = e.target.value; setF(Object.assign({}, f, x)); },
+        style:Object.assign({}, insInp, { width:'auto', minWidth:130 }) }, insOptions(opts, blank));
+    }
+    var th = { textAlign:'left', padding:'9px 10px', fontSize:10.5, fontWeight:700, color:INS_UI.grey, letterSpacing:'.05em', whiteSpace:'nowrap', borderBottom:'1px solid ' + INS_UI.line };
+    var td = { padding:'9px 10px', fontSize:12.5, borderBottom:'1px solid ' + INS_UI.line, whiteSpace:'nowrap' };
+    return h('div', { style:{ display:'flex', flexDirection:'column', gap:12 } },
+      h('div', { style:{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' } },
+        h('input', { id:'ins-search', value:f.q, onChange:function(e){ setF(Object.assign({}, f, { q:e.target.value })); },
+          placeholder:'Search tag, name, serial…', style:Object.assign({}, insInp, { width:220 }) }),
+        fsel('kind', ['Instrument','Equipment'], 'All types'), fsel('status', KBDC_INS_STATUSES, 'All (not retired)'), fsel('loc', locs, 'All locations'),
+        h('div', { style:{ flex:1 } }), managerButtons()),
+      card(h('div', { style:{ overflowX:'auto' } },
+        rows.length === 0
+          ? h('div', { style:{ padding:20, textAlign:'center', color:'#90A4AE', fontSize:13 } }, data.assets.length ? 'No items match these filters.' : 'No items yet.')
+          : h('table', { id:'ins-table', style:{ borderCollapse:'collapse', width:'100%' } },
+              h('thead', null, h('tr', null, ['Tag','Name','Category','Location','Set','Status','Next service'].map(function(c){ return h('th', { key:c, style:th }, c); }))),
+              h('tbody', null, rows.map(function(a){
+                var ns = kbdcInsDaysUntil(a.nextService);
+                return h('tr', { key:a.id, onClick:function(){ open({ t:'view', id:a.id }); }, style:{ cursor:'pointer' } },
+                  h('td', { style:Object.assign({}, td, { fontWeight:700, color:INS_UI.pri }) }, a.tag),
+                  h('td', { style:Object.assign({}, td, { whiteSpace:'normal', minWidth:160 }) }, a.name,
+                    (a.brand || a.model) ? h('div', { style:{ fontSize:11, color:INS_UI.grey } }, [a.brand, a.model].filter(Boolean).join(' · ')) : null),
+                  h('td', { style:td }, a.cat || '—'), h('td', { style:td }, a.location || '—'),
+                  h('td', { style:td }, a.setId && setById[a.setId] ? setById[a.setId].tag : '—'),
+                  h('td', { style:td }, insChip(a.status, INS_STATUS_COLOR[a.status] || INS_UI.grey), a.condition === 'Damaged' ? ' ' : null,
+                    a.condition === 'Damaged' ? insChip('Damaged', INS_UI.red) : null),
+                  h('td', { style:Object.assign({}, td, { color: ns === null ? '#90A4AE' : ns < 0 ? INS_UI.red : ns <= 30 ? INS_UI.amb : '#37474F', fontWeight: ns !== null && ns <= 30 ? 700 : 400 }) },
+                    a.nextService || '—'));
+              }))))),
+      h('div', { style:{ fontSize:12, color:INS_UI.grey } }, rows.length + (rows.length === 1 ? ' item' : ' items'))
+    );
+  }
+
+  function renderSets() {
+    return h('div', { style:{ display:'flex', flexDirection:'column', gap:12 } },
+      h('div', { style:{ display:'flex', gap:8, alignItems:'center' } },
+        h('div', { style:{ flex:1, fontSize:12.5, color:INS_UI.grey } }, 'A set is issued and sterilised as one unit. It can hold tagged instruments and untagged items by count.'),
+        isMgr && h('button', { id:'ins-add-set', onClick:function(){ open({ t:'set', id:null }); }, style:insBtn(INS_UI.pri) }, '+ New set')),
+      activeSets.length === 0
+        ? card(h('div', { style:{ textAlign:'center', color:'#90A4AE', fontSize:13 } }, 'No sets yet.'))
+        : h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(240px,1fr))', gap:10 } },
+            activeSets.map(function(s){
+              var members = data.assets.filter(function(a){ return a.setId === s.id && a.status !== 'Retired'; });
+              var loose = (Array.isArray(s.loose) ? s.loose : []).reduce(function(n, x){ return n + (Number(x.qty) || 0); }, 0);
+              var iss = kbdcInsSetIssues(s, data.assets);
+              return h('div', { key:s.id, onClick:function(){ open({ t:'set', id:s.id }); },
+                  style:{ background:'#fff', borderRadius:12, border:'1px solid ' + (iss.length ? INS_UI.amb : INS_UI.line), padding:14, cursor:'pointer' } },
+                h('div', { style:{ fontSize:11, fontWeight:700, color:INS_UI.pri } }, s.tag),
+                h('div', { style:{ fontSize:14, fontWeight:700, color:'#263238', margin:'2px 0 6px' } }, s.name),
+                h('div', { style:{ fontSize:12, color:INS_UI.grey } }, (s.location || 'No location') + ' · ' + members.length + ' tagged' + (loose ? ' + ' + loose + ' untagged' : '')),
+                h('div', { style:{ marginTop:8 } }, iss.length ? insChip(iss.length + ' not usable', INS_UI.amb) : insChip('Complete', '#2E7D32')));
+            })));
+  }
+
+  function renderView(a) {
+    var setRec = a.setId ? data.sets.filter(function(s){ return s.id === a.setId; })[0] : null;
+    var hist = data.log.filter(function(r){ return r.assetId === a.id; }).sort(function(x, y){ return String(y.updatedAt).localeCompare(String(x.updatedAt)); });
+    var facts = [['Type', a.kind], ['Category', a.cat], ['Location', a.location], ['Set', setRec ? setRec.tag + ' ' + setRec.name : ''],
+      ['Brand', a.brand], ['Model', a.model], ['Serial No.', a.serial], ['Purchased', a.purchaseDate],
+      ['Price', a.price !== '' && a.price != null ? '₹' + Number(a.price).toLocaleString('en-IN') : ''], ['Vendor', a.vendor],
+      ['Warranty until', a.warrantyUntil], ['Service every', a.serviceMonths ? a.serviceMonths + ' months' : ''],
+      ['Last service', a.lastService], ['Next service', a.nextService], ['AMC vendor', a.amcVendor], ['AMC expiry', a.amcExpiry],
+      ['In this status since', a.statusSince], ['Notes', a.notes]].filter(function(x){ return x[1] !== '' && x[1] != null; });
+    var acts = ACTIONS.filter(function(x){ return (isMgr || !x.mgr) && x.show(a); });
+    return h('div', null,
+      h('div', { style:{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:12 } },
+        insChip(a.status, INS_STATUS_COLOR[a.status] || INS_UI.grey), insChip(a.condition || 'Good', a.condition === 'Damaged' ? INS_UI.red : INS_UI.grey)),
+      h('div', { style:{ display:'grid', gridTemplateColumns:'repeat(auto-fit,minmax(160px,1fr))', gap:'8px 14px', marginBottom:14 } },
+        facts.map(function(x){
+          return h('div', { key:x[0] }, h('div', { style:{ fontSize:10.5, fontWeight:600, color:INS_UI.grey } }, x[0]),
+                                        h('div', { style:{ fontSize:13, color:'#263238' } }, String(x[1])));
+        })),
+      h('div', { style:{ display:'flex', gap:6, flexWrap:'wrap', marginBottom:16 } },
+        isMgr && h('button', { onClick:function(){ open({ t:'form', isNew:false, init:a }); }, style:insBtn(INS_UI.pri) }, '✏️ Edit'),
+        acts.map(function(x){
+          return h('button', { key:x.k, id:'ins-act-' + x.k, onClick:function(){ open({ t:'action', id:a.id, k:x.k }); },
+            style:insBtn(x.k === 'retire' ? INS_UI.red : INS_UI.pri, true) }, x.label);
+        })),
+      h('div', { style:{ fontSize:12, fontWeight:700, color:INS_UI.pri, marginBottom:6 } }, 'History'),
+      hist.length === 0 ? h('div', { style:{ fontSize:12, color:'#90A4AE' } }, 'No history yet.')
+        : hist.map(function(r){
+            return h('div', { key:r.id, style:{ fontSize:12.5, padding:'6px 0', borderBottom:'1px solid ' + INS_UI.line } },
+              h('span', { style:{ color:INS_UI.grey } }, r.date + ' · '), h('b', null, r.event),
+              r.detail ? ' · ' + r.detail : '', r.cost !== '' && r.cost != null ? ' · ₹' + Number(r.cost).toLocaleString('en-IN') : '',
+              r.by ? h('span', { style:{ color:INS_UI.grey } }, ' · ' + r.by) : null);
+          }));
+  }
+
+  function renderModal() {
+    if (!modal) return null;
+    if (modal.t === 'form') {
+      return h(InsModal, { key:modal.key, wide:true, onClose:close,
+          title: modal.isNew ? (modal.init.kind === 'Equipment' ? 'Add equipment' : 'Add instrument') : 'Edit ' + modal.init.tag },
+        h(InsAssetForm, { init:modal.init, isNew:modal.isNew, locs:locs, insCats:insCats, eqpCats:eqpCats, onCancel:close,
+          onSave:function(v){ saveAsset(v, modal.isNew); } }));
+    }
+    if (modal.t === 'view' || modal.t === 'action') {
+      var a = data.assets.filter(function(x){ return x.id === modal.id; })[0];
+      if (!a) return null;
+      if (modal.t === 'view') return h(InsModal, { key:modal.key, wide:true, onClose:close, title:a.tag + ' · ' + a.name }, renderView(a));
+      var act = ACTIONS.filter(function(x){ return x.k === modal.k; })[0];
+      return h(InsModal, { key:modal.key, onClose:close, title:act.label.replace(/^\S+\s/, '') },
+        h(InsActionForm, { asset:a, action:act, locs:locs, onCancel:function(){ open({ t:'view', id:a.id }); },
+          onSave:function(fm){ doAction(a.id, act, fm); } }));
+    }
+    if (modal.t === 'set') {
+      var setRec = modal.id ? data.sets.filter(function(s){ return s.id === modal.id; })[0] : null;
+      return h(InsModal, { key:modal.key, wide:true, onClose:close, title: setRec ? setRec.tag + ' · ' + setRec.name : 'New set' },
+        h(InsSetForm, { init:setRec, assets:data.assets, activeSetIds:activeSetIds, locs:locs, canEdit:isMgr, onCancel:close,
+          onRetire:function(){ retireSet(setRec); }, onSave:function(v, mem, loose){ saveSet(v, mem, loose, setRec); } }));
+    }
+    return null;
+  }
+
+  var tabs = [['dash', '📊 Dashboard'], ['reg', '🦷 Register (' + active.length + ')'], ['sets', '🧰 Sets (' + activeSets.length + ')']]
+    .concat(isMgr ? [['sett', '⚙️ Lists']] : []);
+  return h('div', { style:{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', height:'100%', background:INS_UI.bg, fontFamily:INS_UI.font } },
+    toast && h('div', { style:{ position:'fixed', top:16, right:16, zIndex:9999, background: toast.bad ? INS_UI.red : INS_UI.pri, color:'#fff',
+      padding:'10px 16px', borderRadius:10, fontSize:13, fontWeight:600, boxShadow:'0 6px 20px rgba(0,0,0,.2)', maxWidth:'80vw' } }, toast.msg),
+    h('input', { ref:fileRef, type:'file', accept:'.xlsx,.xls,.csv', style:{ display:'none' },
+      onChange:function(ev){ var fl = ev.target.files[0]; if (fl) importFile(fl); ev.target.value = ''; } }),
+    h('div', { style:{ background:'#fff', borderBottom:'1px solid ' + INS_UI.line, padding:'0 12px', display:'flex', gap:2, overflowX:'auto', flexShrink:0 } },
+      tabs.map(function(t){
+        var on = tab === t[0];
+        return h('div', { key:t[0], id:'ins-tab-' + t[0], onClick:function(){ setTab(t[0]); },
+          style:{ padding:'11px 14px', cursor:'pointer', whiteSpace:'nowrap', fontSize:13, fontWeight: on ? 700 : 500,
+                  color: on ? INS_UI.pri : INS_UI.grey, borderBottom:'2.5px solid ' + (on ? INS_UI.pri : 'transparent') } }, t[1]);
+      })),
+    h('div', { style:{ flex:1, overflowY:'auto', padding:16 } },
+      tab === 'dash' && renderDash(), tab === 'reg' && renderReg(), tab === 'sets' && renderSets(),
+      tab === 'sett' && isMgr && h(InsSettingsForm, { locs:locs, insCats:insCats, eqpCats:eqpCats, onSave:saveLists })),
+    renderModal()
   );
 }
 
@@ -24567,6 +25310,8 @@ function App() {
     if (nav === 'myteam') return React.createElement(MyTeamPage, null);
     if (nav === 'settings') return React.createElement(SettingsPage, null);
     if (nav === 'inv') return React.createElement(InventoryPage, { invRole: invRole, userName: session.name });
+    if (nav === 'instr') return React.createElement(InstrumentsPage, { userName: session.name,
+      insRole: (isOwner || access.indexOf('inv')>=0 || access.indexOf('instr')>=0) ? 'manager' : 'staff' });
     if (nav === 'idea') return React.createElement(IdeaBoardPage, null);
     if (nav === 'hradmin') return React.createElement(HRAdminPage, null);
     if (nav === 'leave') return React.createElement(LeaveAttendancePage, { appUser: appUser });
