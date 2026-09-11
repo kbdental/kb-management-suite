@@ -39,6 +39,8 @@ const V = __dirname + '/vendor/node_modules';
     kbdcSetBackendUrl('https://script.google.com/macros/s/M/exec');
     localStorage.removeItem('kbdc_sync_status');
     localStorage.setItem('kbdc_task_log','[]');
+    // Role cards check a real PIN since 2026-09-11 (any four digits used to work).
+    localStorage.setItem('kbdc_role_pins', JSON.stringify({ RCP:'1234' }));
     localStorage.setItem('kbdc_tasks_RCP', JSON.stringify([
       { code:'RCP1', en:'Open reception', hi:'', freq:'Daily', done:false },
       { code:'RCP2', en:'Check appointments', hi:'', freq:'Daily', done:false },

@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-11-5';
+var KBDC_APP_VERSION = '2026-09-11-6';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -3216,312 +3216,270 @@ function MyAppsPage({ onNav, myAppsIsOwner, myAppsAccess }) {
   }))));
 }
 
-/* ── Task Dashboard ── */
+/* ── Task Dashboard ──
+   This screen was a design that was never connected: every number on it was a
+   literal 0 and the time filters changed nothing, while the Manager Dashboard
+   showed the real work. It now counts from the same records: the completion
+   log (kbdc_task_log, synced as TaskCompletions) against each role's task list,
+   period by period (Daily / Weekly / Monthly / Quarterly / Yearly), plus
+   delegated tasks (kbdc_tasks, synced as DelegatedTasks) for overdue, in
+   progress, in time and delayed. */
+function kbdcTdAddDays(ds, n) {
+  var dt = new Date(String(ds).slice(0, 10) + 'T12:00:00');
+  dt.setDate(dt.getDate() + n);
+  return kbdcLocalDate(dt);
+}
+// The whole period a filter names. Expected work is counted only up to today;
+// delegated tasks due later in the period still belong to it.
+function kbdcTdRange(tf, cFrom, cTo) {
+  var t = kbdcToday(), now = new Date(t + 'T12:00:00');
+  var dow = (now.getDay() + 6) % 7, y = now.getFullYear(), m = now.getMonth();
+  function ymd(yy, mm, dd) { return kbdcLocalDate(new Date(yy, mm, dd, 12)); }
+  switch (tf) {
+    case 'Yesterday':  return { from:kbdcTdAddDays(t, -1), to:kbdcTdAddDays(t, -1) };
+    case 'This Week':  return { from:kbdcTdAddDays(t, -dow), to:kbdcTdAddDays(t, 6 - dow) };
+    case 'Last Week':  return { from:kbdcTdAddDays(t, -dow - 7), to:kbdcTdAddDays(t, -dow - 1) };
+    case 'This Month': return { from:ymd(y, m, 1), to:ymd(y, m + 1, 0) };
+    case 'Last Month': return { from:ymd(y, m - 1, 1), to:ymd(y, m, 0) };
+    case 'This Year':  return { from:ymd(y, 0, 1), to:ymd(y, 11, 31) };
+    case 'All Time':   return { from:'', to:'' };
+    case 'Custom':     return { from:cFrom || '', to:cTo || t };
+    default:           return { from:t, to:t };
+  }
+}
+function kbdcTdDays(from, to) {
+  var out = [];
+  for (var d = from, n = 0; d && d <= to && n < 4000; d = kbdcTdAddDays(d, 1), n++) out.push(d);
+  return out;
+}
+// Expected and done for some roles over some days. A task is expected once per
+// period (day, week, month…) that touches the days; done once per period it was
+// ticked in. `name` limits done to that person's ticks plus unnamed ones, which
+// belong to whoever holds the role. `onlyFreq` restricts to one frequency.
+function kbdcTdCount(days, codes, name, logRows, onlyFreq) {
+  var dayset = {}, per = {};
+  days.forEach(function(d){ dayset[d] = 1; });
+  function periods(freq) {
+    if (per[freq] == null) {
+      var s = {};
+      days.forEach(function(d){ s[kbdcTaskPeriodKey(freq, new Date(d + 'T12:00:00'))] = 1; });
+      per[freq] = Object.keys(s).length;
+    }
+    return per[freq];
+  }
+  var want = name ? kbdcNormName(name) : '', exp = 0, seen = {};
+  codes.forEach(function(code){
+    var byCode = {};
+    getRoleTasks(code).forEach(function(t){
+      var f = t.freq || 'Daily';
+      if (onlyFreq && f !== onlyFreq) return;
+      byCode[t.code] = t;
+      exp += periods(f);
+    });
+    logRows.forEach(function(r){
+      if (r.roleCode !== code) return;
+      var day = String(r.date || '').slice(0, 10);
+      if (!dayset[day]) return;
+      var t = byCode[r.taskCode];
+      if (!t) return;
+      var who = kbdcNormName(r.staffName || '');
+      if (want && who && who !== want) return;
+      seen[code + '|' + r.taskCode + '|' + kbdcTaskPeriodKey(t.freq || 'Daily', new Date(day + 'T12:00:00'))] = 1;
+    });
+  });
+  return { exp:exp, done:Math.min(exp, Object.keys(seen).length) };
+}
+function kbdcTdAssignees(t) {
+  var a = t.assignees;
+  if (Array.isArray(a)) return a;
+  if (typeof a === 'string') { try { var p = JSON.parse(a); if (Array.isArray(p)) return p; } catch (e) {} return a ? a.split(',') : []; }
+  return [];
+}
+function kbdcTdClassify(t, today) {
+  var done = t.status === 'Done', due = String(t.dueDate || '').slice(0, 10), cd = String(t.completedAt || '').slice(0, 10);
+  return { task:t, done:done, overdue:!done && !!due && due < today, ip:!done && t.status === 'In Progress',
+    inTime:done && !!cd && (!due || cd <= due), delayed:done && !!cd && !!due && cd > due };
+}
+function kbdcTdTally(exp, done, dl) {
+  var o = { expected:exp, roleDone:done, delegated:dl.length, overdue:0, pending:Math.max(0, exp - done), ip:0, inTime:done, delayed:0, dDone:0 };
+  dl.forEach(function(c){
+    if (c.done) { o.dDone++; if (c.inTime) o.inTime++; if (c.delayed) o.delayed++; }
+    else if (c.overdue) o.overdue++;
+    else if (c.ip) o.ip++;
+    else o.pending++;
+  });
+  o.total = exp + dl.length;
+  o.completed = done + o.dDone;
+  o.score = o.total ? Math.round(o.completed / o.total * 100) : 0;
+  return o;
+}
+function kbdcTaskDashData(tf, cFrom, cTo) {
+  var today = kbdcToday(), rg = kbdcTdRange(tf, cFrom, cTo), log = kbdcLog();
+  var expTo = rg.to && rg.to < today ? rg.to : today;
+  var from = rg.from || log.reduce(function(m, r){ var d = String(r.date || '').slice(0, 10); return d && d < m ? d : m; }, expTo);
+  var days = from <= expTo ? kbdcTdDays(from, expTo) : [];
+  var roles = [].concat(ROLE_CARDS.clinical, ROLE_CARDS.admin, ROLE_CARDS.mgmt, ROLE_CARDS.lab);
+  var allCodes = roles.map(function(r){ return r.code; });
+  var dAll = kbdcLsArray('kbdc_tasks');
+  function dKey(t) { return String(t.dueDate || t.createdAt || '').slice(0, 10); }
+  var dIn = dAll.filter(function(t){ var k = dKey(t); return (!rg.from || k >= rg.from) && (!rg.to || k <= rg.to); })
+    .map(function(t){ return kbdcTdClassify(t, today); });
+
+  var staff = kbdcLsArray('kbdc_hr_staff').filter(function(s){ return s.active !== false && s.name && s.name !== '—'; });
+  var rows = staff.map(function(s){
+    var nm = kbdcNormName(s.name);
+    var mine = log.filter(function(r){ return kbdcNormName(r.staffName) === nm; });
+    var codes = kbdcRolesForStaff(s.name, mine).filter(function(c){ return allCodes.indexOf(c) >= 0; });
+    var c = kbdcTdCount(days, codes, s.name, log);
+    var dl = dIn.filter(function(x){ return kbdcTdAssignees(x.task).some(function(a){ return kbdcNormName(a) === nm; }); });
+    var o = kbdcTdTally(c.exp, c.done, dl);
+    o.name = s.name; o.roles = codes;
+    return o;
+  }).sort(function(a, b){ return b.score - a.score || a.name.localeCompare(b.name); });
+
+  var all = kbdcTdCount(days, allCodes, '', log);
+  var totals = kbdcTdTally(all.exp, all.done, dIn);
+
+  var roleRows = roles.map(function(r){
+    var n = getRoleTasks(r.code).length;
+    if (!n) return null;
+    var c = kbdcTdCount(days, [r.code], '', log);
+    return { code:r.code, label:r.label, holders:getRoleEmployees(r.code).map(function(e){ return e.name; }),
+      tasks:n, expected:c.exp, done:c.done, score:c.exp ? Math.round(c.done / c.exp * 100) : 0 };
+  }).filter(Boolean);
+
+  var daily = days.slice().reverse().slice(0, 62).map(function(d){
+    var c = kbdcTdCount([d], allCodes, '', log, 'Daily');
+    return { date:d, expected:c.exp, done:c.done, score:c.exp ? Math.round(c.done / c.exp * 100) : 0,
+      ticks:log.filter(function(r){ return String(r.date).slice(0, 10) === d; }).length,
+      delegatedDone:dAll.filter(function(t){ return String(t.completedAt || '').slice(0, 10) === d; }).length };
+  });
+
+  var byMonth = {};
+  days.forEach(function(d){ (byMonth[d.slice(0, 7)] = byMonth[d.slice(0, 7)] || []).push(d); });
+  var monthly = Object.keys(byMonth).sort().reverse().map(function(mk){
+    var c = kbdcTdCount(byMonth[mk], allCodes, '', log);
+    return { month:mk, expected:c.exp, done:c.done, score:c.exp ? Math.round(c.done / c.exp * 100) : 0,
+      delegatedDone:dAll.filter(function(t){ return String(t.completedAt || '').slice(0, 7) === mk; }).length };
+  });
+
+  var overdueAll = dAll.map(function(t){ return kbdcTdClassify(t, today); }).filter(function(c){ return c.overdue; })
+    .sort(function(a, b){ return String(a.task.dueDate).localeCompare(String(b.task.dueDate)); });
+
+  return { range:{ from:from, to:expTo, periodFrom:rg.from, periodTo:rg.to }, rows:rows, totals:totals,
+    roles:roleRows, daily:daily, monthly:monthly, delegated:dIn, overdue:overdueAll };
+}
+
 function TaskDashboard() {
-  /* Refresh live data from HR Admin and tasks on every render */
-  var EMP_ROWS = getEmpRows();
-  var EMP_NAMES = getEmpNames();
-  var ROLES_DATA = getRolesData();
   const [timeF, setTimeF] = useState('Today');
   const [showCustom, setShowCustom] = useState(false);
   const [from, setFrom] = useState('');
   const [to, setTo] = useState('');
   const [view, setView] = useState('Table');
   const [stab, setStab] = useState('Employees');
+  // Redraw whenever a sync brings in ticks, delegated tasks or staff changes.
+  const [, setLive] = useState(0);
+  useEffect(function(){
+    var evs = ['kbdc-tasks-sync', 'kbdc-modules-sync', 'kbdc-staff-sync'];
+    function on() { setLive(function(n){ return n + 1; }); }
+    evs.forEach(function(ev){ window.addEventListener(ev, on); });
+    var stop = kbdcWatchLive();
+    return function(){ evs.forEach(function(ev){ window.removeEventListener(ev, on); }); if (typeof stop === 'function') stop(); };
+  }, []);
   const TF = ['Today', 'Yesterday', 'This Week', 'Last Week', 'This Month', 'Last Month', 'This Year', 'All Time', 'Custom'];
   const STABS = ['Employees', 'Roles', 'Delegated', 'Daily', 'Monthly', 'Overdue'];
-  return /*#__PURE__*/React.createElement("div", {
-    className: "tm-body"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "time-row"
-  }, TF.map(t => /*#__PURE__*/React.createElement("button", {
-    key: t,
-    className: `tf${timeF === t ? ' on' : ''}`,
-    onClick: () => {
-      setTimeF(t);
-      setShowCustom(t === 'Custom');
-    }
-  }, t))), showCustom && /*#__PURE__*/React.createElement("div", {
-    className: "custom-range"
-  }, /*#__PURE__*/React.createElement("span", null, "\uD83D\uDCC5 Custom Date Range: From"), /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: from,
-    onChange: e => setFrom(e.target.value)
-  }), /*#__PURE__*/React.createElement("span", null, "To"), /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    value: to,
-    onChange: e => setTo(e.target.value)
-  }), /*#__PURE__*/React.createElement("button", {
-    className: "crbtn crbtn-apply"
-  }, "Apply"), /*#__PURE__*/React.createElement("button", {
-    className: "crbtn crbtn-cancel",
-    onClick: () => setShowCustom(false)
-  }, "\u2715 Cancel")), /*#__PURE__*/React.createElement("div", {
-    className: "dstats"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dsc"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dsc-lbl"
-  }, "Overdue"), /*#__PURE__*/React.createElement("div", {
-    className: "dsc-num c-red"
-  }, "0")), /*#__PURE__*/React.createElement("div", {
-    className: "dsc"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dsc-lbl"
-  }, "Pending"), /*#__PURE__*/React.createElement("div", {
-    className: "dsc-num c-navy"
-  }, "0")), /*#__PURE__*/React.createElement("div", {
-    className: "dsc"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dsc-lbl"
-  }, "In Progress"), /*#__PURE__*/React.createElement("div", {
-    className: "dsc-num c-org"
-  }, "0")), /*#__PURE__*/React.createElement("div", {
-    className: "dsc"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dsc-lbl"
-  }, "Completed"), /*#__PURE__*/React.createElement("div", {
-    className: "dsc-num c-green"
-  }, "0")), /*#__PURE__*/React.createElement("div", {
-    className: "dsc"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dsc-lbl"
-  }, "In Time"), /*#__PURE__*/React.createElement("div", {
-    className: "dsc-num c-navy"
-  }, "0")), /*#__PURE__*/React.createElement("div", {
-    className: "dsc"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "dsc-lbl"
-  }, "Delayed"), /*#__PURE__*/React.createElement("div", {
-    className: "dsc-num c-red"
-  }, "0"))), /*#__PURE__*/React.createElement("div", {
-    className: "toggle-row"
-  }, /*#__PURE__*/React.createElement("button", {
-    className: `vt-btn${view === 'Table' ? ' on' : ''}`,
-    onClick: () => setView('Table')
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "table",
-    s: 12
-  }), " Table"), /*#__PURE__*/React.createElement("button", {
-    className: `vt-btn${view === 'Bar Chart' ? ' on' : ''}`,
-    onClick: () => setView('Bar Chart')
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "bar",
-    s: 12
-  }), " Bar Chart")), /*#__PURE__*/React.createElement("div", {
-    className: "subtab-row"
-  }, STABS.map(s => /*#__PURE__*/React.createElement("button", {
-    key: s,
-    className: `stab${stab === s ? ' on' : ''}`,
-    onClick: () => setStab(s)
-  }, s))), view === 'Table' && stab === 'Employees' && /*#__PURE__*/React.createElement("div", {
-    className: "tbl-wrap"
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "tbl"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", {
-    style: {
-      width: '35%'
-    }
-  }, "Employee Name"), /*#__PURE__*/React.createElement("th", null, "Total"), /*#__PURE__*/React.createElement("th", null, "Score"), /*#__PURE__*/React.createElement("th", null, "Overdue"), /*#__PURE__*/React.createElement("th", null, "Pending"), /*#__PURE__*/React.createElement("th", null, "In-Progress"), /*#__PURE__*/React.createElement("th", null, "In Time"), /*#__PURE__*/React.createElement("th", null, "Delayed"))), /*#__PURE__*/React.createElement("tbody", null, EMP_ROWS.map((e, i) => /*#__PURE__*/React.createElement("tr", {
-    key: i
-  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
-    className: "emp-cell"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "pct-ring"
-  }, "0%"), /*#__PURE__*/React.createElement("div", {
-    className: "emp-av",
-    style: {
-      background: e.c
-    }
-  }, e.i), /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar-w"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar-f",
-    style: {
-      width: `${e.pct}%`
-    }
-  }))), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11,
-      color: '#263238',
-      marginLeft: 4
-    }
-  }, EMP_NAMES[e.i]))), /*#__PURE__*/React.createElement("td", null, e.total), /*#__PURE__*/React.createElement("td", null, e.score), /*#__PURE__*/React.createElement("td", {
-    className: e.ovd > 0 ? 'td-red' : ''
-  }, e.op ? `${e.ovd} (${e.op})` : e.ovd), /*#__PURE__*/React.createElement("td", null, e.pend), /*#__PURE__*/React.createElement("td", null, e.ip), /*#__PURE__*/React.createElement("td", null, e.it), /*#__PURE__*/React.createElement("td", null, e.dl)))))), view === 'Table' && stab === 'Roles' && /*#__PURE__*/React.createElement("div", {
-    className: "tbl-wrap"
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "tbl"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Role"), /*#__PURE__*/React.createElement("th", null, "Total"), /*#__PURE__*/React.createElement("th", null, "Overdue"), /*#__PURE__*/React.createElement("th", null, "Pending"), /*#__PURE__*/React.createElement("th", null, "Completed"), /*#__PURE__*/React.createElement("th", null, "Score"))), /*#__PURE__*/React.createElement("tbody", null, ROLES_DATA.map((r, i) => /*#__PURE__*/React.createElement("tr", {
-    key: i
-  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
-    className: "role-dot",
-    style: {
-      background: r.dot
-    }
-  }), r.name), /*#__PURE__*/React.createElement("td", null, r.total), /*#__PURE__*/React.createElement("td", {
-    className: r.ovd > 0 ? 'td-red' : ''
-  }, r.ovd), /*#__PURE__*/React.createElement("td", null, r.pend), /*#__PURE__*/React.createElement("td", null, r.comp), /*#__PURE__*/React.createElement("td", {
-    className: "c-red"
-  }, r.score)))))), view === 'Table' && stab === 'Delegated' && /*#__PURE__*/React.createElement("div", {
-    className: "tbl-wrap"
-  }, DELEGATED_ROWS.map((r, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "chk-row"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    style: {
-      accentColor: '#1357A6'
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "emp-av",
-    style: {
-      background: r.c,
-      width: 24,
-      height: 24,
-      fontSize: 9
-    }
-  }, r.i), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      fontWeight: 500,
-      color: '#263238',
-      flex: 1
-    }
-  }, r.code), /*#__PURE__*/React.createElement("span", {
-    style: {
-      fontSize: 11.5,
-      color: '#37474F',
-      flex: 3
-    }
-  }, r.title), r.tags.map((t, j) => /*#__PURE__*/React.createElement("span", {
-    key: j,
-    className: `chk-tag${t === 'High' || t === 'Pending' ? '-red' : t === 'Clinical' ? '' : ''}`,
-    style: {
-      fontSize: 9.5,
-      padding: '1px 7px',
-      borderRadius: 5,
-      background: t === 'Pending' ? '#FFF8E1' : t === 'High' ? '#FFEBEE' : '#E3F2FD',
-      color: t === 'Pending' ? '#F57F17' : t === 'High' ? '#C62828' : '#1357A6',
-      fontWeight: 600
-    }
-  }, t)), /*#__PURE__*/React.createElement("span", {
-    className: "chk-meta"
-  }, r.time)))), view === 'Table' && stab === 'Daily' && /*#__PURE__*/React.createElement("div", {
-    className: "tbl-wrap"
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "tbl"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Employee"), /*#__PURE__*/React.createElement("th", null, "Today's Tasks"), /*#__PURE__*/React.createElement("th", null, "Completed"), /*#__PURE__*/React.createElement("th", null, "Pending"), /*#__PURE__*/React.createElement("th", null, "Overdue"))), /*#__PURE__*/React.createElement("tbody", null, DAILY_ROWS.map((r, i) => /*#__PURE__*/React.createElement("tr", {
-    key: i
-  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
-    className: "emp-cell"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-av",
-    style: {
-      background: r.c,
-      width: 24,
-      height: 24,
-      fontSize: 9
-    }
-  }, r.i), /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar-w"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar-f",
-    style: {
-      width: '30%'
-    }
-  }))))), /*#__PURE__*/React.createElement("td", null, r.today), /*#__PURE__*/React.createElement("td", null, r.comp), /*#__PURE__*/React.createElement("td", null, r.pend), /*#__PURE__*/React.createElement("td", {
-    className: "td-red"
-  }, r.ovd)))))), view === 'Table' && stab === 'Monthly' && /*#__PURE__*/React.createElement("div", {
-    className: "tbl-wrap"
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "tbl"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Employee"), /*#__PURE__*/React.createElement("th", null, "Month"), /*#__PURE__*/React.createElement("th", null, "Total Tasks"), /*#__PURE__*/React.createElement("th", null, "Completed"), /*#__PURE__*/React.createElement("th", null, "Overdue"), /*#__PURE__*/React.createElement("th", null, "Score"))), /*#__PURE__*/React.createElement("tbody", null, MONTHLY_ROWS.map((r, i) => /*#__PURE__*/React.createElement("tr", {
-    key: i
-  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
-    className: "emp-cell"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-av",
-    style: {
-      background: r.c,
-      width: 24,
-      height: 24,
-      fontSize: 9
-    }
-  }, r.i), /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar-w"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "emp-bar-f",
-    style: {
-      width: '20%'
-    }
-  }))))), /*#__PURE__*/React.createElement("td", null, r.month), /*#__PURE__*/React.createElement("td", null, r.total), /*#__PURE__*/React.createElement("td", null, r.comp), /*#__PURE__*/React.createElement("td", {
-    className: "td-red"
-  }, r.ovd), /*#__PURE__*/React.createElement("td", {
-    className: "c-red"
-  }, r.score)))))), view === 'Table' && stab === 'Overdue' && /*#__PURE__*/React.createElement("div", {
-    className: "tbl-wrap"
-  }, OVERDUE_ROWS.map((r, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "chk-row"
-  }, /*#__PURE__*/React.createElement("input", {
-    type: "checkbox",
-    style: {
-      accentColor: '#1357A6'
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "emp-av",
-    style: {
-      background: r.c,
-      width: 24,
-      height: 24,
-      fontSize: 9
-    }
-  }, r.i), /*#__PURE__*/React.createElement("div", {
-    style: {
-      flex: 1,
-      height: 8,
-      background: '#E3F2FD',
-      borderRadius: 4,
-      maxWidth: 200
-    }
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "chk-meta"
-  }, r.time)))), view === 'Bar Chart' && /*#__PURE__*/React.createElement("div", {
-    className: "bar-chart"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bars"
-  }, EMP_ROWS.map((e, i) => /*#__PURE__*/React.createElement("div", {
-    key: i,
-    className: "bar-col"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bar-fill",
-    style: {
-      height: `${Math.max(e.pct, 6)}%`,
-      background: e.ovd > 0 ? '#E53935' : '#1357A6'
-    }
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "emp-av",
-    style: {
-      background: e.c,
-      width: 24,
-      height: 24,
-      fontSize: 9
-    }
-  }, e.i)))), /*#__PURE__*/React.createElement("div", {
-    style: {
-      fontSize: 10.5,
-      color: '#90A4AE',
-      textAlign: 'center',
-      marginTop: 8
-    }
-  }, "Employee Overdue % \u2014 ", timeF)));
+  var e = React.createElement;
+  var D = kbdcTaskDashData(timeF, from, to), T = D.totals;
+  function pc(p) { return p >= 80 ? '#2E7D32' : p >= 50 ? '#F9A825' : p > 0 ? '#E65100' : '#90A4AE'; }
+  function stat(lbl, n, cls) {
+    return e('div', { className:'dsc', key:lbl }, e('div', { className:'dsc-lbl' }, lbl), e('div', { className:'dsc-num ' + cls, 'data-k':lbl }, String(n)));
+  }
+  function table(id, head, rows) {
+    return e('div', { className:'tbl-wrap' }, e('table', { className:'tbl', id:id },
+      e('thead', null, e('tr', null, head.map(function(h){ return e('th', { key:h }, h); }))),
+      e('tbody', null, rows.length ? rows : e('tr', null, e('td', { colSpan:head.length, style:{ textAlign:'center', color:'#90A4AE', padding:18 } }, 'Nothing in this period.')))));
+  }
+  function pctCell(p) { return e('b', { style:{ color:pc(p) } }, p + '%'); }
+  function nameCell(name, p) {
+    var ini = String(name).trim().split(/\s+/).map(function(w){ return w[0] || ''; }).join('').slice(0, 2).toUpperCase();
+    return e('div', { style:{ display:'flex', alignItems:'center', gap:10 } },
+      e('div', { style:{ width:34, height:34, borderRadius:17, border:'2px solid ' + pc(p), display:'flex', alignItems:'center', justifyContent:'center', fontSize:10, fontWeight:700, color:pc(p), flexShrink:0 } }, p + '%'),
+      e('div', { style:{ width:30, height:30, borderRadius:15, background:'#1357A6', color:'#fff', display:'flex', alignItems:'center', justifyContent:'center', fontSize:11, fontWeight:700, flexShrink:0 } }, ini),
+      e('span', { style:{ fontWeight:600 } }, name));
+  }
+  function outcome(c) { return c.done ? (c.inTime ? 'In time' : c.delayed ? 'Delayed' : 'Done') : c.overdue ? 'Overdue' : c.ip ? 'In progress' : 'Pending'; }
+  var rangeTxt = D.range.from === D.range.to ? kbdcPrettyDate(D.range.to) : kbdcPrettyDate(D.range.from) + ' – ' + kbdcPrettyDate(D.range.to);
+  var body = null;
+  if (view === 'Bar Chart') {
+    body = e('div', { style:{ background:'#fff', borderRadius:12, padding:16, border:'1px solid #E3E8EE' } },
+      D.rows.map(function(r){
+        return e('div', { key:r.name, style:{ display:'flex', alignItems:'center', gap:10, margin:'6px 0' } },
+          e('div', { style:{ width:170, fontSize:12.5, fontWeight:600, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' } }, r.name),
+          e('div', { style:{ flex:1, height:14, background:'#EEF2F7', borderRadius:7, overflow:'hidden' } },
+            e('div', { style:{ width:r.score + '%', height:'100%', background:pc(r.score) } })),
+          e('div', { style:{ width:90, fontSize:12, textAlign:'right' } }, r.completed + '/' + r.total + ' · ' + r.score + '%'));
+      }),
+      e('div', { style:{ fontSize:10.5, color:'#90A4AE', textAlign:'center', marginTop:8 } }, 'Score by employee — ' + timeF));
+  } else if (stab === 'Employees') {
+    body = table('td-emp', ['Employee Name', 'Total', 'Score', 'Overdue', 'Pending', 'In-Progress', 'In Time', 'Delayed'],
+      D.rows.map(function(r){
+        return e('tr', { key:r.name, 'data-name':r.name },
+          e('td', null, nameCell(r.name, r.score)), e('td', null, r.total), e('td', null, pctCell(r.score)),
+          e('td', null, r.overdue), e('td', null, r.pending), e('td', null, r.ip), e('td', null, r.inTime), e('td', null, r.delayed));
+      }));
+  } else if (stab === 'Roles') {
+    body = table('td-roles', ['Role', 'Held by', 'Tasks', 'Expected', 'Done', 'Score'],
+      D.roles.map(function(r){
+        return e('tr', { key:r.code }, e('td', null, e('b', null, r.code), ' ' + r.label), e('td', null, r.holders.join(', ') || '— nobody assigned —'),
+          e('td', null, r.tasks), e('td', null, r.expected), e('td', null, r.done), e('td', null, pctCell(r.score)));
+      }));
+  } else if (stab === 'Delegated') {
+    body = table('td-deleg', ['Task', 'Assigned to', 'Due', 'Status', 'Outcome'],
+      D.delegated.map(function(c){
+        var t = c.task;
+        return e('tr', { key:t.id }, e('td', null, t.title), e('td', null, kbdcTdAssignees(t).join(', ')),
+          e('td', null, (t.dueDate || '—') + (t.dueTime ? ' ' + t.dueTime : '')), e('td', null, t.status || 'Pending'), e('td', null, outcome(c)));
+      }));
+  } else if (stab === 'Daily') {
+    body = table('td-daily', ['Date', 'Daily tasks expected', 'Done', 'Score', 'All ticks', 'Delegated finished'],
+      D.daily.map(function(d){
+        return e('tr', { key:d.date }, e('td', null, kbdcPrettyDate(d.date)), e('td', null, d.expected), e('td', null, d.done),
+          e('td', null, pctCell(d.score)), e('td', null, d.ticks), e('td', null, d.delegatedDone));
+      }));
+  } else if (stab === 'Monthly') {
+    body = table('td-monthly', ['Month', 'Expected', 'Done', 'Score', 'Delegated finished'],
+      D.monthly.map(function(m){
+        return e('tr', { key:m.month }, e('td', null, m.month), e('td', null, m.expected), e('td', null, m.done), e('td', null, pctCell(m.score)), e('td', null, m.delegatedDone));
+      }));
+  } else {
+    body = table('td-overdue', ['Task', 'Assigned to', 'Was due', 'Days late', 'Status'],
+      D.overdue.map(function(c){
+        var t = c.task, late = Math.round((new Date(kbdcToday() + 'T12:00:00') - new Date(String(t.dueDate).slice(0, 10) + 'T12:00:00')) / 864e5);
+        return e('tr', { key:t.id }, e('td', null, t.title), e('td', null, kbdcTdAssignees(t).join(', ')), e('td', null, t.dueDate),
+          e('td', null, e('b', { style:{ color:'#C62828' } }, late)), e('td', null, t.status || 'Pending'));
+      }));
+  }
+  return e('div', { className:'tm-body' },
+    e('div', { className:'time-row' }, TF.map(function(t){
+      return e('button', { key:t, className:'tf' + (timeF === t ? ' on' : ''), onClick:function(){ setTimeF(t); setShowCustom(t === 'Custom'); } }, t);
+    })),
+    showCustom && e('div', { className:'custom-range' },
+      e('span', null, '📅 Custom Date Range: From'), e('input', { type:'date', value:from, onChange:function(ev){ setFrom(ev.target.value); } }),
+      e('span', null, 'To'), e('input', { type:'date', value:to, onChange:function(ev){ setTo(ev.target.value); } }),
+      e('button', { className:'crbtn crbtn-apply', onClick:function(){ setShowCustom(false); } }, 'Apply'),
+      e('button', { className:'crbtn crbtn-cancel', onClick:function(){ setShowCustom(false); setTimeF('Today'); } }, '✕ Cancel')),
+    e('div', { style:{ fontSize:12, color:'#546E7A', margin:'2px 0 10px' } }, rangeTxt +
+      ' · Total = role tasks due in the period for each person’s role(s), plus tasks delegated to them. Unnamed ticks count for whoever holds the role.'),
+    e('div', { className:'dstats', id:'td-stats' },
+      stat('Overdue', T.overdue, 'c-red'), stat('Pending', T.pending, 'c-navy'), stat('In Progress', T.ip, 'c-org'),
+      stat('Completed', T.completed, 'c-green'), stat('In Time', T.inTime, 'c-navy'), stat('Delayed', T.delayed, 'c-red')),
+    e('div', { className:'toggle-row' },
+      e('button', { className:'vt-btn' + (view === 'Table' ? ' on' : ''), onClick:function(){ setView('Table'); } }, e(Icon, { n:'table', s:12 }), ' Table'),
+      e('button', { className:'vt-btn' + (view === 'Bar Chart' ? ' on' : ''), onClick:function(){ setView('Bar Chart'); } }, e(Icon, { n:'bar', s:12 }), ' Bar Chart')),
+    view === 'Table' && e('div', { className:'subtab-row' }, STABS.map(function(s){
+      return e('button', { key:s, className:'stab' + (stab === s ? ' on' : ''), onClick:function(){ setStab(s); } }, s);
+    })),
+    body);
 }
 
 /* ── Task List View (after PIN) ── */
@@ -3549,7 +3507,9 @@ function kbdcTaskPeriodKey(freq, d) {
       return 'W' + t.getFullYear() + '-' + (t.getMonth() + 1) + '-' + t.getDate();
     case 'Monthly':   return 'M' + y + '-' + (dt.getMonth() + 1);
     case 'Quarterly': return 'Q' + y + '-' + Math.floor(dt.getMonth() / 3);
-    case 'Annual':    return 'Y' + y;
+    // 82 live tasks say "Yearly"; without this case they fell through to Daily
+    // and reset (and were expected) every single day.
+    case 'Annual': case 'Yearly': return 'Y' + y;
     default:          return 'D' + y + '-' + (dt.getMonth() + 1) + '-' + dt.getDate();
   }
 }
@@ -4497,16 +4457,29 @@ function PinEntry({
 }) {
   const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
+  // Was `np === '1234' || np === role.pin || true`: any four digits opened any
+  // card, the Manager Dashboard included. Now the role's own PIN, nothing else.
+  const rolePin = kbdcRolePin(role.code);
+  useEffect(function(){
+    if (!kbdcSessionIsOwner()) return;
+    var t = setTimeout(function(){ onSuccess(); }, 0);
+    return function(){ clearTimeout(t); };
+  }, []);
   const press = n => {
+    if (!rolePin) return;
+    var left = kbdcRolePinLockLeft(role.code);
+    if (left > 0) { setErr('Too many wrong tries. Wait ' + left + ' seconds.'); return; }
     if (pin.length >= 4) return;
     const np = pin + n;
     setPin(np);
     if (np.length === 4) {
-      if (np === '1234' || np === role.pin || true) {
+      if (np === rolePin) {
+        kbdcRolePinNoteOk(role.code);
         setTimeout(() => onSuccess(), 200);
       } else {
+        var locked = kbdcRolePinNoteFail(role.code);
         setTimeout(() => {
-          setErr('Incorrect PIN');
+          setErr(locked ? 'Too many wrong tries. Locked for 60 seconds.' : 'Incorrect PIN');
           setPin('');
         }, 400);
       }
@@ -4531,7 +4504,7 @@ function PinEntry({
     className: "pin-role"
   }, role.name), /*#__PURE__*/React.createElement("div", {
     className: "pin-prompt"
-  }, "Enter your 4-digit PIN"), /*#__PURE__*/React.createElement("div", {
+  }, rolePin ? "Enter your 4-digit PIN" : "No PIN has been set for this role yet. Ask the owner to set one in Manager Dashboard → PINs."), /*#__PURE__*/React.createElement("div", {
     className: "pin-dots"
   }, [0, 1, 2, 3].map(i => /*#__PURE__*/React.createElement("div", {
     key: i,
@@ -4557,6 +4530,128 @@ function PinEntry({
 }
 
 /* ── helpers: multi-employee per role stored in localStorage ── */
+/* ── Role PINs ──
+   One 4-digit PIN per role card, plus 'MGR' for the Manager Dashboard, set by
+   the owner in Manager Dashboard → PINs and shared with every device through
+   the ClinicSettings row 'rolePins'. Replaces the old check, which accepted
+   any four digits for every card. A role with no PIN stays locked. The owner,
+   already signed in as owner, is not asked for role PINs. */
+function kbdcRolePins() {
+  try { var o = JSON.parse(localStorage.getItem('kbdc_role_pins') || '{}'); return (o && typeof o === 'object') ? o : {}; } catch(e) { return {}; }
+}
+function kbdcRolePin(code) { var p = String(kbdcRolePins()[code] || ''); return /^\d{4}$/.test(p) ? p : ''; }
+function kbdcSetRolePins(pins) {
+  try {
+    localStorage.setItem('kbdc_role_pins', JSON.stringify(pins));
+    localStorage.setItem('kbdc_role_pins_updatedAt', new Date().toISOString());
+  } catch(e) {}
+  try { kbdcAudit('role-pins-changed', Object.keys(pins).length + ' roles'); } catch(e) {}
+  try { kbdcAutoSyncMain(); } catch(e) {}
+}
+function kbdcSessionIsOwner() {
+  var s = kbdcGetSession();
+  return !!(s && (s.isOwner || KBDC_OWNER_ROLES.indexOf(s.roleCode) >= 0));
+}
+function kbdcRolePinFails() { try { return JSON.parse(localStorage.getItem('kbdc_rolepin_fails') || '{}') || {}; } catch(e) { return {}; } }
+function kbdcRolePinLockLeft(code) { var s = kbdcRolePinFails()[code]; return s && s.until ? Math.max(0, Math.ceil((s.until - Date.now()) / 1000)) : 0; }
+function kbdcRolePinNoteFail(code) {
+  var all = kbdcRolePinFails(), s = all[code] || { n:0, until:0 }, locked = false;
+  s.n = (s.n || 0) + 1;
+  if (s.n >= 5) { s.until = Date.now() + 60000; s.n = 0; locked = true; }
+  all[code] = s;
+  try { localStorage.setItem('kbdc_rolepin_fails', JSON.stringify(all)); } catch(e) {}
+  return locked;
+}
+function kbdcRolePinNoteOk(code) {
+  var all = kbdcRolePinFails(); delete all[code];
+  try { localStorage.setItem('kbdc_rolepin_fails', JSON.stringify(all)); } catch(e) {}
+}
+function kbdcAllRoleCards() {
+  return [].concat(ROLE_CARDS.clinical, ROLE_CARDS.admin, ROLE_CARDS.mgmt, ROLE_CARDS.lab)
+    .concat([{ code:'MGR', label:'Manager Dashboard', c:'#37474F' }]);
+}
+// A PIN nobody guesses first: never 0000, 1234, a repeated digit, a keypad column,
+// or one already given to another role.
+function kbdcNewPin(taken) {
+  var bad = { '0000':1, '1234':1, '4321':1, '1212':1, '2580':1, '0852':1, '1122':1, '6969':1 };
+  for (var i = 0; i < 1000; i++) {
+    var n = (window.crypto && window.crypto.getRandomValues) ? window.crypto.getRandomValues(new Uint32Array(1))[0] % 10000 : Math.floor(Math.random() * 10000);
+    var p = String(n).padStart(4, '0');
+    if (!bad[p] && !/^(\d)\1\1\1$/.test(p) && !(taken || {})[p]) return p;
+  }
+  return String(1000 + Math.floor(Math.random() * 9000));
+}
+
+function RolePinsTab() {
+  var e = React.createElement;
+  var s1 = useState(kbdcRolePins), pins = s1[0], setPins = s1[1];
+  var s2 = useState(false), dirty = s2[0], setDirty = s2[1];
+  var s3 = useState(''), msg = s3[0], setMsg = s3[1];
+  var roles = kbdcAllRoleCards();
+  function setOne(code, v) { var n = Object.assign({}, pins); n[code] = String(v).replace(/\D/g, '').slice(0, 4); setPins(n); setDirty(true); setMsg(''); }
+  function taken(except) { var t = {}; Object.keys(pins).forEach(function(k){ if (k !== except && pins[k]) t[pins[k]] = 1; }); return t; }
+  function genAll() {
+    if (!window.confirm('Give every role a brand-new PIN? The old PINs stop working as soon as you press Save. Hand out the new ones straight away.')) return;
+    var n = {}, t = {};
+    roles.forEach(function(r){ var p = kbdcNewPin(t); t[p] = 1; n[r.code] = p; });
+    setPins(n); setDirty(true); setMsg('New PINs made. Press Save to switch them on, then Print to hand them out.');
+  }
+  function save() {
+    var clean = {}, seen = {}, bad = [], dup = [];
+    roles.forEach(function(r){
+      var p = String(pins[r.code] || '');
+      if (!p) return;
+      if (!/^\d{4}$/.test(p)) { bad.push(r.code); return; }
+      if (seen[p]) dup.push(r.code + ' = ' + seen[p]); else seen[p] = r.code;
+      clean[r.code] = p;
+    });
+    if (bad.length) { setMsg('A PIN must be exactly 4 digits: ' + bad.join(', ')); return; }
+    if (dup.length) { setMsg('Two roles share a PIN (' + dup.join(', ') + '). Give each role its own.'); return; }
+    kbdcSetRolePins(clean); setDirty(false);
+    setMsg('Saved. Phones pick up the new PINs within about a minute.');
+  }
+  function print() {
+    var w = window.open('', '_blank');
+    if (!w) { setMsg('The browser blocked the print window. Allow pop-ups for this site.'); return; }
+    var cells = roles.filter(function(r){ return pins[r.code]; }).map(function(r){
+      var who = r.code === 'MGR' ? 'Manager Dashboard' : (getRoleEmployees(r.code).map(function(x){ return x.name; }).join(', ') || 'No one assigned yet');
+      return '<div class="s"><div class="r">' + kbdcInsEsc(r.label) + ' (' + r.code + ')</div><div class="w">' + kbdcInsEsc(who) +
+        '</div><div class="p">' + pins[r.code] + '</div><div class="k">Task Management PIN. Keep it to yourself.</div></div>';
+    }).join('');
+    w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Role PINs</title><style>@page{size:A4;margin:10mm}' +
+      'body{font-family:Arial,sans-serif;margin:0}.g{display:grid;grid-template-columns:repeat(3,1fr)}' +
+      '.s{border:0.3mm dashed #999;padding:5mm;height:42mm;box-sizing:border-box;break-inside:avoid}.r{font-weight:bold;font-size:11pt}' +
+      '.w{font-size:9pt;color:#555;margin:1mm 0 3mm}.p{font-size:28pt;font-weight:bold;letter-spacing:4mm}.k{font-size:7pt;color:#777;margin-top:2mm}' +
+      '</style></head><body><div class="g">' + cells + '</div></body></html>');
+    w.document.close();
+    setTimeout(function(){ try { w.focus(); w.print(); } catch(e) {} }, 400);
+  }
+  var unset = roles.filter(function(r){ return !pins[r.code]; }).length;
+  return e('div', { style:{ padding:'4px 2px' } },
+    e('div', { style:{ fontSize:13, color:'#37474F', lineHeight:1.6, marginBottom:10 } },
+      'Each role card has its own 4-digit PIN, and the Manager Dashboard has one too. A role with no PIN stays locked. ',
+      'You are not asked for PINs while signed in as the owner.'),
+    e('div', { style:{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:10 } },
+      e('button', { id:'rp-generate', className:'mgr-btn', onClick:genAll, style:{ padding:'8px 14px', borderRadius:8, border:'none', background:'#1357A6', color:'#fff', fontWeight:700, cursor:'pointer' } }, '🔄 New PINs for every role'),
+      e('button', { id:'rp-save', onClick:save, disabled:!dirty, style:{ padding:'8px 14px', borderRadius:8, border:'none', background: dirty ? '#2E7D32' : '#B0BEC5', color:'#fff', fontWeight:700, cursor: dirty ? 'pointer' : 'default' } }, '💾 Save'),
+      e('button', { id:'rp-print', onClick:print, style:{ padding:'8px 14px', borderRadius:8, border:'1px solid #1357A6', background:'#fff', color:'#1357A6', fontWeight:700, cursor:'pointer' } }, '🖨 Print PIN slips')),
+    msg && e('div', { id:'rp-msg', style:{ fontSize:12.5, padding:'8px 10px', borderRadius:8, background:'#E3F2FD', color:'#0D47A1', marginBottom:10 } }, msg),
+    unset > 0 && e('div', { style:{ fontSize:12.5, color:'#C62828', marginBottom:8 } }, unset + (unset === 1 ? ' role has' : ' roles have') + ' no PIN, so nobody can open them.'),
+    e('div', { className:'tbl-wrap' }, e('table', { className:'tbl', id:'rp-table' },
+      e('thead', null, e('tr', null, ['Role', 'People', 'PIN', ''].map(function(h, i){ return e('th', { key:i }, h); }))),
+      e('tbody', null, roles.map(function(r){
+        var who = r.code === 'MGR' ? '—' : (getRoleEmployees(r.code).map(function(x){ return x.name; }).join(', ') || 'nobody assigned');
+        return e('tr', { key:r.code },
+          e('td', null, e('b', { style:{ color:r.c } }, r.code), ' ' + r.label),
+          e('td', null, who),
+          e('td', null, e('input', { id:'rp-' + r.code, value:pins[r.code] || '', inputMode:'numeric', maxLength:4, placeholder:'not set',
+            onChange:function(ev){ setOne(r.code, ev.target.value); },
+            style:{ width:80, padding:'6px 8px', border:'1px solid ' + (pins[r.code] ? '#CFD8DC' : '#E57373'), borderRadius:6, fontSize:14, letterSpacing:3, fontWeight:700 } })),
+          e('td', null, e('button', { onClick:function(){ setOne(r.code, kbdcNewPin(taken(r.code))); },
+            style:{ padding:'4px 10px', borderRadius:6, border:'1px solid #90A4AE', background:'#fff', cursor:'pointer' } }, 'New')));
+      })))));
+}
+
 function getRoleEmployees(code) {
   try { return JSON.parse(localStorage.getItem('kbdc_role_emp_' + code) || '[]'); } catch(e) { return []; }
 }
@@ -5069,7 +5164,7 @@ function ManagerDashboard({
       return updated;
     });
   };
-  const STABS = ['Overview', 'Activity', 'Pending', '+Roles', '+Tasks', 'History', 'Notes', 'Report', 'Staff', 'Share', 'Sync', 'Sheet', 'Master', 'Settings'];
+  const STABS = ['Overview', 'Activity', 'Pending', '+Roles', '+Tasks', 'History', 'Notes', 'Report', 'Staff', 'Share', 'Sync', 'Sheet', 'Master', 'Settings', 'PINs'];
   const copyLink = idx => {
     setCopiedIdx(idx);
     setTimeout(() => setCopiedIdx(null), 2000);
@@ -5353,7 +5448,7 @@ function ManagerDashboard({
     onAddRole: addRole
   }), stab === '+Tasks' && /*#__PURE__*/React.createElement(AddTaskTab, {
     roles: roles
-  }), stab === 'History' && /*#__PURE__*/React.createElement(HistoryTab, {roles:roles}), stab === 'Notes' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+  }), stab === 'PINs' && React.createElement(RolePinsTab, null), stab === 'History' && /*#__PURE__*/React.createElement(HistoryTab, {roles:roles}), stab === 'Notes' && /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     className: "notes-hd"
   }, /*#__PURE__*/React.createElement("span", {
     className: "notes-title"
@@ -7372,6 +7467,7 @@ function AssignManualModal({
       var existing = JSON.parse(localStorage.getItem('kbdc_tasks') || '[]');
       existing.push(task);
       localStorage.setItem('kbdc_tasks', JSON.stringify(existing));
+      setTimeout(function(){ try { kbdcAutoSyncMain(); } catch(e) {} }, 0);
     } catch(e) {}
     if (more) {
       setTitle(''); setDesc(''); setCheckItems([]); setSelUsers([]);
@@ -8474,6 +8570,13 @@ function FilterModal({
 }
 
 /* ── Delegated Tasks Tab ── */
+// Next status in the Pending → In Progress → Done cycle. Finishing stamps
+// completedAt, which is what lets the dashboard say "in time" or "delayed".
+function kbdcDelegatedNext(t) {
+  var next = { 'Pending':'In Progress', 'In Progress':'Done', 'Done':'Pending' }[t.status] || 'Pending';
+  var now = new Date().toISOString();
+  return Object.assign({}, t, { status:next, updatedAt:now, completedAt: next === 'Done' ? now : '' });
+}
 function loadDelegatedTasks() {
   try { return JSON.parse(localStorage.getItem('kbdc_tasks') || '[]'); } catch(e) { return []; }
 }
@@ -8487,6 +8590,12 @@ function DelegatedTasksTab() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [tasks, setTasks] = useState(loadDelegatedTasks);
+  // A colleague's new or updated task arrives through the background sync.
+  useEffect(function(){
+    function onSync(){ setTasks(loadDelegatedTasks()); }
+    window.addEventListener('kbdc-modules-sync', onSync);
+    return function(){ window.removeEventListener('kbdc-modules-sync', onSync); };
+  }, []);
   const [dtSearch, setDtSearch] = useState('');
   const todayStr = kbdcToday();
   const isOverdue = t => t.status !== 'Done' && t.dueDate && t.dueDate < todayStr;
@@ -8497,7 +8606,8 @@ function DelegatedTasksTab() {
   const visibleTasks = tasks.filter(t => !dtSearch || (t.title||'').toLowerCase().includes(dtSearch.toLowerCase()));
   const cycleStatus = (id) => {
     const next = { 'Pending': 'In Progress', 'In Progress': 'Done', 'Done': 'Pending' };
-    const updated = tasks.map(t => t.id === id ? { ...t, status: next[t.status] || 'Pending', updatedAt: new Date().toISOString() } : t);
+    const updated = loadDelegatedTasks().map(t => t.id === id ? kbdcDelegatedNext(t) : t);
+    try { setTimeout(function(){ kbdcAutoSyncMain(); }, 0); } catch(e) {}
     setTasks(updated);
     try { localStorage.setItem('kbdc_tasks', JSON.stringify(updated)); } catch(e) {}
   };
@@ -10646,6 +10756,9 @@ var KBDC_BACKEND_MODULES = [
   { id:'claims',      label:'Reimbursement Claims',     sheet:'Claims',             localKey:'kbdc_fin_claims', get: function(){ return kbdcLsArray('kbdc_fin_claims'); } },
   { id:'advances',    label:'Advances & Loans',         sheet:'Advances',           localKey:'kbdc_loans_v2', get: function(){ return kbdcLsArray('kbdc_loans_v2'); } },
   { id:'ideas',       label:'Idea Board',               sheet:'Ideas',              localKey:'kbdc_ideas', get: function(){ return kbdcLsArray('kbdc_ideas'); } },
+  // Delegated tasks used to live only on the device that created them: a task
+  // assigned on the owner's laptop never reached the assignee's phone.
+  { id:'delegated',   label:'Delegated Tasks',          sheet:'DelegatedTasks',     localKey:'kbdc_tasks', get: function(){ return kbdcLsArray('kbdc_tasks'); } },
   { id:'assets',      label:'Assets',                   sheet:'Assets',             localKey:'kbdc_hr_assets2', get: function(){ return kbdcLsArray('kbdc_hr_assets2'); } },
   { id:'onboarding',  label:'Onboarding',               sheet:'Onboarding',         localKey:'kbdc_hr_onboardings', get: function(){ return kbdcLsArray('kbdc_hr_onboardings'); } },
   { id:'separations', label:'Separations',              sheet:'Separations',       localKey:'kbdc_hr_separations', get: function(){ return kbdcLsArray('kbdc_hr_separations'); } },
@@ -10902,7 +11015,7 @@ function kbdcSplitPushChunks(payload, budget) {
 // a tab that simply isn't in the reply leaves local data untouched.
 var KBDC_HOT_SHEETS = {
   StaffFull:1, Tasks:1, TaskCompletions:1, Attendance:1,
-  ClinicSettings:1, RoleEmployees:1, AppData:1, LeaveRequests:1, Holidays:1
+  ClinicSettings:1, RoleEmployees:1, AppData:1, LeaveRequests:1, Holidays:1, DelegatedTasks:1
 };
 
 /**
@@ -11497,6 +11610,20 @@ async function kbdcAutoSyncMainRun() {
         window.dispatchEvent(new Event('kbdc-modules-sync'));
       }
     }
+    var pinRow = newestSetting('rolePins');
+    if (pinRow && pinRow.updatedAt) {
+      var remotePinT = new Date(pinRow.updatedAt).getTime() || 0;
+      var localPinT = (function(){ var t = localStorage.getItem('kbdc_role_pins_updatedAt'); return t ? new Date(t).getTime() : 0; })();
+      if (remotePinT > localPinT) {
+        var pinsIn = pinRow.value;
+        if (typeof pinsIn === 'string') { try { pinsIn = JSON.parse(pinsIn || '{}'); } catch(e) { pinsIn = null; } }
+        if (pinsIn && typeof pinsIn === 'object') {
+          localStorage.setItem('kbdc_role_pins', JSON.stringify(pinsIn));
+          localStorage.setItem('kbdc_role_pins_updatedAt', pinRow.updatedAt);
+          window.dispatchEvent(new Event('kbdc-tasks-sync'));
+        }
+      }
+    }
     var weekOffRow = newestSetting('weekOffDays');
     var remoteWeekOffTime = (weekOffRow && weekOffRow.updatedAt) ? new Date(weekOffRow.updatedAt).getTime() : 0;
     var localWeekOffTime = (function(){ var t = localStorage.getItem('kbdc_la_weekoff_updatedAt'); return t ? new Date(t).getTime() : 0; })();
@@ -11548,6 +11675,9 @@ async function kbdcAutoSyncMainRun() {
       if (rows.length) pushPayload[m.sheet] = rows;
     });
     pushPayload['ClinicSettings'] = [{ key: 'weekOffDays', value: JSON.stringify(laGetWeekOff()), updatedAt: localStorage.getItem('kbdc_la_weekoff_updatedAt') || '' }];
+    // Role PINs travel as one clinic setting so every phone gets new ones on the next cycle.
+    var rolePinStamp = localStorage.getItem('kbdc_role_pins_updatedAt') || '';
+    if (rolePinStamp) pushPayload['ClinicSettings'].push({ key:'rolePins', value:JSON.stringify(kbdcRolePins()), updatedAt:rolePinStamp });
     // Where attendance lives is a clinic-wide fact, not a per-device preference.
     // If each device had to be told separately, the phones would keep writing to
     // the old Sheet while the dashboard read the new one, and today's check-ins

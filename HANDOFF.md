@@ -100,8 +100,18 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
   RoleEmployees and no HR staff with those designations). New ticks record the signed-in
   person. The old "—" rows still count toward the role in the clinic-wide score, but no
   person's row shows them until someone is assigned to DAS / ASD.
-- **Known, not fixed:** `PinEntry` accepts any 4 digits (`|| true`), including the Manager
-  Dashboard. Flagged as a separate task.
+- **Task Management → Dashboard was never wired** (literal zeros). Rebuilt 2026-09-11 (app
+  2026-09-11-6) on `kbdcTaskDashData`: ticks vs role tasks per period + delegated tasks.
+  Test: `tests/test-task-dashboard.js`.
+- **Delegated tasks (`kbdc_tasks`) never synced.** Now module `delegated` → main Sheet tab
+  `DelegatedTasks` (hot). Finishing stamps `completedAt`. There is no delete in that screen;
+  if one is added it needs a tombstone, or the merge will bring deleted tasks back.
+- **"Yearly" frequency fell through to Daily** in `kbdcTaskPeriodKey`. Fixed.
+- **Role PINs** (2026-09-11): `PinEntry` accepted any 4 digits. Now one PIN per role card plus
+  `MGR`, in `kbdc_role_pins`, shared via ClinicSettings key `rolePins`; owner sessions skip
+  role PINs; 5 wrong tries lock 60 s. Owner manages them in Manager Dashboard → PINs.
+  A role with no PIN is locked. PINs are readable from the Sheet like everything else
+  there (see the security note below). Test: `tests/test-role-pins.js`.
 
 - **`fetch` had no timeout.** One hung request left a sync re-entrancy guard raised and the
   device stopped syncing entirely until reload. This was the cause of "it works for two
