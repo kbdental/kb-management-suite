@@ -14,10 +14,10 @@ served from GitHub Pages at https://kbdental.github.io/kb-management-suite/
 - **`kbdental/kb-management-suite`** — THE LIVE APP. All work happens here, branch `main`.
   If it is not already cloned, attach it and clone to `/home/user/kb-management-suite`.
 - **`kbdental/kb-denarts`** — a SEPARATE dental-lab app. **Do not touch it.**
-- **NABH is a standalone app** (`nabh.html`, https://kbdental.github.io/kb-management-suite/nabh.html),
-  split out of `index.html` on 2026-09-11 and no longer reachable from the suite. It stores
-  scores in the browser only (`kbdc_nabh_*` localStorage keys, not synced to any Sheet);
-  same-origin hosting is what lets existing device data carry over — keep it on this site.
+- **`kbdental/kb-nabh`** — NABH, split out of `index.html` on 2026-09-11 into its own repo
+  (https://kbdental.github.io/kb-nabh/). All NABH work happens there. `nabh.html` in this
+  repo is only a redirect to it. NABH stores scores in the browser only (`kbdc_nabh_*`
+  localStorage keys); both apps being on kbdental.github.io is what lets device data carry over.
 
 ## Current versions
 
