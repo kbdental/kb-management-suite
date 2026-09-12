@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-11-6';
+var KBDC_APP_VERSION = '2026-09-11-7';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -3665,16 +3665,40 @@ var SHEET_TAB_MAP = {
   'RDR': 'Rider'
 };
 
+/* Whose ticks count on a role's task list. A role held by two people (the two
+   riders) shares one task list, and "done" was stored on that shared list, so
+   one rider ticking a task marked it done for the other rider too. Done is now
+   worked out per person from the completion log, which records who did what.
+   On a role with a single holder, old unnamed ticks still count for them. */
+function kbdcHasLetters(s) { return /[A-Za-zऀ-ॿ]/.test(String(s || '')); }
+function kbdcTaskPerson(role) { return kbdcHasLetters(role.name) ? role.name : ((kbdcGetSession() || {}).name || ''); }
+function kbdcRoleIsShared(code) { return getRoleEmployees(code).length >= 2; }
+function kbdcLogInPeriod(r, t) {
+  return kbdcTaskPeriodKey(t.freq, new Date(String(r.date || '').slice(0, 10) + 'T12:00:00')) === kbdcTaskPeriodKey(t.freq, new Date());
+}
+function kbdcTaskDoneBy(code, t, person, shared, log) {
+  var want = kbdcNormName(person);
+  return (log || kbdcLog()).some(function(r){
+    if (r.roleCode !== code || r.taskCode !== (t.code || '') || !kbdcLogInPeriod(r, t)) return false;
+    var who = kbdcNormName(r.staffName || '');
+    return who ? who === want : !shared;
+  });
+}
+function kbdcTasksForPerson(role) {
+  var person = kbdcTaskPerson(role), shared = kbdcRoleIsShared(role.code), log = kbdcLog();
+  return getRoleTasks(role.code).map(function(t){ return Object.assign({}, t, { done:kbdcTaskDoneBy(role.code, t, person, shared, log) }); });
+}
+
 function TaskListView({
   role,
   onBack
 }) {
   const [ttab, setTtab] = useState('Today');
-  const [tasks, setTasks] = useState(() => getRoleTasks(role.code));
+  const [tasks, setTasks] = useState(() => kbdcTasksForPerson(role));
   const [syncing, setSyncing] = useState(false);
-  useEffect(function(){setTasks(getRoleTasks(role.code));},[role.code]);
+  useEffect(function(){setTasks(kbdcTasksForPerson(role));},[role.code, role.name]);
   useEffect(function(){
-    function onLiveSync(){ setTasks(getRoleTasks(role.code)); }
+    function onLiveSync(){ setTasks(kbdcTasksForPerson(role)); }
     window.addEventListener('kbdc-tasks-sync', onLiveSync);
     return function(){ window.removeEventListener('kbdc-tasks-sync', onLiveSync); };
   }, [role.code]);
@@ -3683,11 +3707,7 @@ function TaskListView({
   function toggleTaskDone(t) {
     var nowDone = !t.done;
     var stamp = new Date().toISOString();
-    var updated = tasks.map(function(x){
-      return x === t ? Object.assign({}, x, { done: nowDone, doneAt: nowDone ? stamp : null }) : x;
-    });
-    setTasks(updated);
-    setRoleTasks(role.code, updated);
+    var person = kbdcTaskPerson(role), shared = kbdcRoleIsShared(role.code);
     try {
       var log = JSON.parse(localStorage.getItem('kbdc_task_log') || '[]');
       if (nowDone) {
@@ -3697,8 +3717,7 @@ function TaskListView({
           // live Sheet), which left hundreds of completions credited to no one.
           // Then the person actually signed in is who did it.
           roleCode: role.code,
-          staffName: /[A-Za-zऀ-ॿ]/.test(String(role.name || '')) ? role.name
-                     : ((kbdcGetSession() || {}).name || ''),
+          staffName: person,
           taskCode: t.code || '', taskEn: t.en || '', taskHi: t.hi || '', frequency: t.freq || 'Daily',
           // The clock the staff member is looking at, not UTC. `stamp` stays
           // the true instant on the task itself (doneAt) for cross-device
@@ -3706,13 +3725,28 @@ function TaskListView({
           date: kbdcLocalDate(stamp), time: kbdcLocalTime(stamp)
         });
       } else {
-        var today = kbdcLocalDate(stamp);
+        // Only this person's own tick for this period. This used to remove the
+        // first tick of the day for the task whoever made it: the other rider's.
+        var want = kbdcNormName(person);
         for (var i = log.length - 1; i >= 0; i--) {
-          if (log[i].roleCode === role.code && log[i].taskCode === (t.code||'') && log[i].date === today) { log.splice(i, 1); break; }
+          var r = log[i];
+          if (r.roleCode !== role.code || r.taskCode !== (t.code||'') || !kbdcLogInPeriod(r, t)) continue;
+          var who = kbdcNormName(r.staffName || '');
+          if (who ? who === want : !shared) log.splice(i, 1);
         }
       }
       localStorage.setItem('kbdc_task_log', JSON.stringify(log));
     } catch(e) {}
+    // The shared list keeps a role-level flag, "someone in this role did it this
+    // period", for the summary screens and the Sheet's Tasks tab. This screen
+    // shows the person's own ticks.
+    var logNow = kbdcLog();
+    setRoleTasks(role.code, getRoleTasks(role.code).map(function(x){
+      if ((x.code || '') !== (t.code || '')) return x;
+      var any = logNow.some(function(r){ return r.roleCode === role.code && r.taskCode === (t.code||'') && kbdcLogInPeriod(r, t); });
+      return Object.assign({}, x, { done:any, doneAt: any ? (x.done && x.doneAt ? x.doneAt : stamp) : null });
+    }));
+    setTasks(kbdcTasksForPerson(role));
     kbdcAutoSyncMain();
   }
 

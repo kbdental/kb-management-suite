@@ -106,6 +106,12 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
 - **Delegated tasks (`kbdc_tasks`) never synced.** Now module `delegated` → main Sheet tab
   `DelegatedTasks` (hot). Finishing stamps `completedAt`. There is no delete in that screen;
   if one is added it needs a tombstone, or the merge will bring deleted tasks back.
+- **Two people on one role saw each other's ticks** (the riders, 2026-09-12, app 2026-09-11-7).
+  `done` lived on the role's shared list. `TaskListView` now derives done per person from
+  `kbdc_task_log` (`kbdcTasksForPerson`); un-tick removes only that person's tick; the shared
+  flag means "anyone in the role did it this period". Test: `tests/test-rider-separate-ticks.js`.
+  Known, not fixed: an un-tick deletes the row locally, but the union merge can bring it back
+  from TaskCompletions on the next pull (no tombstone). Pre-existing.
 - **"Yearly" frequency fell through to Daily** in `kbdcTaskPeriodKey`. Fixed.
 - **Role PINs** (2026-09-11): `PinEntry` accepted any 4 digits. Now one PIN per role card plus
   `MGR`, in `kbdc_role_pins`, shared via ClinicSettings key `rolePins`; owner sessions skip
