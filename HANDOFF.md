@@ -110,8 +110,12 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
   `done` lived on the role's shared list. `TaskListView` now derives done per person from
   `kbdc_task_log` (`kbdcTasksForPerson`); un-tick removes only that person's tick; the shared
   flag means "anyone in the role did it this period". Test: `tests/test-rider-separate-ticks.js`.
-  Known, not fixed: an un-tick deletes the row locally, but the union merge can bring it back
-  from TaskCompletions on the next pull (no tombstone). Pre-existing.
+- **Un-ticks came back after a sync** (fixed 2026-09-14, app 2026-09-14-1). An un-tick now
+  marks the log row `{removed:true, updatedAt}` instead of deleting it; the newer timestamp
+  wins both merges (client `kbdcUnionMergeById`, backend `kbdcMergeRows_`). `kbdcLog()` skips
+  removed rows; read the log through it, never straight from localStorage.
+  Test: `tests/test-untick-stays.js`.
+- Instruments & Equipment uses the app's blue `#1357A6` and the `tm-tabs` tab bar (2026-09-14).
 - **"Yearly" frequency fell through to Daily** in `kbdcTaskPeriodKey`. Fixed.
 - **Role PINs** (2026-09-11): `PinEntry` accepted any 4 digits. Now one PIN per role card plus
   `MGR`, in `kbdc_role_pins`, shared via ClinicSettings key `rolePins`; owner sessions skip

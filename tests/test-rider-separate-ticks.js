@@ -78,7 +78,8 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
 
   // Aaquib un-ticks: only his record goes.
   await tick(0);
-  const log = await page.evaluate(() => JSON.parse(localStorage.getItem('kbdc_task_log') || '[]'));
+  // Un-ticks are kept as tombstones since 2026-09-14; count the live ticks.
+  const log = await page.evaluate(() => kbdcLog());
   console.log('  log now:', JSON.stringify(log.map(r => r.staffName + '/' + r.taskCode)));
   ok(log.length === 1 && log[0].staffName === 'Vishal Kanojia' && log[0].taskCode === 'RDR2', 'un-ticking removes Aaquib’s own tick and leaves Vishal’s');
   ok(JSON.stringify(await done()) === '[false,false]', 'Aaquib’s list is clear again');

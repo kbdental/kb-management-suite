@@ -57,6 +57,8 @@ const INV  = 'https://script.google.com/macros/s/INV/exec';
   ok(await nav.count() === 1, 'the sidebar has an INSTRUMENTS & EQUIPMENT entry');
   await nav.first().click().catch(()=>{}); await page.waitForTimeout(900);
   ok(/Nothing registered yet/.test(await page.locator('body').innerText()), 'an empty register says so and offers a way to start');
+  const tabBar = await page.evaluate(() => getComputedStyle(document.querySelector('#ins-tab-dash').parentElement).backgroundColor);
+  ok(tabBar === 'rgb(19, 87, 166)', 'the tab bar is the app’s blue, like Task Management (' + tabBar + ')');
 
   // Three mouth mirrors in one go: three tagged items, one per physical piece.
   await page.click('#ins-add-instrument'); await page.waitForTimeout(300);

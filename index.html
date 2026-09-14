@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-11-7';
+var KBDC_APP_VERSION = '2026-09-14-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -3722,7 +3722,7 @@ function TaskListView({
           // The clock the staff member is looking at, not UTC. `stamp` stays
           // the true instant on the task itself (doneAt) for cross-device
           // comparison; the log records the local day and time it happened.
-          date: kbdcLocalDate(stamp), time: kbdcLocalTime(stamp)
+          date: kbdcLocalDate(stamp), time: kbdcLocalTime(stamp), updatedAt: stamp
         });
       } else {
         // Only this person's own tick for this period. This used to remove the
@@ -3730,9 +3730,10 @@ function TaskListView({
         var want = kbdcNormName(person);
         for (var i = log.length - 1; i >= 0; i--) {
           var r = log[i];
-          if (r.roleCode !== role.code || r.taskCode !== (t.code||'') || !kbdcLogInPeriod(r, t)) continue;
+          if (kbdcLogRemoved(r) || r.roleCode !== role.code || r.taskCode !== (t.code||'') || !kbdcLogInPeriod(r, t)) continue;
           var who = kbdcNormName(r.staffName || '');
-          if (who ? who === want : !shared) log.splice(i, 1);
+          // Marked removed, not deleted, so the un-tick survives the next sync.
+          if (who ? who === want : !shared) log[i] = Object.assign({}, r, { removed:true, updatedAt:stamp });
         }
       }
       localStorage.setItem('kbdc_task_log', JSON.stringify(log));
@@ -5038,7 +5039,16 @@ function getCustomRoleCards() {
 // was ever wired to it: those tabs rendered fixed strings over an empty array
 // literal, so no amount of real work by staff could appear there. Defined at
 // module scope because HistoryTab is a separate component from ManagerDashboard.
-function kbdcLog(){ try { return JSON.parse(localStorage.getItem('kbdc_task_log') || '[]'); } catch(e) { return []; } }
+/* An un-tick is kept as a tombstone ({removed:true, updatedAt}) rather than
+   deleted. Deleting only ever happened on the device: the sync merges and
+   never deletes, so the next pull brought the tick straight back from the
+   Sheet. A timestamped tombstone wins that merge on the Sheet and on every
+   other device. Everything that counts ticks reads through kbdcLog(). */
+function kbdcLogRemoved(r) { var v = r && r.removed; return v === true || v === 'true' || v === 'TRUE'; }
+function kbdcLog(){
+  try { return JSON.parse(localStorage.getItem('kbdc_task_log') || '[]').filter(function(r){ return !kbdcLogRemoved(r); }); }
+  catch(e) { return []; }
+}
 // The row templates expect an avatar/colour/name shape, not the raw log fields.
 function kbdcLogRow(r){
   var nm = String(r.staffName || '').trim();
@@ -12911,7 +12921,8 @@ var KBDC_INS_DEFAULTS = {
   packDays: [30],
   eqpCats: ['Dental Chair','Autoclave / Sterilisation','X-ray / Imaging','Compressor / Suction','Scaler / Light Cure','Lab Equipment','IT / Electrical','Furniture','Other']
 };
-var INS_UI = { pri:'#00695C', priL:'#E0F2F1', red:'#C62828', amb:'#E65100', grey:'#546E7A', line:'#E3E8EE', bg:'#F5F7FA', font:"'Poppins',sans-serif" };
+// The app's own blue (sidebar, Task Management tabs), not a colour of its own.
+var INS_UI = { pri:'#1357A6', priL:'#E3F2FD', red:'#C62828', amb:'#E65100', grey:'#546E7A', line:'#E3E8EE', bg:'#F5F7FA', font:"'Poppins',sans-serif" };
 var INS_STATUS_COLOR = { 'In use':'#2E7D32', 'In store':'#1565C0', 'Sterilising':'#6A1B9A', 'Under repair':'#E65100', 'Missing':'#C62828', 'Retired':'#78909C' };
 var insInp = { width:'100%', padding:'8px 10px', border:'1px solid #CFD8DC', borderRadius:8, fontSize:13, fontFamily:INS_UI.font, boxSizing:'border-box', background:'#fff' };
 
@@ -14220,12 +14231,10 @@ function InstrumentsPage({ insRole, userName }) {
       padding:'10px 16px', borderRadius:10, fontSize:13, fontWeight:600, boxShadow:'0 6px 20px rgba(0,0,0,.2)', maxWidth:'80vw' } }, toast.msg),
     h('input', { ref:fileRef, type:'file', accept:'.xlsx,.xls,.csv', style:{ display:'none' },
       onChange:function(ev){ var fl = ev.target.files[0]; if (fl) importFile(fl); ev.target.value = ''; } }),
-    h('div', { style:{ background:'#fff', borderBottom:'1px solid ' + INS_UI.line, padding:'0 12px', display:'flex', gap:2, overflowX:'auto', flexShrink:0 } },
+    // Same tab bar as Task Management.
+    h('div', { className:'tm-tabs' },
       tabs.map(function(t){
-        var on = tab === t[0];
-        return h('div', { key:t[0], id:'ins-tab-' + t[0], onClick:function(){ setTab(t[0]); },
-          style:{ padding:'11px 14px', cursor:'pointer', whiteSpace:'nowrap', fontSize:13, fontWeight: on ? 700 : 500,
-                  color: on ? INS_UI.pri : INS_UI.grey, borderBottom:'2.5px solid ' + (on ? INS_UI.pri : 'transparent') } }, t[1]);
+        return h('div', { key:t[0], id:'ins-tab-' + t[0], className:'tm-tab' + (tab === t[0] ? ' on' : ''), onClick:function(){ setTab(t[0]); } }, t[1]);
       })),
     h('div', { style:{ flex:1, overflowY:'auto', padding:16 } },
       tab === 'dash' && renderDash(), tab === 'reg' && renderReg(), tab === 'sets' && renderSets(), tab === 'ster' && renderSter(), tab === 'rep' && isMgr && renderReports(),
