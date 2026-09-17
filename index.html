@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-14-1';
+var KBDC_APP_VERSION = '2026-09-17-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -3702,6 +3702,14 @@ function TaskListView({
     window.addEventListener('kbdc-tasks-sync', onLiveSync);
     return function(){ window.removeEventListener('kbdc-tasks-sync', onLiveSync); };
   }, [role.code]);
+  // Redraw the "not reached the Sheet" message as ticks go out.
+  const [, setTickView] = useState(0);
+  useEffect(function(){
+    function on(){ setTickView(function(n){ return n + 1; }); }
+    window.addEventListener('kbdc-ticks-sent', on);
+    var iv = setInterval(on, 15000);
+    return function(){ window.removeEventListener('kbdc-ticks-sent', on); clearInterval(iv); };
+  }, []);
   const [syncMsg, setSyncMsg] = useState('');
 
   function toggleTaskDone(t) {
@@ -3748,7 +3756,7 @@ function TaskListView({
       return Object.assign({}, x, { done:any, doneAt: any ? (x.done && x.doneAt ? x.doneAt : stamp) : null });
     }));
     setTasks(kbdcTasksForPerson(role));
-    kbdcAutoSyncMain();
+    kbdcPushTicksNow().then(function(){ kbdcAutoSyncMain(); });
   }
 
   const handleCSVUpload = () => {
@@ -4442,6 +4450,7 @@ function TaskListView({
   }, t))), /*#__PURE__*/React.createElement("div", {
     className: "tl-body"
   },
+    kbdcUnsentBanner(),
     tasks.length === 0
       ? React.createElement("div", { style:{ display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:'40px 20px', color:'#90A4AE', textAlign:'center' } },
           React.createElement("div", { style:{ fontSize:36, marginBottom:12 } }, "\uD83D\uDCCB"),
@@ -4494,7 +4503,8 @@ function PinEntry({
   const [err, setErr] = useState('');
   // Was `np === '1234' || np === role.pin || true`: any four digits opened any
   // card, the Manager Dashboard included. Now the role's own PIN, nothing else.
-  const rolePin = kbdcRolePin(role.code);
+  const rolePin = kbdcRolePin(role.code, role.name);
+  const lockKey = kbdcPinKey(role.code, role.name);
   useEffect(function(){
     if (!kbdcSessionIsOwner()) return;
     var t = setTimeout(function(){ onSuccess(); }, 0);
@@ -4502,17 +4512,17 @@ function PinEntry({
   }, []);
   const press = n => {
     if (!rolePin) return;
-    var left = kbdcRolePinLockLeft(role.code);
+    var left = kbdcRolePinLockLeft(lockKey);
     if (left > 0) { setErr('Too many wrong tries. Wait ' + left + ' seconds.'); return; }
     if (pin.length >= 4) return;
     const np = pin + n;
     setPin(np);
     if (np.length === 4) {
       if (np === rolePin) {
-        kbdcRolePinNoteOk(role.code);
+        kbdcRolePinNoteOk(lockKey);
         setTimeout(() => onSuccess(), 200);
       } else {
-        var locked = kbdcRolePinNoteFail(role.code);
+        var locked = kbdcRolePinNoteFail(lockKey);
         setTimeout(() => {
           setErr(locked ? 'Too many wrong tries. Locked for 60 seconds.' : 'Incorrect PIN');
           setPin('');
@@ -4574,7 +4584,13 @@ function PinEntry({
 function kbdcRolePins() {
   try { var o = JSON.parse(localStorage.getItem('kbdc_role_pins') || '{}'); return (o && typeof o === 'object') ? o : {}; } catch(e) { return {}; }
 }
-function kbdcRolePin(code) { var p = String(kbdcRolePins()[code] || ''); return /^\d{4}$/.test(p) ? p : ''; }
+// People who share a role (two riders, two assistants) each have their own PIN,
+// kept under "CODE|name". The role PIN is only for someone without one.
+function kbdcPinKey(code, name) { return code + '|' + kbdcNormName(name || ''); }
+function kbdcRolePin(code, name) {
+  var pins = kbdcRolePins(), ok = function(p){ p = String(p || ''); return /^\d{4}$/.test(p) ? p : ''; };
+  return (name && ok(pins[kbdcPinKey(code, name)])) || ok(pins[code]);
+}
 function kbdcSetRolePins(pins) {
   try {
     localStorage.setItem('kbdc_role_pins', JSON.stringify(pins));
@@ -4617,41 +4633,61 @@ function kbdcNewPin(taken) {
   return String(1000 + Math.floor(Math.random() * 9000));
 }
 
+// One row per PIN. A role one person holds (or nobody) has one role PIN. A role
+// two or more people hold (the riders) has one row, and one PIN, per person:
+// generating for the role used to give both riders the same PIN.
+function kbdcPinRows() {
+  var rows = [];
+  kbdcAllRoleCards().forEach(function(r){
+    var seen = {}, people = [];
+    (r.code === 'MGR' ? [] : getRoleEmployees(r.code)).forEach(function(e){
+      var n = String(e && e.name || '').trim(), k = kbdcNormName(n);
+      if (n && !seen[k]) { seen[k] = 1; people.push(n); }
+    });
+    if (people.length >= 2) {
+      people.forEach(function(n){ rows.push({ key:kbdcPinKey(r.code, n), code:r.code, label:r.label, c:r.c, who:n, personal:true }); });
+    } else {
+      rows.push({ key:r.code, code:r.code, label:r.label, c:r.c, who: r.code === 'MGR' ? 'Manager Dashboard' : (people[0] || 'nobody assigned'), personal:false });
+    }
+  });
+  return rows;
+}
+
 function RolePinsTab() {
   var e = React.createElement;
   var s1 = useState(kbdcRolePins), pins = s1[0], setPins = s1[1];
   var s2 = useState(false), dirty = s2[0], setDirty = s2[1];
   var s3 = useState(''), msg = s3[0], setMsg = s3[1];
-  var roles = kbdcAllRoleCards();
-  function setOne(code, v) { var n = Object.assign({}, pins); n[code] = String(v).replace(/\D/g, '').slice(0, 4); setPins(n); setDirty(true); setMsg(''); }
-  function taken(except) { var t = {}; Object.keys(pins).forEach(function(k){ if (k !== except && pins[k]) t[pins[k]] = 1; }); return t; }
+  var rows = kbdcPinRows();
+  function setOne(key, v) { var n = Object.assign({}, pins); n[key] = String(v).replace(/\D/g, '').slice(0, 4); setPins(n); setDirty(true); setMsg(''); }
+  function taken(except) { var t = {}; rows.forEach(function(r){ if (r.key !== except && pins[r.key]) t[pins[r.key]] = 1; }); return t; }
   function genAll() {
-    if (!window.confirm('Give every role a brand-new PIN? The old PINs stop working as soon as you press Save. Hand out the new ones straight away.')) return;
+    if (!window.confirm('Give every role, and every person who shares a role, a brand-new PIN? The old PINs stop working as soon as you press Save. Hand out the new ones straight away.')) return;
     var n = {}, t = {};
-    roles.forEach(function(r){ var p = kbdcNewPin(t); t[p] = 1; n[r.code] = p; });
+    rows.forEach(function(r){ var p = kbdcNewPin(t); t[p] = 1; n[r.key] = p; });
     setPins(n); setDirty(true); setMsg('New PINs made. Press Save to switch them on, then Print to hand them out.');
   }
   function save() {
     var clean = {}, seen = {}, bad = [], dup = [];
-    roles.forEach(function(r){
-      var p = String(pins[r.code] || '');
+    rows.forEach(function(r){
+      var p = String(pins[r.key] || '');
       if (!p) return;
-      if (!/^\d{4}$/.test(p)) { bad.push(r.code); return; }
-      if (seen[p]) dup.push(r.code + ' = ' + seen[p]); else seen[p] = r.code;
-      clean[r.code] = p;
+      var name = r.personal ? r.who : r.code;
+      if (!/^\d{4}$/.test(p)) { bad.push(name); return; }
+      if (seen[p]) dup.push(name + ' = ' + seen[p]); else seen[p] = name;
+      clean[r.key] = p;
     });
     if (bad.length) { setMsg('A PIN must be exactly 4 digits: ' + bad.join(', ')); return; }
-    if (dup.length) { setMsg('Two roles share a PIN (' + dup.join(', ') + '). Give each role its own.'); return; }
-    kbdcSetRolePins(clean); setDirty(false);
+    if (dup.length) { setMsg('Two rows share a PIN (' + dup.join(', ') + '). Give each its own.'); return; }
+    kbdcSetRolePins(clean); setPins(clean); setDirty(false);
     setMsg('Saved. Phones pick up the new PINs within about a minute.');
   }
   function print() {
     var w = window.open('', '_blank');
     if (!w) { setMsg('The browser blocked the print window. Allow pop-ups for this site.'); return; }
-    var cells = roles.filter(function(r){ return pins[r.code]; }).map(function(r){
-      var who = r.code === 'MGR' ? 'Manager Dashboard' : (getRoleEmployees(r.code).map(function(x){ return x.name; }).join(', ') || 'No one assigned yet');
-      return '<div class="s"><div class="r">' + kbdcInsEsc(r.label) + ' (' + r.code + ')</div><div class="w">' + kbdcInsEsc(who) +
-        '</div><div class="p">' + pins[r.code] + '</div><div class="k">Task Management PIN. Keep it to yourself.</div></div>';
+    var cells = rows.filter(function(r){ return pins[r.key]; }).map(function(r){
+      return '<div class="s"><div class="r">' + kbdcInsEsc(r.label) + ' (' + r.code + ')</div><div class="w">' + kbdcInsEsc(r.who) +
+        '</div><div class="p">' + pins[r.key] + '</div><div class="k">Task Management PIN. Keep it to yourself.</div></div>';
     }).join('');
     w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>Role PINs</title><style>@page{size:A4;margin:10mm}' +
       'body{font-family:Arial,sans-serif;margin:0}.g{display:grid;grid-template-columns:repeat(3,1fr)}' +
@@ -4661,28 +4697,30 @@ function RolePinsTab() {
     w.document.close();
     setTimeout(function(){ try { w.focus(); w.print(); } catch(e) {} }, 400);
   }
-  var unset = roles.filter(function(r){ return !pins[r.code]; }).length;
+  var unset = rows.filter(function(r){ return !pins[r.key]; });
   return e('div', { style:{ padding:'4px 2px' } },
     e('div', { style:{ fontSize:13, color:'#37474F', lineHeight:1.6, marginBottom:10 } },
-      'Each role card has its own 4-digit PIN, and the Manager Dashboard has one too. A role with no PIN stays locked. ',
-      'You are not asked for PINs while signed in as the owner.'),
+      'Each role card has its own 4-digit PIN, and the Manager Dashboard has one too. ',
+      'When two or more people share a role, each of them gets their own PIN. ',
+      'Anything with no PIN stays locked. You are not asked for PINs while signed in as the owner.'),
     e('div', { style:{ display:'flex', gap:8, flexWrap:'wrap', marginBottom:10 } },
-      e('button', { id:'rp-generate', className:'mgr-btn', onClick:genAll, style:{ padding:'8px 14px', borderRadius:8, border:'none', background:'#1357A6', color:'#fff', fontWeight:700, cursor:'pointer' } }, '🔄 New PINs for every role'),
+      e('button', { id:'rp-generate', onClick:genAll, style:{ padding:'8px 14px', borderRadius:8, border:'none', background:'#1357A6', color:'#fff', fontWeight:700, cursor:'pointer' } }, '🔄 New PINs for everyone'),
       e('button', { id:'rp-save', onClick:save, disabled:!dirty, style:{ padding:'8px 14px', borderRadius:8, border:'none', background: dirty ? '#2E7D32' : '#B0BEC5', color:'#fff', fontWeight:700, cursor: dirty ? 'pointer' : 'default' } }, '💾 Save'),
       e('button', { id:'rp-print', onClick:print, style:{ padding:'8px 14px', borderRadius:8, border:'1px solid #1357A6', background:'#fff', color:'#1357A6', fontWeight:700, cursor:'pointer' } }, '🖨 Print PIN slips')),
     msg && e('div', { id:'rp-msg', style:{ fontSize:12.5, padding:'8px 10px', borderRadius:8, background:'#E3F2FD', color:'#0D47A1', marginBottom:10 } }, msg),
-    unset > 0 && e('div', { style:{ fontSize:12.5, color:'#C62828', marginBottom:8 } }, unset + (unset === 1 ? ' role has' : ' roles have') + ' no PIN, so nobody can open them.'),
+    unset.length > 0 && e('div', { style:{ fontSize:12.5, color:'#C62828', marginBottom:8 } },
+      unset.length + (unset.length === 1 ? ' has' : ' have') + ' no PIN, so nobody can open them: ' +
+      unset.map(function(r){ return r.personal ? r.who + ' (' + r.code + ')' : r.code; }).join(', ')),
     e('div', { className:'tbl-wrap' }, e('table', { className:'tbl', id:'rp-table' },
-      e('thead', null, e('tr', null, ['Role', 'People', 'PIN', ''].map(function(h, i){ return e('th', { key:i }, h); }))),
-      e('tbody', null, roles.map(function(r){
-        var who = r.code === 'MGR' ? '—' : (getRoleEmployees(r.code).map(function(x){ return x.name; }).join(', ') || 'nobody assigned');
-        return e('tr', { key:r.code },
+      e('thead', null, e('tr', null, ['Role', 'Person', 'PIN', ''].map(function(h, i){ return e('th', { key:i }, h); }))),
+      e('tbody', null, rows.map(function(r){
+        return e('tr', { key:r.key, 'data-key':r.key },
           e('td', null, e('b', { style:{ color:r.c } }, r.code), ' ' + r.label),
-          e('td', null, who),
-          e('td', null, e('input', { id:'rp-' + r.code, value:pins[r.code] || '', inputMode:'numeric', maxLength:4, placeholder:'not set',
-            onChange:function(ev){ setOne(r.code, ev.target.value); },
-            style:{ width:80, padding:'6px 8px', border:'1px solid ' + (pins[r.code] ? '#CFD8DC' : '#E57373'), borderRadius:6, fontSize:14, letterSpacing:3, fontWeight:700 } })),
-          e('td', null, e('button', { onClick:function(){ setOne(r.code, kbdcNewPin(taken(r.code))); },
+          e('td', null, r.who, r.personal ? e('span', { style:{ marginLeft:6, fontSize:10.5, color:'#1357A6', fontWeight:700 } }, 'own PIN') : null),
+          e('td', null, e('input', { id:'rp-' + r.key.replace(/[^A-Za-z0-9]+/g, '_'), 'data-key':r.key, value:pins[r.key] || '', inputMode:'numeric', maxLength:4, placeholder:'not set',
+            onChange:function(ev){ setOne(r.key, ev.target.value); },
+            style:{ width:80, padding:'6px 8px', border:'1px solid ' + (pins[r.key] ? '#CFD8DC' : '#E57373'), borderRadius:6, fontSize:14, letterSpacing:3, fontWeight:700 } })),
+          e('td', null, e('button', { onClick:function(){ setOne(r.key, kbdcNewPin(taken(r.key))); },
             style:{ padding:'4px 10px', borderRadius:6, border:'1px solid #90A4AE', background:'#fff', cursor:'pointer' } }, 'New')));
       })))));
 }
@@ -5045,6 +5083,62 @@ function getCustomRoleCards() {
    Sheet. A timestamped tombstone wins that merge on the Sheet and on every
    other device. Everything that counts ticks reads through kbdcLog(). */
 function kbdcLogRemoved(r) { var v = r && r.removed; return v === true || v === 'true' || v === 'TRUE'; }
+/* Ticks travel on their own, ahead of everything else.
+   Most staff's ticks never reached the Sheet (Saloni's last arrived 20 Aug,
+   Abhimanyu's 14 Aug) while they checked in every day. A tick only left the
+   phone inside the full sync, which first READS the Sheet; on a phone where
+   that read fails, the fallback sent everything the phone holds — the whole
+   1,471-row task list, staff, attendance — as ONE request, far past the size
+   Apps Script drops, and swallowed the error. Attendance still arrived because
+   it has its own small Sheet. Now the phone's unsent ticks go first, alone, in
+   small requests; the ones the Sheet accepted are remembered; and the task
+   screen says plainly when some are still waiting. */
+function kbdcLogSentMap(){ try { return JSON.parse(localStorage.getItem('kbdc_log_sent') || '{}') || {}; } catch(e) { return {}; } }
+function kbdcLogRowStamp(r){ return String(r.updatedAt || (String(r.date || '') + ' ' + String(r.time || ''))); }
+function kbdcLogUnsent(){
+  var sent = kbdcLogSentMap();
+  return kbdcLsArray('kbdc_task_log').filter(function(r){ return r && r.id && sent[r.id] !== kbdcLogRowStamp(r); });
+}
+function kbdcLogMarkSent(rows){
+  var s = kbdcLogSentMap();
+  (rows || []).forEach(function(r){ if (r && r.id) s[r.id] = kbdcLogRowStamp(r); });
+  try { localStorage.setItem('kbdc_log_sent', JSON.stringify(s)); } catch(e) {}
+}
+var kbdcTickPushRunning = false;
+async function kbdcPushTicksNow() {
+  if (kbdcTickPushRunning) return;
+  var url = kbdcBackendUrl();
+  var rows = kbdcLogUnsent();
+  if (!url || !rows.length) { if (!rows.length) kbdcSetSyncStatus({ tickErr:'' }); return; }
+  kbdcTickPushRunning = true;
+  try {
+    for (var i = 0; i < rows.length; i += 150) {
+      var part = rows.slice(i, i + 150);
+      var res = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules:{ TaskCompletions: part.map(kbdcFlattenRow) } });
+      if (res && res.ok === false) throw new Error(res.error || 'the Sheet refused the ticks');
+      kbdcLogMarkSent(part);
+    }
+    kbdcSetSyncStatus({ tickErr:'', tickLastOk: Date.now() });
+  } catch (e) {
+    kbdcSetSyncStatus({ tickErr: (e && e.message) ? e.message : 'could not reach the Sheet' });
+  } finally {
+    kbdcTickPushRunning = false;
+    window.dispatchEvent(new Event('kbdc-ticks-sent'));
+  }
+}
+function kbdcUnsentBanner() {
+  var n = kbdcLogUnsent().length;
+  if (!n) return null;
+  var st = kbdcGetSyncStatus() || {};
+  return React.createElement('div', { id:'tick-unsent', style:{ margin:'10px 15px', padding:'10px 12px', background:'#FBEAE8', border:'1px solid #E8A9A2',
+      borderLeft:'4px solid #A82018', borderRadius:8, fontSize:12, color:'#A82018', lineHeight:1.5 } },
+    React.createElement('b', null, n + (n === 1 ? ' tick on this phone has' : ' ticks on this phone have') + ' not reached the Google Sheet yet. '),
+    st.tickErr ? React.createElement('span', { style:{ userSelect:'text' } }, 'Last try: ' + st.tickErr + '. ') : 'Sending… ',
+    React.createElement('button', { id:'tick-send-now', onClick:function(){ kbdcPushTicksNow(); },
+      style:{ marginLeft:6, padding:'3px 10px', border:'none', borderRadius:6, background:'#A82018', color:'#fff', fontWeight:700, cursor:'pointer' } }, '↑ Send now'),
+    React.createElement('div', { style:{ fontSize:10.5, color:'#7A1812', marginTop:3 } }, 'Your ticks are safe on this phone. App ' + KBDC_APP_VERSION));
+}
+
 function kbdcLog(){
   try { return JSON.parse(localStorage.getItem('kbdc_task_log') || '[]').filter(function(r){ return !kbdcLogRemoved(r); }); }
   catch(e) { return []; }
@@ -11466,6 +11560,8 @@ async function kbdcAutoSyncMainRun() {
       } catch (e) { /* the full pass below still runs */ }
     }
 
+    // Ticks first, on their own: a read failure below must not strand them.
+    try { await kbdcPushTicksNow(); } catch (e) {}
     var got = null, pullErr = null;
     try { got = await kbdcPullSheets(url, sheetsToRead, readEverything); }
     catch (e) { pullErr = e; }
@@ -11486,8 +11582,13 @@ async function kbdcAutoSyncMainRun() {
           var rows = m.get().map(kbdcFlattenRow);
           if (rows.length) localOnly[m.sheet] = rows;
         });
-        if (Object.keys(localOnly).length) {
-          await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: localOnly });
+        // In size-bounded pieces. This used to be ONE request carrying every
+        // tab the phone holds, which Apps Script drops, so nothing ever arrived.
+        var soloChunks = Object.keys(localOnly).length ? kbdcSplitPushChunks(localOnly) : [];
+        for (var sc = 0; sc < soloChunks.length; sc++) {
+          var soloRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: soloChunks[sc] });
+          if (soloRes && soloRes.ok === false) throw new Error(soloRes.error || 'Backup was rejected by the backend');
+          if (soloChunks[sc]['TaskCompletions']) kbdcLogMarkSent(soloChunks[sc]['TaskCompletions']);
         }
       } catch (pushErr) { /* reported as the read failure below — that's the cause */ }
       kbdcSetSyncStatus({ err: 'Could not read the Google Sheet — ' +
@@ -11553,6 +11654,7 @@ async function kbdcAutoSyncMainRun() {
     if (remoteLogRows.length) {
       var localLog = kbdcLsArray('kbdc_task_log');
       var mergedLog = kbdcUnionMergeById(localLog, remoteLogRows);
+      kbdcLogMarkSent(remoteLogRows);   // these came from the Sheet, so the Sheet has them
       var nextLog = JSON.stringify(mergedLog);
       if (localStorage.getItem('kbdc_task_log') !== nextLog) { localStorage.setItem('kbdc_task_log', nextLog); tasksChanged = true; }
     }
@@ -11835,6 +11937,7 @@ async function kbdcAutoSyncMainRun() {
       // phone, looking saved and backed up, while never reaching the Sheet or
       // the admin dashboard. Same check the Inventory sync already does.
       if (mainRes && mainRes.ok === false) throw new Error(mainRes.error || 'Backup was rejected by the backend');
+      if (chunks[ci]['TaskCompletions']) kbdcLogMarkSent(chunks[ci]['TaskCompletions']);
     }
     // Only remember the signatures once every chunk landed, so a failed push
     // is retried in full next cycle rather than being assumed delivered.

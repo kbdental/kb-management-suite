@@ -115,6 +115,19 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
   wins both merges (client `kbdcUnionMergeById`, backend `kbdcMergeRows_`). `kbdcLog()` skips
   removed rows; read the log through it, never straight from localStorage.
   Test: `tests/test-untick-stays.js`.
+- **Most staff's ticks never reached the Sheet** (found 2026-09-17, app 2026-09-17-1). Live
+  data: 8 staff checked in daily on 2026-09-14-1, but only Madhuri and Vishal Tiwari's ticks
+  arrived (Saloni's last 20 Aug, Abhimanyu's 14 Aug). Cause: ticks only left inside the
+  full main sync, which reads first; on a read failure the fallback pushed every tab as ONE
+  request (too big, dropped, error swallowed). Now `kbdcPushTicksNow()` sends unsent ticks
+  alone, in 150-row requests, before the read and right after each tick; `kbdc_log_sent`
+  remembers what the Sheet accepted; the fallback push is chunked; the role task screen
+  shows "N ticks … not reached the Google Sheet" with Send now (`#tick-unsent`).
+  Not verified on a real phone. If staff still see that banner, its "Last try:" text is
+  the next clue. Test: `tests/test-ticks-reach-sheet.js`.
+- **Shared roles get a PIN per person** (2026-09-17): keys `CODE|normalised name` in
+  `kbdc_role_pins`; `kbdcRolePin(code, name)` prefers the person's PIN, then the role PIN.
+  PINs tab lists each person for roles with 2+ people. Test: `tests/test-shared-role-pins.js`.
 - Instruments & Equipment uses the app's blue `#1357A6` and the `tm-tabs` tab bar (2026-09-14).
 - **"Yearly" frequency fell through to Daily** in `kbdcTaskPeriodKey`. Fixed.
 - **Role PINs** (2026-09-11): `PinEntry` accepted any 4 digits. Now one PIN per role card plus
