@@ -128,6 +128,18 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
 - **Shared roles get a PIN per person** (2026-09-17): keys `CODE|normalised name` in
   `kbdc_role_pins`; `kbdcRolePin(code, name)` prefers the person's PIN, then the role PIN.
   PINs tab lists each person for roles with 2+ people. Test: `tests/test-shared-role-pins.js`.
+- **Instruments import keeps the clinic's asset codes** (2026-09-18, app 2026-09-18-1). A Tag
+  column value that is not already in the register now creates the item WITH that tag (the
+  clinic labels items `KBDC/DE/DC-01` etc.); a Tag that exists still updates. Rooms and
+  categories used by imported items are added to the Lists. The owner's asset list was
+  converted to `Desktop/NEW/KB_Assets_Import.xlsx` (sheet "Check these" lists open questions).
+  Test: `tests/test-instruments-import.js` (needs `xlsx` in tests/vendor).
+- **Bulk Edit tab + master "Asset Register"** (2026-09-18). Bulk Edit (managers) is a grid for
+  editing many items; "Apply to ticked" sets one field on ticked rows; Save logs "Bulk edit: …"
+  per item. The inventory module `insmaster` (pushOnly) writes a fixed-column copy of the
+  register to the Inventory Sheet tab **Asset Register** and is never read back. The owner's
+  separate master Google Sheet shows it via IMPORTRANGE. Edit in the app, not on that tab.
+  Test: `tests/test-instruments-bulk.js`.
 - Instruments & Equipment uses the app's blue `#1357A6` and the `tm-tabs` tab bar (2026-09-14).
 - **"Yearly" frequency fell through to Daily** in `kbdcTaskPeriodKey`. Fixed.
 - **Role PINs** (2026-09-11): `PinEntry` accepted any 4 digits. Now one PIN per role card plus

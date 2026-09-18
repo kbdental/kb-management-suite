@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-17-1';
+var KBDC_APP_VERSION = '2026-09-18-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -10965,6 +10965,11 @@ var KBDC_INVENTORY_MODULES = [
   { id:'inssets',     label:'Instrument Sets',                 sheet:'InstrumentSets',     localKey:'kbdc_ins_sets',     get: function(){ return kbdcLsArray('kbdc_ins_sets'); } },
   { id:'inslog',      label:'Instrument Activity Log',         sheet:'InstrumentLog',      localKey:'kbdc_ins_log',      get: function(){ return kbdcLsArray('kbdc_ins_log'); } },
   { id:'insloads',    label:'Sterilisation Loads',             sheet:'SterilisationLoads', localKey:'kbdc_ins_loads',    get: function(){ return kbdcLsArray('kbdc_ins_loads'); } },
+  // The owner's master register for inspections: a clean, fixed-column copy of
+  // the register, written to its own tab and never read back (pushOnly). A
+  // separate Google Sheet shows it live through IMPORTRANGE. Edits belong in
+  // the app (Bulk Edit), so nothing typed on that tab can damage the register.
+  { id:'insmaster',   label:'Asset Register (master)',         sheet:'Asset Register',     pushOnly:true,                get: function(){ return kbdcInsMasterRows(); } },
   { id:'inssettings', label:'Instrument Settings',             sheet:'InstrumentSettings', localKey:'kbdc_ins_settings', get: function(){ return kbdcLsArray('kbdc_ins_settings'); } },
 ];
 
@@ -12095,7 +12100,7 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
     return false;
   }
   try {
-    var sheetNames = KBDC_INVENTORY_MODULES.map(function(m){ return m.sheet; });
+    var sheetNames = KBDC_INVENTORY_MODULES.filter(function(m){ return !m.pushOnly; }).map(function(m){ return m.sheet; });
     // Also read the legacy single transactions tab so any history that only
     // ever landed there (before the Stock IN / Stock OUT split) is folded in
     // once and not lost.
@@ -12152,6 +12157,7 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
     // legacy tab) map to the same local key, so their rows are unioned together.
     var remoteByKey = {};
     KBDC_INVENTORY_MODULES.forEach(function(m) {
+      if (m.pushOnly) return;   // written, never read back
       var remoteRows = (remote[m.sheet] || []).map(kbdcUnflattenRow);
       if (!remoteByKey[m.localKey]) remoteByKey[m.localKey] = [];
       remoteByKey[m.localKey] = remoteByKey[m.localKey].concat(remoteRows);
@@ -13602,6 +13608,127 @@ function InsLabelForm(props) {
   );
 }
 
+/* ── Master register rows (the "Asset Register" tab) ──
+   Fixed column names in a fixed order, so the tab's headers never move and an
+   IMPORTRANGE in another Sheet keeps pointing at the right columns. Every row
+   carries the record id (last column): the Sheet merges rows by id, so an edit
+   replaces its row instead of adding another. */
+function kbdcInsMasterRows() {
+  var d = kbdcInsReadAll(), setTag = {};
+  d.sets.forEach(function(s){ setTag[s.id] = s.tag; });
+  function v(x) { return x == null ? '' : x; }
+  function when(iso) {
+    if (!iso) return '';
+    var t = new Date(iso);
+    return isNaN(t.getTime()) ? String(iso) : kbdcLocalDate(t) + ' ' + String(t.getHours()).padStart(2, '0') + ':' + String(t.getMinutes()).padStart(2, '0');
+  }
+  return d.assets.slice().sort(function(a, b){ return String(a.tag).localeCompare(String(b.tag)); }).map(function(a){
+    return { 'Tag':v(a.tag), 'Item':v(a.name), 'Type':v(a.kind), 'Category':v(a.cat), 'Brand':v(a.brand), 'Model':v(a.model),
+      'Serial No':v(a.serial), 'Location':v(a.location), 'Status':v(a.status), 'Condition':v(a.condition),
+      'Set':a.setId && setTag[a.setId] ? setTag[a.setId] : '', 'Purchase Date':v(a.purchaseDate), 'Price (₹)':v(a.price),
+      'Vendor':v(a.vendor), 'Warranty Until':v(a.warrantyUntil), 'Service Every (months)':v(a.serviceMonths),
+      'Last Service':v(a.lastService), 'Next Service':v(a.nextService), 'AMC Vendor':v(a.amcVendor), 'AMC Expiry':v(a.amcExpiry),
+      'Notes':v(a.notes), 'Last Updated':when(a.updatedAt), 'id':v(a.id) };
+  });
+}
+
+/* ── Bulk Edit ── a spreadsheet-style grid for changing many items at once. */
+var INS_BULK_FIELDS = [
+  ['name','Name','text',190], ['cat','Category','cat',160], ['brand','Brand','text',120], ['model','Model','text',110],
+  ['serial','Serial No','text',110], ['location','Location','loc',150], ['status','Status','status',115], ['condition','Condition','cond',95],
+  ['purchaseDate','Purchased','date',135], ['price','Price (₹)','number',95], ['vendor','Vendor','text',120],
+  ['warrantyUntil','Warranty until','date',135], ['serviceMonths','Service (months)','number',85], ['lastService','Last service','date',135],
+  ['amcVendor','AMC vendor','text',120], ['amcExpiry','AMC expiry','date',135], ['notes','Notes','text',220]
+];
+function InsBulkEdit(props) {
+  var h = React.createElement;
+  var s1 = React.useState({}), edits = s1[0], setEdits = s1[1];
+  var s2 = React.useState({ q:'', loc:'', retired:false }), f = s2[0], setF = s2[1];
+  var s3 = React.useState({}), sel = s3[0], setSel = s3[1];
+  var s4 = React.useState({ field:'location', value:'' }), bulk = s4[0], setBulk = s4[1];
+  function orig(a, k) { return a[k] == null ? '' : a[k]; }
+  function val(a, k) { var e = edits[a.id]; return e && Object.prototype.hasOwnProperty.call(e, k) ? e[k] : orig(a, k); }
+  function setVal(id, k, v) { setEdits(function(p){ var n = Object.assign({}, p); n[id] = Object.assign({}, n[id]); n[id][k] = v; return n; }); }
+  function diffs() {
+    var out = {};
+    props.assets.forEach(function(a){
+      var e = edits[a.id]; if (!e) return;
+      Object.keys(e).forEach(function(k){ if (String(e[k]) !== String(orig(a, k))) { out[a.id] = out[a.id] || {}; out[a.id][k] = e[k]; } });
+    });
+    return out;
+  }
+  function listFor(type, a) {
+    if (type === 'loc') return props.locs;
+    if (type === 'status') return KBDC_INS_STATUSES;
+    if (type === 'cond') return KBDC_INS_CONDITIONS;
+    return a && a.kind === 'Equipment' ? props.eqpCats : a ? props.insCats : props.eqpCats.concat(props.insCats);
+  }
+  var rows = props.assets.filter(function(a){
+    if (!f.retired && a.status === 'Retired') return false;
+    if (f.loc && a.location !== f.loc) return false;
+    if (f.q && [a.tag, a.name, a.brand, a.cat, a.location].join(' ').toLowerCase().indexOf(f.q.toLowerCase()) < 0) return false;
+    return true;
+  }).sort(function(x, y){ return String(x.tag).localeCompare(String(y.tag)); });
+  var D = diffs(), nChanged = Object.keys(D).length;
+  var nSel = rows.filter(function(a){ return sel[a.id]; }).length;
+  var allOn = rows.length > 0 && nSel === rows.length;
+  function cell(a, fd) {
+    var k = fd[0], type = fd[2], v = val(a, k), changed = D[a.id] && Object.prototype.hasOwnProperty.call(D[a.id], k);
+    var st = { width:fd[3], padding:'4px 6px', fontSize:12, border:'1px solid ' + (changed ? '#F9A825' : '#E0E6ED'),
+               background: changed ? '#FFF8E1' : '#fff', borderRadius:4, boxSizing:'border-box', fontFamily:INS_UI.font };
+    var on = function(ev){ setVal(a.id, k, ev.target.value); };
+    if (type === 'loc' || type === 'status' || type === 'cond' || type === 'cat') {
+      var opts = listFor(type, a).slice();
+      if (v && opts.indexOf(v) < 0) opts.push(v);
+      return h('select', { value:v, onChange:on, style:st, 'data-f':k }, insOptions(opts, '—'));
+    }
+    return h('input', { type: type === 'date' ? 'date' : type === 'number' ? 'number' : 'text', value:v, onChange:on, style:st, 'data-f':k });
+  }
+  function applyBulk() {
+    var ids = rows.filter(function(a){ return sel[a.id]; }).map(function(a){ return a.id; });
+    if (!ids.length) return;
+    setEdits(function(p){ var n = Object.assign({}, p); ids.forEach(function(id){ n[id] = Object.assign({}, n[id]); n[id][bulk.field] = bulk.value; }); return n; });
+  }
+  var bf = INS_BULK_FIELDS.filter(function(x){ return x[0] === bulk.field; })[0];
+  var bulkInput = (bf[2] === 'loc' || bf[2] === 'status' || bf[2] === 'cond' || bf[2] === 'cat')
+    ? h('select', { id:'bulk-value', value:bulk.value, onChange:function(ev){ setBulk(Object.assign({}, bulk, { value:ev.target.value })); }, style:Object.assign({}, insInp, { width:180 }) }, insOptions(listFor(bf[2], null), '— blank —'))
+    : h('input', { id:'bulk-value', type: bf[2] === 'date' ? 'date' : bf[2] === 'number' ? 'number' : 'text', value:bulk.value,
+        onChange:function(ev){ setBulk(Object.assign({}, bulk, { value:ev.target.value })); }, style:Object.assign({}, insInp, { width:180 }) });
+  var th = { position:'sticky', top:0, background:'#F5F7FA', zIndex:1, textAlign:'left', padding:'8px 6px', fontSize:10.5, fontWeight:700, color:INS_UI.grey, whiteSpace:'nowrap', borderBottom:'1px solid ' + INS_UI.line };
+  return h('div', { style:{ display:'flex', flexDirection:'column', gap:10 } },
+    h('div', { style:{ fontSize:12.5, color:INS_UI.grey } }, 'Change anything in the grid; changed cells turn yellow. Tick rows to set one field for all of them at once. Nothing is saved until you press Save.'),
+    h('div', { style:{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center' } },
+      h('input', { value:f.q, onChange:function(ev){ setF(Object.assign({}, f, { q:ev.target.value })); }, placeholder:'Search tag, name, brand…', style:Object.assign({}, insInp, { width:220 }) }),
+      h('select', { value:f.loc, onChange:function(ev){ setF(Object.assign({}, f, { loc:ev.target.value })); }, style:Object.assign({}, insInp, { width:'auto', minWidth:150 }) }, insOptions(props.locs, 'All locations')),
+      h('label', { style:{ fontSize:12.5, color:INS_UI.grey, display:'flex', alignItems:'center', gap:4 } },
+        h('input', { type:'checkbox', checked:f.retired, onChange:function(ev){ setF(Object.assign({}, f, { retired:ev.target.checked })); } }), 'Show retired'),
+      h('div', { style:{ flex:1 } }),
+      h('span', { id:'bulk-count', style:{ fontSize:12.5, fontWeight:700, color: nChanged ? INS_UI.amb : INS_UI.grey } }, nChanged ? nChanged + (nChanged === 1 ? ' item changed' : ' items changed') : 'No changes'),
+      h('button', { onClick:function(){ setEdits({}); }, disabled:!nChanged, style:insBtn(INS_UI.grey, true) }, 'Discard'),
+      h('button', { id:'bulk-save', onClick:function(){ props.onSave(D); setEdits({}); setSel({}); }, disabled:!nChanged, style:insBtn(nChanged ? '#2E7D32' : '#B0BEC5') }, '💾 Save')),
+    h('div', { style:{ display:'flex', gap:8, flexWrap:'wrap', alignItems:'center', background:INS_UI.priL, padding:'8px 10px', borderRadius:8 } },
+      h('span', { style:{ fontSize:12.5, fontWeight:600, color:INS_UI.pri } }, nSel + ' ticked · set'),
+      h('select', { id:'bulk-field', value:bulk.field, onChange:function(ev){ setBulk({ field:ev.target.value, value:'' }); }, style:Object.assign({}, insInp, { width:'auto' }) },
+        INS_BULK_FIELDS.map(function(x){ return h('option', { key:x[0], value:x[0] }, x[1]); })),
+      h('span', { style:{ fontSize:12.5, color:INS_UI.pri } }, 'to'), bulkInput,
+      h('button', { id:'bulk-apply', onClick:applyBulk, disabled:!nSel, style:insBtn(INS_UI.pri) }, 'Apply to ticked')),
+    h('div', { style:{ overflow:'auto', maxHeight:'62vh', background:'#fff', border:'1px solid ' + INS_UI.line, borderRadius:10 } },
+      h('table', { id:'bulk-table', style:{ borderCollapse:'collapse' } },
+        h('thead', null, h('tr', null,
+          h('th', { style:th }, h('input', { type:'checkbox', id:'bulk-all', checked:allOn,
+            onChange:function(){ var n = {}; if (!allOn) rows.forEach(function(a){ n[a.id] = true; }); setSel(n); } })),
+          h('th', { style:th }, 'Tag'),
+          INS_BULK_FIELDS.map(function(x){ return h('th', { key:x[0], style:th }, x[1]); }))),
+        h('tbody', null, rows.map(function(a){
+          return h('tr', { key:a.id, 'data-tag':a.tag, style:{ borderBottom:'1px solid #F0F2F6', background: sel[a.id] ? '#F3F8FF' : '#fff' } },
+            h('td', { style:{ padding:'4px 6px' } }, h('input', { type:'checkbox', checked:!!sel[a.id],
+              onChange:function(){ var n = Object.assign({}, sel); if (n[a.id]) delete n[a.id]; else n[a.id] = true; setSel(n); } })),
+            h('td', { style:{ padding:'4px 8px', fontSize:12, fontWeight:700, color:INS_UI.pri, whiteSpace:'nowrap' } }, a.tag),
+            INS_BULK_FIELDS.map(function(x){ return h('td', { key:x[0], style:{ padding:'3px 4px' } }, cell(a, x)); }));
+        })))),
+    h('div', { style:{ fontSize:12, color:INS_UI.grey } }, rows.length + (rows.length === 1 ? ' item' : ' items') + ' shown'));
+}
+
 var KBDC_INS_IMPORT_COLS = ['Type','Name','Category','Brand','Model','Serial No','Quantity','Location','Status','Condition',
   'Purchase Date','Price','Vendor','Warranty Until','Service Interval (months)','Last Service','AMC Vendor','AMC Expiry','Set','Notes','Tag'];
 var KBDC_INS_IMPORT_MAP = { type:'kind', kind:'kind', name:'name', item:'name', category:'cat', brand:'brand', model:'model',
@@ -13777,6 +13904,25 @@ function InstrumentsPage({ insRole, userName }) {
     });
     say('Retired ' + set.tag);
     close();
+  }
+  function saveBulk(diffs) {
+    var d = kbdcInsReadAll(), today = kbdcToday(), log = d.log.slice(), n = 0;
+    var label = {}; INS_BULK_FIELDS.forEach(function(x){ label[x[0]] = x[1]; });
+    var assets = d.assets.map(function(a){
+      var ch = diffs[a.id];
+      if (!ch) return a;
+      var nx = Object.assign({}, a, ch);
+      if (Object.prototype.hasOwnProperty.call(ch, 'price')) nx.price = ch.price === '' ? '' : Number(ch.price) || 0;
+      if (Object.prototype.hasOwnProperty.call(ch, 'serviceMonths')) nx.serviceMonths = ch.serviceMonths === '' ? '' : parseInt(ch.serviceMonths, 10) || '';
+      if (ch.status && ch.status !== a.status) { nx.statusSince = today; if (ch.status === 'Retired') nx.setId = ''; }
+      nx.nextService = kbdcInsNextService(nx);
+      stamp(nx); n++;
+      log.push(logRow(nx, 'Edited', 'Bulk edit: ' + Object.keys(ch).map(function(k){ return (label[k] || k) + ' → ' + (ch[k] === '' ? '(blank)' : ch[k]); }).join(', ')));
+      return nx;
+    });
+    if (!n) return;
+    commit({ assets:assets, log:log });
+    say('Saved changes to ' + n + (n === 1 ? ' item' : ' items'));
   }
   function saveLists(lists) {
     var d = kbdcInsReadAll();
@@ -13956,19 +14102,35 @@ function InstrumentsPage({ insRole, userName }) {
             updated++;
             return;
           }
+          // A tag given in the file is the clinic's own asset code (KBDC/DE/DC-01),
+          // already on a label on the item: keep it, one item per code.
+          var ownTag = tag || '';
           rec.kind = kind;
           rec.status = rec.status || 'In use';
           rec.condition = rec.condition || 'Good';
           rec.nextService = kbdcInsNextService(rec);
-          var n = Math.min(200, Math.max(1, parseInt(r.qty, 10) || 1));
+          var n = ownTag ? 1 : Math.min(200, Math.max(1, parseInt(r.qty, 10) || 1));
           for (var i = 0; i < n; i++) {
-            var a = stamp(Object.assign({}, rec, { id:kbdcInsUid('ia_'), tag:kbdcInsAssetTag(assets, kind), statusSince:today,
+            var a = stamp(Object.assign({}, rec, { id:kbdcInsUid('ia_'), tag: ownTag || kbdcInsAssetTag(assets, kind), statusSince:today,
                                                    createdAt:today, createdBy:userName || '' }));
             assets.push(a); log.push(logRow(a, 'Added', 'Excel import')); added++;
           }
         });
         if (!added && !updated) { say('Nothing imported. Check the file has a "Name" column with items in it.', true); return; }
-        commit({ assets:assets, sets:sets, log:log });
+        // Rooms and categories the file uses join the Lists, so they appear in
+        // the filters and drop-downs instead of existing only on imported rows.
+        var settings = d.settings.slice(), listsChanged = false;
+        [['locations', function(a){ return a.location; }],
+         ['insCats', function(a){ return a.kind !== 'Equipment' && a.cat; }],
+         ['eqpCats', function(a){ return a.kind === 'Equipment' && a.cat; }]].forEach(function(p){
+          var cur = kbdcInsList(settings, p[0]).slice(), low = cur.map(function(x){ return String(x).toLowerCase(); });
+          assets.forEach(function(a){
+            var v = String(p[1](a) || '').trim();
+            if (v && low.indexOf(v.toLowerCase()) < 0) { cur.push(v); low.push(v.toLowerCase()); listsChanged = true; }
+          });
+          settings = settings.filter(function(x){ return !(x && x.id === p[0]); }).concat([stamp({ id:p[0], list:cur })]);
+        });
+        commit(listsChanged ? { assets:assets, sets:sets, log:log, settings:settings } : { assets:assets, sets:sets, log:log });
         say('Imported: ' + added + ' added' + (updated ? ', ' + updated + ' updated' : '') + (skipped ? ', ' + skipped + ' rows without a name skipped' : ''));
       } catch (err) { say('Import failed: ' + err.message, true); }
     };
@@ -14328,7 +14490,7 @@ function InstrumentsPage({ insRole, userName }) {
   }
 
   var tabs = [['dash', '📊 Dashboard'], ['reg', '🦷 Register (' + active.length + ')'], ['sets', '🧰 Sets (' + activeSets.length + ')'], ['ster', '🧪 Sterilisation']]
-    .concat(isMgr ? [['rep', '📈 Reports'], ['sett', '⚙️ Lists']] : []);
+    .concat(isMgr ? [['bulk', '✏️ Bulk Edit'], ['rep', '📈 Reports'], ['sett', '⚙️ Lists']] : []);
   return h('div', { style:{ flex:1, display:'flex', flexDirection:'column', overflow:'hidden', height:'100%', background:INS_UI.bg, fontFamily:INS_UI.font } },
     toast && h('div', { style:{ position:'fixed', top:16, right:16, zIndex:9999, background: toast.bad ? INS_UI.red : INS_UI.pri, color:'#fff',
       padding:'10px 16px', borderRadius:10, fontSize:13, fontWeight:600, boxShadow:'0 6px 20px rgba(0,0,0,.2)', maxWidth:'80vw' } }, toast.msg),
@@ -14341,6 +14503,7 @@ function InstrumentsPage({ insRole, userName }) {
       })),
     h('div', { style:{ flex:1, overflowY:'auto', padding:16 } },
       tab === 'dash' && renderDash(), tab === 'reg' && renderReg(), tab === 'sets' && renderSets(), tab === 'ster' && renderSter(), tab === 'rep' && isMgr && renderReports(),
+      tab === 'bulk' && isMgr && h(InsBulkEdit, { assets:data.assets, locs:locs, insCats:insCats, eqpCats:eqpCats, onSave:saveBulk }),
       tab === 'sett' && isMgr && h(InsSettingsForm, { locs:locs, insCats:insCats, eqpCats:eqpCats, cycles:cycles, packDays:packDays, onSave:saveLists })),
     renderModal()
   );
