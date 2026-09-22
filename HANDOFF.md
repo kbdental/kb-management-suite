@@ -23,10 +23,36 @@ served from GitHub Pages at https://kbdental.github.io/kb-management-suite/
 
 | Thing | Version |
 |---|---|
-| App (`KBDC_APP_VERSION`) | **2026-09-11-1** |
-| NABH standalone (`nabh.html`) | **2026-09-11-1** |
+| App (`KBDC_APP_VERSION`) | **2026-09-22-1** |
+| NABH standalone | moved to `kbdental/kb-nabh` |
 | `backend/Code.gs` (main + attendance Sheets) | **2026-09-08-1** |
-| `backend/Inventory-Code.gs` (inventory Sheet) | **2026-09-03-1** |
+| `backend/Inventory-Code.gs` (inventory Sheet) | **2026-09-22-1 in the repo; live was 2026-09-03-1** — the owner must redeploy it (the app now expects 2026-09-22-1) |
+
+## Inventory Sheet overload loop (found and fixed 2026-09-22)
+
+After the 2026-09-18 load of 205 assets the Inventory script stayed overloaded for days
+(about 1 in 6 requests answered HTTP 404, some took 60 s; the app told the owner the URL
+was wrong, which it was not). Instrument tabs were rewritten 130–280 times in four days
+with identical data. Three compounding causes:
+1. The inventory read-failure path re-uploaded EVERY inventory tab on every failed read.
+2. `saveBatch` in Inventory-Code.gs bumped each tab's revision on every upload, even when
+   nothing was written, so every device re-downloaded those tabs.
+3. `kbdcRowsSame_` treated a row with fewer fields as changed (Sheet rows carry every
+   column), so identical uploads were rewritten.
+Plus echoes (a device re-sending rows it had just pulled) and every device re-sending the
+Asset Register after pulling a change.
+Fix: `kbdcInvSendPending()` sends only tabs whose sig changed since the last accepted upload
+(both paths); echo suppression records a pulled tab as sent when every local row is on the
+Sheet at the same updatedAt; the Asset Register is sent only by the device that changed the
+register (`kbdc_ins_master_dirty`, set in InstrumentsPage `commit`); `kbdcDiagnose404` does a
+plain GET first and says "busy" when the deployment answers. Backend: revision bumped only
+when a tab was really written; field-count mismatch no longer counts as a change.
+Test: `tests/test-inventory-gentle.js`. The main `Code.gs` has the same unconditional
+`kbdcBumpRev_` pattern; not changed yet.
+
+On 2026-09-18 at 2:21 PM everything in the owner's `Desktop\NEW` went to the Recycle Bin
+(not by any session command). As of 2026-09-22 only `.claude` and `kubi` were back; the
+local clone of this repo was among the deleted items, so this work was done on a fresh clone.
 
 ## The three Google Sheets
 

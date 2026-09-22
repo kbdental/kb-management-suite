@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-18-1';
+var KBDC_APP_VERSION = '2026-09-22-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -879,7 +879,7 @@ var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
    the app could not ask what had changed, so every cycle re-read all 715 items
    and every transaction in full — replies large enough for Apps Script's
    redirect hop to drop, reported as HTTP 404 and "returned no data". */
-var KBDC_EXPECTED_INV_BACKEND = '2026-09-03-1';
+var KBDC_EXPECTED_INV_BACKEND = '2026-09-22-1';
 function kbdcInvExpectedVersion() {
   try {
     var iu = kbdcInvBackendUrl();
@@ -12053,19 +12053,68 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
    reply is too large or too slow to come back. Same code, opposite remedies:
    one needs a new URL pasted in, the other needs smaller requests. One tiny
    call settles it — if a few hundred bytes come back, the URL is fine. */
+/* A 404 used to be reported as "the web app URL is wrong", which sent the
+   owner to replace an address that was fine. Apps Script also answers 404 for
+   single requests while it is overloaded (seen 2026-09-18 to 09-22: about 1 in
+   6 requests, tiny ones included, while the same URL answered the rest). So
+   ask the deployment directly with a plain GET, which it answers with its
+   greeting whenever it exists, before blaming the address. */
 async function kbdcDiagnose404(url, label) {
-  try {
-    var probe = await kbdcBackendReqBatch(url, 'getStamps', {});
-    if (probe) {
-      return label + ' is reachable, but a reply was too large to arrive. ' +
-        'The app is already splitting its requests; if this keeps happening the ' +
-        'Sheet has grown too big to read in one go and needs older rows archived.';
-    }
-  } catch (probeErr) { /* fall through to the wrong-URL explanation */ }
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      var timer = ctl ? setTimeout(function(){ ctl.abort(); }, 20000) : null;
+      var r = await fetch(url, { method:'GET', signal: ctl ? ctl.signal : undefined });
+      if (timer) clearTimeout(timer);
+      var txt = await r.text();
+      if (/backend is running|"ok"\s*:\s*true/.test(txt)) {
+        return label + ' Sheet is busy: Google turned one request away (HTTP 404) while the script was overloaded. ' +
+          'Nothing needs changing: the address is right, what you recorded is safe on this device, and the app retries by itself.';
+      }
+    } catch (probeErr) { /* try once more, then fall through */ }
+  }
   return 'HTTP 404 — the ' + label + ' web app URL is wrong, or that deployment no ' +
     'longer exists. "New deployment" creates a NEW address: open the Sheet, ' +
     'Extensions \u2192 Apps Script \u2192 Deploy \u2192 Manage deployments, copy the Web app URL ' +
     'shown there, and paste it into Settings \u2192 Data Backend.';
+}
+/* What this device has to send to the Inventory Sheet: only the tabs whose
+   contents changed since the last upload the Sheet accepted. After the
+   2026-09-18 asset load the Sheet stayed overloaded for days: every failed
+   read made each phone re-upload EVERY inventory tab, the backend bumped each
+   tab's revision on every upload even when nothing changed, and every phone
+   then re-downloaded everything, which made more reads fail. The master
+   Asset Register goes only from the device that changed the register. */
+function kbdcInsMasterDirty() { try { return localStorage.getItem('kbdc_ins_master_dirty') === '1'; } catch(e) { return false; } }
+function kbdcInsSetMasterDirty(on) { try { if (on) localStorage.setItem('kbdc_ins_master_dirty', '1'); else localStorage.removeItem('kbdc_ins_master_dirty'); } catch(e) {} }
+function kbdcInvPendingPush() {
+  var invSigs = kbdcPushSigs(), payload = {}, sigs = {};
+  KBDC_INVENTORY_MODULES.forEach(function(m) {
+    if (m.pushOnly && !kbdcInsMasterDirty()) return;
+    var rows = m.get().map(kbdcFlattenRow);
+    if (!rows.length) return;
+    var sig = kbdcRowsSig(rows);
+    if (invSigs['inv:' + m.sheet] === sig) return;   // this Sheet already has it
+    sigs[m.sheet] = sig;
+    payload[m.sheet] = rows;
+  });
+  return { payload:payload, sigs:sigs };
+}
+// Sent in size-bounded chunks; recorded only after every piece landed, so a
+// failed upload is retried next cycle rather than remembered as done.
+async function kbdcInvSendPending(url) {
+  var pend = kbdcInvPendingPush();
+  var chunks = Object.keys(pend.payload).length ? kbdcSplitPushChunks(pend.payload) : [];
+  for (var ci = 0; ci < chunks.length; ci++) {
+    // Apps Script reports its own failures as HTTP 200 with {ok:false}.
+    var res = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: chunks[ci] });
+    if (res && res.ok === false) throw new Error(res.error || 'Inventory backup was rejected by the backend');
+  }
+  var invSigs = kbdcPushSigs();
+  Object.keys(pend.sigs).forEach(function(sh){ invSigs['inv:' + sh] = pend.sigs[sh]; });
+  kbdcSetPushSigs(invSigs);
+  if (pend.payload['Asset Register']) kbdcInsSetMasterDirty(false);
+  return Object.keys(pend.payload);
 }
 var kbdcSyncInvRunning = false, kbdcSyncInvAgain = false;
 async function kbdcAutoSyncInventory() {
@@ -12128,17 +12177,10 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
          colleague's stock-out ever leaves the device it was recorded on. This
          is exactly the case reported — one phone showing stock deducted and
          every other device showing the old figure. */
-      try {
-        var localOnly = {};
-        KBDC_INVENTORY_MODULES.forEach(function(m) {
-          var rows = m.get().map(kbdcFlattenRow);
-          if (rows.length) localOnly[m.sheet] = rows;
-        });
-        var soloChunks = kbdcSplitPushChunks(localOnly);
-        for (var si = 0; si < soloChunks.length; si++) {
-          await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: soloChunks[si] });
-        }
-      } catch (pushErr) { /* reported as the read failure below — that is the cause */ }
+      // Only what this device changed. Re-sending every tab here, on every
+      // failed read, is what kept the Sheet overloaded for days.
+      try { await kbdcInvSendPending(url); }
+      catch (pushErr) { /* reported as the read failure below — that is the cause */ }
       var msg0 = (invPullErr && invPullErr.message) ? invPullErr.message : 'sync failed';
       if (/\b404\b/.test(msg0)) msg0 = await kbdcDiagnose404(url, 'Inventory');
       kbdcSetSyncStatus({ invErr: 'Inventory: ' + msg0 });
@@ -12216,37 +12258,26 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
        on repeat, for data this device had just sent itself. That is also the
        size of reply Apps Script's redirect hop drops, which is how a healthy
        Sheet still produced "returned no data". */
-    var invSigs = kbdcPushSigs();
-    var pushPayload = {};
-    var pushedSigs = {};
-    KBDC_INVENTORY_MODULES.forEach(function(m) {
-      var rows = m.get().map(kbdcFlattenRow);
-      if (!rows.length) return;
-      var sig = kbdcRowsSig(rows);
-      pushedSigs[m.sheet] = sig;
-      if (invSigs['inv:' + m.sheet] === sig) return;   // this Sheet already has it
-      pushPayload[m.sheet] = rows;
-    });
-    // Sent in size-bounded chunks, exactly as the main backup is. This used to
-    // go as ONE request carrying every item and every transaction, and it grew
-    // until Apps Script would no longer accept it: the Sheet's transaction log
-    // stops dead on 2 May 2026 while the app kept recording perfectly well on
-    // each device. That is the whole of "the inventory shows the transaction
-    // but does not update" — the entries were never lost, they simply had no
-    // request small enough to travel in.
-    var invChunks = Object.keys(pushPayload).length ? kbdcSplitPushChunks(pushPayload) : [];
-    for (var ci = 0; ci < invChunks.length; ci++) {
-      // Apps Script reports its own failures as HTTP 200 with {ok:false}, which
-      // kbdcBackendReqAt does not treat as an error. Combined with the empty
-      // catch below, an Inventory push that the backend actually rejected
-      // (script lock timeout, quota, a bad token) looked exactly like success.
-      var invRes = await kbdcBackendReqBatchRetry(url, 'saveBatch', { modules: invChunks[ci] });
-      if (invRes && invRes.ok === false) throw new Error(invRes.error || 'Inventory backup was rejected by the backend');
-    }
-    // Recorded only after the write is known to have landed, so a failed push
-    // is retried next cycle rather than being remembered as done.
-    Object.keys(pushedSigs).forEach(function(sh){ invSigs['inv:' + sh] = pushedSigs[sh]; });
-    kbdcSetPushSigs(invSigs);
+    /* No echoes. Rows that had just come FROM the Sheet were sent straight
+       back: every phone re-uploaded a colleague's change, each upload bumped
+       the tab's revision, and every phone downloaded the tab again. When every
+       local row of a tab is already on the Sheet at the same version, record
+       it as sent. Only for tabs whose rows carry updatedAt, so an edit that
+       did not restamp its row is never mistaken for "already there". */
+    try {
+      var echoSigs = kbdcPushSigs(), echoSet = false;
+      KBDC_INVENTORY_MODULES.forEach(function(m) {
+        if (m.pushOnly || m.localKey === 'kbdc_inv_items' || !Object.prototype.hasOwnProperty.call(remote, m.sheet)) return;
+        var rows = m.get(), onSheet = {};
+        (remote[m.sheet] || []).forEach(function(r){ if (r && r.id) onSheet[r.id] = String(r.updatedAt || ''); });
+        var same = rows.length > 0 && rows.every(function(r){
+          return r && r.id && r.updatedAt && Object.prototype.hasOwnProperty.call(onSheet, r.id) && onSheet[r.id] === String(r.updatedAt);
+        });
+        if (same) { echoSigs['inv:' + m.sheet] = kbdcRowsSig(rows.map(kbdcFlattenRow)); echoSet = true; }
+      });
+      if (echoSet) kbdcSetPushSigs(echoSigs);
+    } catch (echoErr) {}
+    await kbdcInvSendPending(url);
   } catch (e) {
     var msg = (e && e.message) ? e.message : 'sync failed';
     if (/\b404\b/.test(msg)) msg = await kbdcDiagnose404(url, 'Inventory');
@@ -13787,6 +13818,8 @@ function InstrumentsPage({ insRole, userName }) {
   // from: the background sync may have merged a colleague's change since.
   function commit(next) {
     Object.keys(next).forEach(function(k){ localStorage.setItem(KBDC_INS_KEYS[k], JSON.stringify(next[k])); });
+    // This device changed the register, so it (and only it) refreshes the master Asset Register tab.
+    if (next.assets || next.sets) kbdcInsSetMasterDirty(true);
     setData(kbdcInsReadAll());
     try { kbdcAutoSyncInventory(); } catch (e) {}
   }

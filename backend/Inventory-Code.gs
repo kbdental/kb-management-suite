@@ -86,8 +86,10 @@ function doPost(e) {
         var sn = sanitizeSheetName(name);
         var mrows = modules[name] || [];
         try {
-          saveAllRows(sn, mrows);
-          kbdcBumpRev_(sn);        // so readers know this tab moved
+          // Bump the revision only when the tab really changed. Bumping on every
+          // upload told every device to re-download tabs nobody had touched,
+          // which kept this script overloaded for days after 2026-09-18.
+          if (saveAllRows(sn, mrows)) kbdcBumpRev_(sn);
           savedCounts[name] = mrows.length;
         } catch (perSheetErr) {
           failures.push(name + ': ' + (perSheetErr && perSheetErr.message ? perSheetErr.message : perSheetErr));
@@ -135,7 +137,7 @@ function doGet(e) {
  *
  * Bump this whenever this file changes.
  */
-var KBDC_INV_BACKEND_VERSION = '2026-09-03-1';
+var KBDC_INV_BACKEND_VERSION = '2026-09-22-1';
 
 function respond(obj) {
   if (obj && typeof obj === 'object' && obj.version === undefined) {
@@ -281,10 +283,14 @@ function kbdcBuildSheetData_(sheetName, rows) {
 function kbdcRowsSame_(a, b) {
   if (a.length !== b.length) return false;
   for (var i = 0; i < a.length; i++) {
-    var ka = Object.keys(a[i]), kb = Object.keys(b[i]);
-    if (ka.length !== kb.length) return false;
-    for (var j = 0; j < ka.length; j++) {
-      var k = ka[j];
+    // Compare on every field either side has, a missing field counting as
+    // blank. A row read from the Sheet carries every column; the same row
+    // sent by a device carries only its own fields, so counting fields made
+    // identical rows look changed and rewrote the tab on every upload.
+    var seen = {}, keys = [];
+    Object.keys(a[i]).concat(Object.keys(b[i])).forEach(function(k){ if (!seen[k]) { seen[k] = 1; keys.push(k); } });
+    for (var j = 0; j < keys.length; j++) {
+      var k = keys[j];
       var va = a[i][k], vb = b[i][k];
       va = (va === undefined || va === null) ? '' : String(va);
       vb = (vb === undefined || vb === null) ? '' : String(vb);
@@ -306,8 +312,10 @@ function kbdcRowsSame_(a, b) {
  */
 function saveAllRows(sheetName, rows) {
   var plan = kbdcBuildSheetData_(sheetName, rows);
-  if (plan.data && kbdcRowsSame_(plan.mergedRows, plan.existingRows)) return;
-  withWriteLock_(function() { saveAllRowsLocked_(sheetName, rows); });
+  if (plan.data && kbdcRowsSame_(plan.mergedRows, plan.existingRows)) return false;
+  var wrote = false;
+  withWriteLock_(function() { wrote = saveAllRowsLocked_(sheetName, rows); });
+  return wrote;
 }
 
 function saveAllRowsLocked_(sheetName, rows) {
@@ -319,10 +327,11 @@ function saveAllRowsLocked_(sheetName, rows) {
     if (!wasEmpty) {
       sheet.clearContents();
       sheet.getRange(1, 1).setValue('No data yet — nothing has been pushed from this module.');
+      return true;
     }
-    return;
+    return false;
   }
-  if (kbdcRowsSame_(plan.mergedRows, plan.existingRows)) return; // re-check under the lock
+  if (kbdcRowsSame_(plan.mergedRows, plan.existingRows)) return false; // re-check under the lock
 
   sheet.clearContents();
   var range = sheet.getRange(1, 1, plan.data.length, plan.headers.length);
@@ -337,6 +346,7 @@ function saveAllRowsLocked_(sheetName, rows) {
   // autoResizeColumns is expensive and used to run on every push. Column
   // widths persist, so sizing once when the tab is first populated is enough.
   if (wasEmpty) sheet.autoResizeColumns(1, plan.headers.length);
+  return true;
 }
 
 /** Reads a tab back as an array of objects, keyed by its header row. */
