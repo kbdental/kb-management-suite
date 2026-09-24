@@ -23,7 +23,7 @@ served from GitHub Pages at https://kbdental.github.io/kb-management-suite/
 
 | Thing | Version |
 |---|---|
-| App (`KBDC_APP_VERSION`) | **2026-09-22-1** |
+| App (`KBDC_APP_VERSION`) | **2026-09-24-2** |
 | NABH standalone | moved to `kbdental/kb-nabh` |
 | `backend/Code.gs` (main + attendance Sheets) | **2026-09-08-1** |
 | `backend/Inventory-Code.gs` (inventory Sheet) | **2026-09-22-1 in the repo; live was 2026-09-03-1** — the owner must redeploy it (the app now expects 2026-09-22-1) |
@@ -75,15 +75,20 @@ Apps Script cannot be called directly from the sandbox — the proxy blocks
 - `tests/syntax-check.js` — validates every inline `<script>`. **Run after every edit.**
 - `tests/gas-server.js` — runs the REAL `backend/Code.gs` in Node under a fake Apps
   Script API, so backend logic is tested for real rather than against a stand-in.
-- Six Playwright tests, all passing:
-  `test-hung-request`, `test-unsent-checkin-visible`, `test-admin-checkin-no-gps`,
-  `test-appdata-churn`, `test-appdata-dedupe`, `test-tick-logs-and-pushes`.
+- Twenty-one Playwright tests, all passing. Run them all with:
+
+```
+node tests/syntax-check.js && for f in tests/test-*.js; do echo "$(basename $f): $(node "$f" 2>&1 | tail -1)"; done
+```
 
 Setup:
 
 ```
-cd tests/vendor && npm install react@18 react-dom@18 @babel/standalone   # gitignored
+cd tests/vendor && npm install react@18 react-dom@18 @babel/standalone xlsx qrcode-generator@1.4.4   # gitignored
 ```
+
+(`qrcode-generator` must be pinned to 1.4.4 — newer versions ship `dist/` instead of
+`qrcode.js` and the tests cannot find it.)
 
 Chromium: `/opt/pw-browsers/chromium-1194/chrome-linux/chrome`
 Playwright: `/opt/node22/lib/node_modules/playwright`
@@ -117,6 +122,20 @@ an ephemeral scratch directory. Keep every new test in `tests/`.
    owner what that banner says on a phone that fails — that message is the next clue.
 
 ## Recently fixed — do not re-break
+
+- **Deleted inventory items came back** (2026-09-24, app 2026-09-24-2). Manage → Delete
+  Product only spliced the item out of the local list; the merge never deletes (it cannot
+  tell "this device deleted the row" from "this device hasn't pulled it yet"), so the next
+  pull handed the item straight back. Now a delete writes `{removed:true, updatedAt}` —
+  the same tombstone the un-tick fix uses. The mini-app's storage bridge (`kbdcInvLive`,
+  `kbdcInvMergeSave`, the `deleteItem` action) keeps tombstones out of the visible list
+  but in `kbdc_inv_items`, so they reach the Sheet; `kbdcInvRowRemoved`/`kbdcInvRowKey` on
+  the parent side spot a Sheet that still shows the item live and force a re-upload.
+  **No backend redeploy needed** — the Inventory backend builds its headers from the union
+  of row keys and already prefers the newer `updatedAt`. Re-adding an item clears its own
+  tombstone with a fresh stamp. Test: `tests/test-inventory-delete-stays.js`.
+  Caveat: a phone still running an older build can push the item back over the tombstone
+  for one cycle; the re-upload above corrects the Sheet.
 
 - **Manager Dashboard did not redraw when ticks arrived** (2026-09-11, app 2026-09-11-5).
   The Sheet was fine (TaskCompletions 1,029 rows); the dashboard just never listened for
