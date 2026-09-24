@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-24-2';
+var KBDC_APP_VERSION = '2026-09-24-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -3283,6 +3283,12 @@ function kbdcTdCount(days, codes, name, logRows, onlyFreq) {
       var t = byCode[r.taskCode];
       if (!t) return;
       var who = kbdcNormName(r.staffName || '');
+      /* An old tick with nobody recorded is credited to the person asked
+         about, because for a role one person holds it can only be theirs.
+         Where two people hold the role — the two riders — it cannot be
+         placed, and crediting it to each in turn scored one rider for the
+         other's work. */
+      if (want && !who && kbdcRoleIsShared(code)) return;
       if (want && who && who !== want) return;
       seen[code + '|' + r.taskCode + '|' + kbdcTaskPeriodKey(t.freq || 'Daily', new Date(day + 'T12:00:00'))] = 1;
     });
@@ -5377,13 +5383,16 @@ function ManagerDashboard({
     var logToday = kbdcLog().filter(function(r){
       return r && String(r.date || '').slice(0, 10) === todayStr;
     });
-    function doneCountFor(code, name) {
+    function doneCountFor(code, name, shared) {
       var want = kbdcNormName(name), seen = {};
       logToday.forEach(function(r){
         if (r.roleCode !== code) return;
         var who = kbdcNormName(r.staffName || '');
-        // A completion with no name recorded belongs to whoever holds the role.
-        if (who && want && who !== want) return;
+        // A completion with no name recorded belongs to whoever holds the
+        // role — but only when one person holds it. Two riders share RDR, so
+        // an unnamed tick cannot be credited to either without crediting both.
+        if (!who) { if (shared && want) return; }
+        else if (want && who !== want) return;
         if (r.taskCode) seen[r.taskCode] = 1;
       });
       return Object.keys(seen).length;
@@ -5393,9 +5402,15 @@ function ManagerDashboard({
       var roleCard = [].concat(ROLE_CARDS.clinical,ROLE_CARDS.admin,ROLE_CARDS.mgmt,ROLE_CARDS.lab).find(function(r){return r.code===code;});
       var tasks = getRoleTasks(code);
       var flagged = tasks.filter(function(t){return t.done;}).length;
-      // Whichever source knows about more completed work is the one that has
-      // heard from the person who did it.
-      var done = Math.max(flagged, doneCountFor(code, s.name));
+      /* `flagged` is the ROLE's own flag — "somebody holding this role did
+         this task today". For a role one person holds that is the same thing
+         as their own work, and it is the only record old ticks left, so it
+         stays as a floor. For a role two people hold it is not: both riders
+         were being scored on whichever of them had ticked, so one rider's
+         work marked the other rider done and neither could be seen
+         individually. A shared role is scored on that person's own ticks. */
+      var mine = doneCountFor(code, s.name, kbdcRoleIsShared(code));
+      var done = kbdcRoleIsShared(code) ? mine : Math.max(flagged, mine);
       if (done > tasks.length) done = tasks.length;
       var pct = tasks.length>0?Math.round((done/tasks.length)*100):0;
       return {code:code, name:s.name, c:(roleCard?roleCard.c:s.c)||'#1357A6', pct:pct, delta:''};
