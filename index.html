@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-24-3';
+var KBDC_APP_VERSION = '2026-09-24-4';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -4731,8 +4731,44 @@ function RolePinsTab() {
       })))));
 }
 
+/* The PIN a person signs in to the app with, which is NOT the PIN that opens
+   their task list. Both riders have one of each. */
+function kbdcStaffLoginPin(name) {
+  var want = kbdcNormName(name), pin = '';
+  try {
+    JSON.parse(localStorage.getItem('kbdc_hr_staff') || '[]').forEach(function(s){
+      if (s && kbdcNormName(s.name) === want && s.pin) pin = String(s.pin);
+    });
+  } catch(e) {}
+  return pin;
+}
+/* One row per person in a role, however many the Sheet holds.
+   A person lands in kbdc_role_emp_* twice: once derived from their HR record
+   (carrying their app-login PIN) and once added by hand in Task Management
+   (carrying the PIN that opens their task list). The two rows have different
+   ids, and RoleEmployees rows are keyed by id, so the merge treats them as
+   two different people and keeps both for good — which is why each rider was
+   listed twice in the picker, under two different PINs.
+   Collapse by name, and keep the row whose PIN is the person's own task PIN:
+   the app-login PIN must never become the one that opens the task list. */
+function kbdcDedupeRoleEmps(list) {
+  var byName = {}, order = [];
+  function rank(e, login) {
+    var p = String((e && e.pin) || '');
+    if (!p) return 0;
+    return (login && p === login) ? 1 : 2;
+  }
+  (list || []).forEach(function(e){
+    if (!e || !e.name) return;
+    var k = kbdcNormName(e.name);
+    if (!(k in byName)) { byName[k] = e; order.push(k); return; }
+    var login = kbdcStaffLoginPin(e.name);
+    if (rank(e, login) > rank(byName[k], login)) byName[k] = e;
+  });
+  return order.map(function(k){ return byName[k]; });
+}
 function getRoleEmployees(code) {
-  try { return JSON.parse(localStorage.getItem('kbdc_role_emp_' + code) || '[]'); } catch(e) { return []; }
+  try { return kbdcDedupeRoleEmps(JSON.parse(localStorage.getItem('kbdc_role_emp_' + code) || '[]')); } catch(e) { return []; }
 }
 function setRoleEmployees(code, arr) {
   try { localStorage.setItem('kbdc_role_emp_' + code, JSON.stringify(arr)); } catch(e) {}
@@ -4797,9 +4833,19 @@ function kbdcSyncRoleEmployeesFromHR() {
       try { existing = JSON.parse(localStorage.getItem('kbdc_role_emp_' + code) || '[]'); } catch(e){}
       var hrNames = {};
       var merged = grouped[code].map(function(newEmp) {
-        hrNames[newEmp.name] = true;
-        var ex = existing.find(function(e){ return e.name === newEmp.name; });
-        return ex ? Object.assign({}, newEmp, { pin: ex.pin || newEmp.pin }) : newEmp;
+        /* Matched on the exact string, so "Aaquib Arshad" from HR and the
+           same name added by hand in Task Management counted as two people
+           on any difference of case or spacing — a second row for one rider,
+           holding their app-login PIN instead of their task PIN. */
+        hrNames[kbdcNormName(newEmp.name)] = true;
+        var matches = existing.filter(function(e){ return e && e.name && kbdcNormName(e.name) === kbdcNormName(newEmp.name); });
+        /* Keep the PIN already set against the role, and where the person has
+           both rows, keep the one that is NOT their app-login PIN: that is
+           the PIN which opens their task list. newEmp carries the login PIN,
+           straight off their HR record, and taking that one locked a rider
+           out of his own tasks while letting his login PIN open them. */
+        var ex = matches.filter(function(e){ return e.pin && String(e.pin) !== String(newEmp.pin || ''); })[0] || matches[0];
+        return ex ? Object.assign({}, newEmp, { id: ex.id || newEmp.id, pin: ex.pin || newEmp.pin }) : newEmp;
       });
       // Keep employees added manually in Task Management ("+ Add Another
       // Employee") whose name has no matching HR Admin record for this role.
@@ -4807,7 +4853,7 @@ function kbdcSyncRoleEmployeesFromHR() {
       // with only what's derivable from HR, so a manually-added name would
       // survive only until the next page load — which looked like "adding a
       // name against a role doesn't save."
-      var manual = existing.filter(function(e){ return !hrNames[e.name]; });
+      var manual = existing.filter(function(e){ return e && e.name && !hrNames[kbdcNormName(e.name)]; });
       localStorage.setItem('kbdc_role_emp_' + code, JSON.stringify(merged.concat(manual)));
     });
   } catch(e) { console.warn('kbdcSyncRoleEmployeesFromHR error:', e); }
