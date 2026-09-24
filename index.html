@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-22-1';
+var KBDC_APP_VERSION = '2026-09-24-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
@@ -10766,6 +10766,42 @@ function kbdcLsArray(key) { try { return JSON.parse(localStorage.getItem(key) ||
 /* Long enough for a slow Apps Script call on a poor connection, short enough
    that a dead request cannot hold a sync cycle open past the next one. */
 var KBDC_REQ_TIMEOUT_MS = 45000;
+/* ONE request to Google at a time, across the whole app.
+   The three backends are separate deployments but they answer from the same
+   Google account, and the app can have several syncs in flight at once: the
+   scheduled cycle, a tick pushed the instant someone taps it, a check-in, the
+   Inventory screen asking on its own, and the Sync now / Re-upload buttons.
+   Nothing stopped those overlapping, so a handful of requests could leave the
+   device together — and when that trips Google, it trips for all of them at
+   once. That is the failure the owner sees: "Could not read the Google Sheet —
+   Failed to fetch · Attendance Sheet: Failed to fetch · Inventory: Failed to
+   fetch", all three at the same moment, minutes after a clean backup, on three
+   deployments that have nothing else in common.
+   Queueing costs a little time and removes the burst entirely. */
+var KBDC_REQ_GAP_MS = 200;
+var kbdcReqChain = Promise.resolve();
+var kbdcReqActive = 0, kbdcReqPeak = 0;
+function kbdcRunQueued(fn) {
+  function pause() { return new Promise(function(r){ setTimeout(r, KBDC_REQ_GAP_MS); }); }
+  var out = kbdcReqChain.then(function(){
+    kbdcReqActive++;
+    if (kbdcReqActive > kbdcReqPeak) kbdcReqPeak = kbdcReqActive;
+    return Promise.resolve().then(fn).then(
+      function(v){ kbdcReqActive--; return v; },
+      function(e){ kbdcReqActive--; throw e; });
+  }, function(){
+    kbdcReqActive++;
+    if (kbdcReqActive > kbdcReqPeak) kbdcReqPeak = kbdcReqActive;
+    return Promise.resolve().then(fn).then(
+      function(v){ kbdcReqActive--; return v; },
+      function(e){ kbdcReqActive--; throw e; });
+  });
+  // The chain must survive a failure, or one rejected request stops every
+  // later one — the whole device going quiet, which is the bug this app has
+  // had in three different disguises already.
+  kbdcReqChain = out.then(pause, pause);
+  return out;
+}
 async function kbdcBackendReqAt(u, sheet, action, payload) {
   if (!u) throw new Error('No backend URL set. Paste your Apps Script Web App URL above and click Save first.');
   // Content-Type must stay "text/plain" here — sending "application/json" makes the
@@ -10785,27 +10821,36 @@ async function kbdcBackendReqAt(u, sheet, action, payload) {
      why attendance would work for two days and then stop, with the status line
      frozen at the same "read N minutes ago" for both Sheets at once. Give up
      and let the cycle end, so the next one can run. */
-  var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
-  var timer = ctl ? setTimeout(function(){ try { ctl.abort(); } catch(e) {} }, KBDC_REQ_TIMEOUT_MS) : null;
-  var r;
-  try {
-    r = await fetch(u, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(_body),
-      signal: ctl ? ctl.signal : undefined
-    });
-  } catch (fetchErr) {
-    if (fetchErr && fetchErr.name === 'AbortError') {
-      throw new Error('The Google Sheet did not answer within ' +
-        Math.round(KBDC_REQ_TIMEOUT_MS / 1000) + ' seconds — giving up so the next sync can run');
+  return kbdcRunQueued(async function () {
+    var ctl = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    var timer = ctl ? setTimeout(function(){ try { ctl.abort(); } catch(e) {} }, KBDC_REQ_TIMEOUT_MS) : null;
+    var r;
+    try {
+      r = await fetch(u, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(_body),
+        signal: ctl ? ctl.signal : undefined
+      });
+    } catch (fetchErr) {
+      if (fetchErr && fetchErr.name === 'AbortError') {
+        throw new Error('The Google Sheet did not answer within ' +
+          Math.round(KBDC_REQ_TIMEOUT_MS / 1000) + ' seconds — giving up so the next sync can run');
+      }
+      /* "Failed to fetch" is the browser refusing to make the call at all —
+         no signal, or Google declining to talk to this device just now. It is
+         transient by nature, so say what it means instead of leaving the bare
+         words on screen. */
+      if (fetchErr && /Failed to fetch|NetworkError|Load failed/i.test(String(fetchErr.message || ''))) {
+        throw new Error('Could not reach Google just now (the connection was refused, not the Sheet) — it retries on its own');
+      }
+      throw fetchErr;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
-    throw fetchErr;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  return r.json();
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  });
 }
 async function kbdcBackendReq(sheet, action, payload) { return kbdcBackendReqAt(kbdcBackendUrl(), sheet, action, payload); }
 async function kbdcInvBackendReq(sheet, action, payload) { return kbdcBackendReqAt(kbdcInvBackendUrl(), sheet, action, payload); }
