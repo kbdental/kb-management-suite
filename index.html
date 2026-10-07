@@ -870,16 +870,16 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-09-26-1';
+var KBDC_APP_VERSION = '2026-10-07-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
-var KBDC_EXPECTED_BACKEND = '2026-09-08-1';
+var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
 /* The Inventory backend is a separate script and now carries its own version:
    it gained getStamps, which the main one has had since August. Without that
    the app could not ask what had changed, so every cycle re-read all 715 items
    and every transaction in full — replies large enough for Apps Script's
    redirect hop to drop, reported as HTTP 404 and "returned no data". */
-var KBDC_EXPECTED_INV_BACKEND = '2026-09-22-1';
+var KBDC_EXPECTED_INV_BACKEND = '2026-10-07-1';
 function kbdcInvExpectedVersion() {
   try {
     var iu = kbdcInvBackendUrl();
@@ -2611,7 +2611,13 @@ function saveActiveBranch(b) {
 // deployment that was never re-published returns JSON with no version field;
 // a token mismatch returns {ok:false,'Unauthorized'}; a deleted deployment
 // fails to resolve at all. Guessing between those has cost days.
-async function kbdcProbeBackend(url, label) {
+async function kbdcProbeBackend(url, label, expectVer) {
+  /* Each backend is checked against ITS OWN expected version. The Inventory
+     script is a separate deployment on its own version (it gained getStamps),
+     so measuring it against the main script's version told the owner his
+     correct, up-to-date Inventory deployment was stale and asked him to
+     re-publish it — repeatedly, and for nothing. */
+  expectVer = expectVer || KBDC_EXPECTED_BACKEND;
   var out = { label: label, url: url || '(not set)' };
   if (!url) { out.result = 'No URL saved for this backend.'; return out; }
   var t0 = Date.now();
@@ -2633,9 +2639,9 @@ async function kbdcProbeBackend(url, label) {
       } else if (!j.version) {
         out.result = 'Reachable, but this script has NO version — it is old code. ' +
                      'Paste the new script, then Deploy → Manage deployments → Edit → New version.';
-      } else if (j.version !== KBDC_EXPECTED_BACKEND) {
+      } else if (j.version !== expectVer) {
         out.result = 'Reachable, but running version ' + j.version + ' — this app expects ' +
-                     KBDC_EXPECTED_BACKEND + '. Re-publish a new deployment version.';
+                     expectVer + '. Re-publish a new deployment version.';
       } else {
         out.result = 'OK — version ' + j.version;
       }
@@ -2680,7 +2686,7 @@ function SyncDiagnostics({ onClose }) {
     var res = [];
     res.push(await kbdcProbeBackend(kbdcBackendUrl(), 'Main backend'));
     if (kbdcAttBackendSeparate()) res.push(await kbdcProbeBackend(kbdcAttBackendUrl(), 'Attendance backend'));
-    res.push(await kbdcProbeBackend(kbdcInvBackendUrl(), 'Inventory backend'));
+    res.push(await kbdcProbeBackend(kbdcInvBackendUrl(), 'Inventory backend', kbdcInvExpectedVersion()));
     setProbes(res);
     setBusy(false);
   };
@@ -11198,7 +11204,7 @@ function kbdcRoleEmpRowsToByCode(rows) {
 // could sit there all day disagreeing about who came to work, each convinced
 // it was fully backed up. Fail loudly instead, and retry a transient rejection
 // the same way the push does.
-async function kbdcBackendPullBatch(url, sheetNames, attempts) {
+async function kbdcBackendPullBatch(url, sheetNames, attempts, extra) {
   var tries = attempts || 3, lastErr;
   for (var i = 0; i < tries; i++) {
     try {
@@ -11210,7 +11216,8 @@ async function kbdcBackendPullBatch(url, sheetNames, attempts) {
          all. That is a transient redirect failure, not a broken deployment,
          so say so and try again with a fresh URL rather than reporting a
          Sheet problem that does not exist. */
-      var res = await kbdcBackendReqBatch(kbdcBustCache(url, i), 'getBatch', { sheets: sheetNames });
+      var res = await kbdcBackendReqBatch(kbdcBustCache(url, i), 'getBatch',
+        Object.assign({ sheets: sheetNames }, extra || {}));
       if (res && res.message && !res.data) {
         throw new Error('Apps Script answered the redirected request with its greeting page ' +
           'instead of the data (a known Google redirect hiccup) — retrying');
@@ -11351,6 +11358,35 @@ async function kbdcPullGroup(url, sheets, depth) {
     return { data: merged, version: a.version || b.version };
   }
 }
+/* A tab too big to arrive in one piece, read a page at a time.
+   Fetching fewer tabs per call stops helping once a SINGLE tab is bigger than
+   Apps Script's redirect hop will carry: InventoryItems, at 725 items, is
+   about 846 KB on its own, so every read of it was answered with the script's
+   greeting page instead of the data — "Inventory: ... a known Google redirect
+   hiccup — retrying", for ever, because each retry asked for exactly the same
+   oversized reply.
+   Needs backend 2026-10-07-1 or later. An older script ignores `pages` and
+   returns the whole tab; `more` is then undefined, this stops after one pass,
+   and the behaviour is exactly what it was before — no worse, just not fixed
+   until that script is redeployed. */
+var KBDC_PULL_PAGE_ROWS = 150;
+async function kbdcPullPaged(url, name) {
+  var rows = [], offset = 0, version = '', pagesRead = 0;
+  // A tab of 30,000 rows would be 200 pages; stop long before that rather
+  // than loop for ever on a backend that answers oddly.
+  while (pagesRead++ < 200) {
+    var pages = {}; pages[name] = { offset: offset, limit: KBDC_PULL_PAGE_ROWS };
+    var res = await kbdcBackendPullBatch(url, [name], 2, { pages: pages });
+    version = res.version || version;
+    var got = ((res.data || {})[name]) || [];
+    rows = rows.concat(got);
+    var more = res.more && res.more[name];
+    if (!more || !got.length) break;
+    offset += got.length;
+  }
+  var data = {}; data[name] = rows;
+  return { data: data, version: version, paged: true };
+}
 async function kbdcPullSheets(url, names, forceAll) {
   var version = '', stamps = null;
   // Ask what actually moved. One tiny reply; needs backend 2026-08-19-2 or
@@ -11404,7 +11440,23 @@ async function kbdcPullSheets(url, names, forceAll) {
 
   var remote = {}, biggest = 0;
   for (var i = 0; i < groups.length; i++) {
-    var got = await kbdcPullGroup(url, groups[i], 0);
+    var got;
+    var lone = (groups[i].length === 1) ? groups[i][0] : null;
+    /* Over this size a reply does not survive the redirect hop, so there is no
+       point asking for it whole and no smaller group left to split into. */
+    if (lone && (sizes[lone] || 0) > 250000) {
+      got = await kbdcPullPaged(url, lone);
+    } else {
+      try {
+        got = await kbdcPullGroup(url, groups[i], 0);
+      } catch (groupErr) {
+        // One tab, asked for on its own, that still could not be had: its size
+        // has not been measured yet (a new device, or a tab that just grew).
+        // Page it rather than report a Sheet problem that does not exist.
+        if (!lone) throw groupErr;
+        got = await kbdcPullPaged(url, lone);
+      }
+    }
     version = got.version || version;
     var data = got.data || {};
     Object.keys(data).forEach(function(k) {
@@ -13203,6 +13255,18 @@ function InventoryPage({ invRole, userName }) {
      Released on unmount, so a device left on another page goes back to the
      quiet pace and the clinic's Apps Script quota is not spent on nobody. */
   React.useEffect(function(){ return kbdcWatchLive(); }, []);
+  /* Redraw when the sync status changes. The badge in the header subscribes;
+     this banner only read the status while rendering, so the two disagreed on
+     screen — a red "Stock changes are not reaching the Google Sheet" sitting
+     under a green "Backed up just now", because the error had cleared and
+     nothing had redrawn this screen. It failed the other way too: a failure
+     that began while this page was open stayed invisible. */
+  var stTick = React.useState(0);
+  React.useEffect(function(){
+    function onStatus(){ stTick[1](function(n){ return n + 1; }); }
+    window.addEventListener('kbdc-sync-status', onStatus);
+    return function(){ window.removeEventListener('kbdc-sync-status', onStatus); };
+  }, []);
   if (!invRole) {
     return React.createElement('div', { style:{ padding:40, textAlign:'center', color:'#78909C', fontFamily:"'Poppins',sans-serif" } }, 'You do not have Inventory access. Ask an admin to grant it in HR Admin.');
   }

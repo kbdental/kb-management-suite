@@ -110,13 +110,29 @@ function doPost(e) {
       return respond({ ok: true, stamps: kbdcReadRevs_() });
     }
     if (action === 'getBatch') {
+      /* A tab can be read a page at a time.
+         Apps Script answers a POST with a 302 that the browser must follow,
+         and a reply too big for that hop is simply dropped — the app sees the
+         script's doGet greeting instead of the data. Reading fewer tabs per
+         call stops helping once ONE tab is bigger than the hop will carry
+         (InventoryItems, at 725 items, is ~846 KB on its own). So the client
+         can now ask for a slice of a tab, and page through it.
+         `pages` is optional: { SheetName: { offset: 0, limit: 150 } }. A
+         caller that does not send it gets the whole tab exactly as before. */
       var sheetNames = body.sheets || [];
-      var data = {};
+      var pages = body.pages || {};
+      var data = {}, more = {}, total = {};
       sheetNames.forEach(function(name) {
         var sn2 = sanitizeSheetName(name);
-        data[name] = readAllRows(sn2);
+        var pg = pages[name];
+        if (pg && pg.limit) {
+          var got = readRowsPage(sn2, Number(pg.offset) || 0, Number(pg.limit));
+          data[name] = got.rows; more[name] = got.more; total[name] = got.total;
+        } else {
+          data[name] = readAllRows(sn2);
+        }
       });
-      return respond({ ok: true, data: data });
+      return respond({ ok: true, data: data, more: more, total: total });
     }
     return respond({ ok: false, error: 'Unknown action: ' + action });
   } catch (err) {
@@ -137,7 +153,7 @@ function doGet(e) {
  *
  * Bump this whenever this file changes.
  */
-var KBDC_INV_BACKEND_VERSION = '2026-09-22-1';
+var KBDC_INV_BACKEND_VERSION = '2026-10-07-1';
 
 function respond(obj) {
   if (obj && typeof obj === 'object' && obj.version === undefined) {
@@ -350,6 +366,35 @@ function saveAllRowsLocked_(sheetName, rows) {
 }
 
 /** Reads a tab back as an array of objects, keyed by its header row. */
+/**
+ * One page of a tab, read without pulling the whole sheet into memory.
+ *
+ * readAllRows uses getDataRange(), which fetches every cell before anything
+ * can be returned — on a big tab that is both the slow part and the reason
+ * the reply is too large to survive Apps Script's redirect hop. This reads
+ * the header row plus the requested slice and nothing else.
+ */
+function readRowsPage(sheetName, offset, limit) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return { rows: [], more: false, total: 0 };
+  var lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+  if (lastRow < 2 || lastCol < 1) return { rows: [], more: false, total: 0 };
+  var total = lastRow - 1;
+  offset = Math.max(0, offset || 0);
+  if (offset >= total) return { rows: [], more: false, total: total };
+  var n = Math.min(Math.max(1, limit || 100), total - offset);
+  var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  var values = sheet.getRange(2 + offset, 1, n, lastCol).getValues();
+  var rows = [];
+  for (var i = 0; i < values.length; i++) {
+    var row = {};
+    for (var j = 0; j < headers.length; j++) row[headers[j]] = values[i][j];
+    rows.push(row);
+  }
+  return { rows: rows, more: (offset + n) < total, total: total };
+}
+
 function readAllRows(sheetName) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(sheetName);
