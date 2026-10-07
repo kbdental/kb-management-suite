@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-07-1';
+var KBDC_APP_VERSION = '2026-10-07-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -2687,6 +2687,21 @@ function SyncDiagnostics({ onClose }) {
     res.push(await kbdcProbeBackend(kbdcBackendUrl(), 'Main backend'));
     if (kbdcAttBackendSeparate()) res.push(await kbdcProbeBackend(kbdcAttBackendUrl(), 'Attendance backend'));
     res.push(await kbdcProbeBackend(kbdcInvBackendUrl(), 'Inventory backend', kbdcInvExpectedVersion()));
+    /* Write down what the probe just learned. These versions were only ever
+       recorded by a successful SYNC, so right after a redeploy the panel could
+       say "Inventory backend — OK, version 2026-10-07-1" while the row above
+       it still read the old version in red and the header badge still said
+       "Backend needs redeploy" — the app disbelieving its own test. A tab that
+       has not changed is not re-read, so that stale version could sit there
+       for hours after a redeploy that had plainly worked. */
+    var seen = {};
+    res.forEach(function(pr){
+      if (!pr || !pr.version) return;
+      if (pr.label === 'Main backend') seen.backendVersion = pr.version;
+      else if (pr.label === 'Attendance backend') seen.attBackendVersion = pr.version;
+      else if (pr.label === 'Inventory backend') seen.invBackendVersion = pr.version;
+    });
+    if (Object.keys(seen).length) kbdcSetSyncStatus(seen);
     setProbes(res);
     setBusy(false);
   };
@@ -11344,11 +11359,32 @@ async function kbdcPullGroup(url, sheets, depth) {
     // Only the first attempt retries. Splitting is for a reply that was too
     // big to arrive; when the real cause is Google refusing calls, retrying
     // every half as well turns one failure into a burst — which is the thing
-    // that provoked the refusal. So: split once, shallowly, and let the next
-    // cycle (by then knowing each tab's size) do better.
+    // that provoked the refusal. So: split shallowly, and let the next cycle
+    // (by then knowing each tab's size) do better.
     return await kbdcBackendPullBatch(url, sheets, depth ? 1 : 2);
   } catch (e) {
-    if (sheets.length < 2 || depth >= 1) throw e;
+    /* One tab, on its own, that still cannot be had BECAUSE it is too big:
+       nothing is left to split, so page it. This is the only route to paging
+       on a device that has not yet measured the tab — a new phone, or one
+       that cleared its storage — where the tab starts out inside a group of
+       four and its size is unknown. Without it the splitting stopped two
+       levels up and the device reported "Inventory Sheet is busy ... HTTP
+       404" for ever.
+       Only for a failure that looks like size. Paging ANY failure turns one
+       refused request into a run of them against a backend that is already
+       refusing calls — the exact burst that provokes the refusal, and the
+       mistake the shallow split cap was there to avoid. */
+    /* Everything below is for a reply that was too big to ARRIVE. When the
+       cause is Google refusing or failing to answer, splitting and paging
+       just multiply the doomed requests — seven per group instead of three,
+       each waiting out the full timeout, one after another because the app
+       sends one request at a time. That is minutes of a device being stuck,
+       and a burst aimed at a backend that is already struggling. Fail fast
+       and let the next cycle try again. */
+    if (!kbdcLooksOversize(e)) throw e;
+    if (sheets.length === 1) return await kbdcPullPaged(url, sheets[0]);
+    // Deep enough to reach a single tab from a group of four, and no deeper.
+    if (depth >= 2) throw e;
     var half = Math.ceil(sheets.length / 2);
     var a = await kbdcPullGroup(url, sheets.slice(0, half), depth + 1);
     var b = await kbdcPullGroup(url, sheets.slice(half), depth + 1);
@@ -11370,11 +11406,21 @@ async function kbdcPullGroup(url, sheets, depth) {
    and the behaviour is exactly what it was before — no worse, just not fixed
    until that script is redeployed. */
 var KBDC_PULL_PAGE_ROWS = 150;
+/* A reply that was too big to arrive, told apart from Google simply refusing
+   to talk just now. Apps Script drops an oversized reply in a handful of
+   recognisable ways: the redirected GET lands back on the script and returns
+   its greeting, or the hop 404s, or nothing comes at all. A refused
+   connection is a different thing and must not be answered with more
+   requests. */
+function kbdcLooksOversize(e) {
+  var m = String((e && e.message) || '');
+  return /greeting page|returned no data|\b404\b/i.test(m);
+}
 async function kbdcPullPaged(url, name) {
   var rows = [], offset = 0, version = '', pagesRead = 0;
   // A tab of 30,000 rows would be 200 pages; stop long before that rather
   // than loop for ever on a backend that answers oddly.
-  while (pagesRead++ < 200) {
+  while (pagesRead++ < 60) {
     var pages = {}; pages[name] = { offset: offset, limit: KBDC_PULL_PAGE_ROWS };
     var res = await kbdcBackendPullBatch(url, [name], 2, { pages: pages });
     version = res.version || version;
@@ -11384,6 +11430,15 @@ async function kbdcPullPaged(url, name) {
     if (!more || !got.length) break;
     offset += got.length;
   }
+  /* Written down here rather than by the caller: a group is usually split
+     several times before a single tab is reached, and the merge on the way
+     back up does not carry the fact that one of them had to be paged. The
+     next read then asks for the whole tab again — one request that cannot
+     succeed, every cycle. */
+  try {
+    var pt = JSON.parse(localStorage.getItem('kbdc_pull_paged') || '{}');
+    if (!pt[name]) { pt[name] = 1; localStorage.setItem('kbdc_pull_paged', JSON.stringify(pt)); }
+  } catch (e) {}
   var data = {}; data[name] = rows;
   return { data: data, version: version, paged: true };
 }
@@ -11398,9 +11453,15 @@ async function kbdcPullSheets(url, names, forceAll) {
     var st = await kbdcBackendReqBatch(url, 'getStamps', {});
     if (st && st.ok !== false && st.stamps) { stamps = st.stamps; version = st.version || ''; }
   } catch (e) { /* older backend, or a blip — read normally below */ }
-  var prevRevs = {}, sizes = {};
+  var prevRevs = {}, sizes = {}, pagedTabs = {};
   try { prevRevs = JSON.parse(localStorage.getItem('kbdc_pull_revs') || '{}'); } catch(e) {}
   try { sizes = JSON.parse(localStorage.getItem('kbdc_pull_sizes') || '{}'); } catch(e) {}
+  /* Tabs that have already had to be paged once. Measured size alone is not
+     enough to decide: what is measured is the size of the ASSEMBLED rows, not
+     of the reply that failed to arrive, and the two are not the same. Without
+     this the device re-discovered the problem every single cycle — one request
+     that could never succeed, every time, before falling back. */
+  try { pagedTabs = JSON.parse(localStorage.getItem('kbdc_pull_paged') || '{}'); } catch(e) {}
 
   var want = names;
   if (stamps && !forceAll) {
@@ -11429,7 +11490,7 @@ async function kbdcPullSheets(url, names, forceAll) {
     // device at once, which is its own way of getting throttled. If a group
     // does turn out to be too big, kbdcPullGroup below splits it and retries,
     // so the size is discovered rather than guessed.
-    if (est !== undefined && est > 150000) {
+    if (pagedTabs[n] || (est !== undefined && est > 150000)) {
       if (cur.length) { groups.push(cur); cur = []; curBytes = 0; }
       groups.push([n]); return;
     }
@@ -11444,7 +11505,7 @@ async function kbdcPullSheets(url, names, forceAll) {
     var lone = (groups[i].length === 1) ? groups[i][0] : null;
     /* Over this size a reply does not survive the redirect hop, so there is no
        point asking for it whole and no smaller group left to split into. */
-    if (lone && (sizes[lone] || 0) > 250000) {
+    if (lone && (pagedTabs[lone] || (sizes[lone] || 0) > 250000)) {
       got = await kbdcPullPaged(url, lone);
     } else {
       try {

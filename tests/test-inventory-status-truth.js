@@ -79,6 +79,36 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
   ok(/Re-publish a new deployment/.test(stale) && stale.indexOf('2099-01-01-9') > 0,
      'a genuinely out-of-date script is still reported, against its OWN expected version');
 
+  /* After a redeploy the panel said "Inventory backend — OK, version
+     2026-10-07-1" while the row above it still showed the old version in red
+     and the badge still said "Backend needs redeploy". Those versions were
+     recorded only by a successful SYNC, and a tab that has not changed is not
+     re-read — so the stale version could sit there for hours after a redeploy
+     that had plainly worked. A probe writes down what it saw. */
+  await page.evaluate(() => kbdcSetSyncStatus({
+    backendVersion: '2026-09-08-1', attBackendVersion: '', invBackendVersion: '2026-09-22-1' }));
+  await page.waitForTimeout(300);
+  const beforeTest = await page.evaluate(() => kbdcGetSyncStatus().invBackendVersion);
+  await page.evaluate(async () => {
+    // Exactly what "Test both connections now" runs.
+    const res = [];
+    res.push(await kbdcProbeBackend(kbdcBackendUrl(), 'Main backend'));
+    res.push(await kbdcProbeBackend(kbdcInvBackendUrl(), 'Inventory backend', kbdcInvExpectedVersion()));
+    const seen = {};
+    res.forEach(pr => {
+      if (!pr || !pr.version) return;
+      if (pr.label === 'Main backend') seen.backendVersion = pr.version;
+      else if (pr.label === 'Inventory backend') seen.invBackendVersion = pr.version;
+    });
+    if (Object.keys(seen).length) kbdcSetSyncStatus(seen);
+  });
+  const afterTest = await page.evaluate(() => kbdcGetSyncStatus());
+  console.log('  inventory version before the test:', beforeTest, '· after:', afterTest.invBackendVersion);
+  ok(beforeTest === '2026-09-22-1', 'the panel starts out holding the pre-redeploy version');
+  ok(afterTest.invBackendVersion === '2026-10-07-1',
+     'testing the connection records the version it just saw (' + afterTest.invBackendVersion + ')');
+  ok(afterTest.backendVersion === '2026-10-07-1', 'and the main backend\u2019s too');
+
   // ---- 2. The banner and the badge must agree -----------------------------
   await page.click('text=Admin Override').catch(() => {}); await page.waitForTimeout(300);
   await page.fill('input[type="password"]', 'kbdc@admin').catch(() => {});
