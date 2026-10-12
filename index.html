@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-12-4';
+var KBDC_APP_VERSION = '2026-10-12-5';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -11708,7 +11708,10 @@ function kbdcReconcileInvStock() {
    A Sheet round trip can hand the flag back as the text 'TRUE', so accept
    both. */
 function kbdcInvRowRemoved(r){ var v = r && r.removed; return v === true || v === 'true' || v === 'TRUE'; }
-function kbdcInvRowKey(r){ return String((r&&r.name)||'').trim().toLowerCase()+'||'+String((r&&r.cat)||'').trim().toLowerCase(); }
+/* Items are identified by name + category. Named apart from kbdcInvRowKey
+   deliberately: there were two function declarations with that one name, and
+   the later one silently replaced this for every caller. */
+function kbdcInvItemKey(r){ return String((r&&r.name)||'').trim().toLowerCase()+'||'+String((r&&r.cat)||'').trim().toLowerCase(); }
 function kbdcMergeInvItemsByNameCat(localRows, remoteRows) {
   function key(r){ return String(r.name||'').trim().toLowerCase()+'||'+String(r.cat||'').trim().toLowerCase(); }
   function ts(x){ var t=x&&x.updatedAt; if(!t) return 0; var n=new Date(t).getTime(); return isNaN(n)?0:n; }
@@ -12561,10 +12564,10 @@ async function kbdcAutoSyncInventoryRun(useUrl) {
       if (localKey === 'kbdc_inv_items') {
         var liveOnSheet = {};
         (remoteByKey[localKey] || []).forEach(function(r){
-          if (r && r.name && !kbdcInvRowRemoved(r)) liveOnSheet[kbdcInvRowKey(r)] = true;
+          if (r && r.name && !kbdcInvRowRemoved(r)) liveOnSheet[kbdcInvItemKey(r)] = true;
         });
         invDeleteUndone = mergedRows.some(function(r){
-          return kbdcInvRowRemoved(r) && liveOnSheet[kbdcInvRowKey(r)];
+          return kbdcInvRowRemoved(r) && liveOnSheet[kbdcInvItemKey(r)];
         });
       }
       var next = JSON.stringify(mergedRows);
@@ -12843,6 +12846,16 @@ function DataBackendTab() {
         // The field worth comparing first. Everything else is reported as
         // "differs" without picking a winner.
         function headline(r){ return (r && r.stock !== undefined) ? 'stock' : ((r && r.qty !== undefined) ? 'qty' : ''); }
+        /* Enough to find the row by eye on the Sheet or in Transactions. */
+        function detail(r){
+          if (!r) return '?';
+          var bits2 = [String(r.name || r.id || '?')];
+          if (r.qty !== undefined && r.qty !== '') bits2.push('qty ' + r.qty);
+          var d = String(r.date || '').slice(0, 10);
+          if (d) bits2.push(d);
+          if (r.person) bits2.push(String(r.person));
+          return bits2.join(' \u00b7 ');
+        }
         var rByKey = {}; remote.forEach(function(r){ if (r) rByKey[key(r)] = r; });
         var lByKey = {}; local.forEach(function(r){ if (r) lByKey[key(r)] = r; });
         var onlyLocal = 0, onlySheet = 0, differ = [], removedLocally = 0;
@@ -12859,13 +12872,23 @@ function DataBackendTab() {
             differ.push(label(lr) + ': differs');
           }
         });
+        var sheetOnly = [], localOnly = [];
         Object.keys(rByKey).forEach(function(k){
-          if (!(k in lByKey)) onlySheet++;
+          if (!(k in lByKey)) { onlySheet++; sheetOnly.push(detail(rByKey[k])); }
+        });
+        Object.keys(lByKey).forEach(function(k){
+          var lr = lByKey[k];
+          if (!kbdcInvRowRemoved(lr) && !(k in rByKey)) localOnly.push(detail(lr));
         });
         var bits = ['Sheet ' + remote.length + ' rows, here ' + local.length];
         if (removedLocally) bits.push(removedLocally + ' deleted here');
-        if (onlyLocal) bits.push(onlyLocal + ' only on this device');
-        if (onlySheet) bits.push(onlySheet + ' only on the Sheet');
+        if (onlyLocal) bits.push(onlyLocal + ' only on this device: ' + localOnly.slice(0, 4).join('; '));
+        if (onlySheet) bits.push(onlySheet + ' only on the Sheet: ' + sheetOnly.slice(0, 4).join('; '));
+        /* Rows that collapse onto the same key cannot be told apart, so the
+           counts above would under-report. Say so rather than quietly be wrong. */
+        if (remote.length !== Object.keys(rByKey).length) {
+          bits.push((remote.length - Object.keys(rByKey).length) + ' row(s) on the Sheet share an id with another');
+        }
         var head = (differ.length || onlyLocal || onlySheet) ? '\u26a0 ' : '\u2705 ';
         if (differ.length) {
           bits.push(differ.length + ' differ');

@@ -89,6 +89,33 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
   });
 
   console.log('  ' + JSON.stringify(report, null, 0));
+
+  // ---- Transactions: two missing rows must report as two, and be named ----
+  const tx = await page.evaluate(async () => {
+    const SHEET = [
+      { id: 'tx1', type: 'OUT', name: 'L.A.',   cat: 'General', qty: 1, date: '2026-10-11T05:00:00.000Z', person: 'Vishal' },
+      { id: 'tx2', type: 'OUT', name: 'Gloves', cat: 'General', qty: 2, date: '2026-10-11T06:00:00.000Z', person: 'Suman' },
+      { id: 'tx3', type: 'OUT', name: 'L.A.',   cat: 'General', qty: 5, date: '2026-10-12T04:00:00.000Z', person: 'Vishal' }
+    ];
+    // This device has only the first. Two are missing, and two of the three
+    // are the same item on the same day — the case that used to collapse.
+    localStorage.setItem('kbdc_inv_tx', JSON.stringify([SHEET[0]]));
+    const key = r => kbdcInvRowKey(r);
+    const rByKey = {}; SHEET.forEach(r => rByKey[key(r)] = r);
+    const lByKey = {}; [SHEET[0]].forEach(r => lByKey[key(r)] = r);
+    const sheetOnly = [];
+    Object.keys(rByKey).forEach(k => { if (!(k in lByKey)) sheetOnly.push(rByKey[k].name + ' qty ' + rByKey[k].qty); });
+    return { onlySheet: sheetOnly.length, names: sheetOnly, distinctKeys: Object.keys(rByKey).length, rows: SHEET.length };
+  });
+  console.log('  stock-out compare:', JSON.stringify(tx));
+  ok(tx.onlySheet === 2, 'two missing stock-outs report as two, not one (' + tx.onlySheet + ')');
+  ok(tx.distinctKeys === tx.rows, 'two movements of the same item on the same day stay distinct');
+  ok(tx.names.some(n => /L\.A\. qty 5/.test(n)), 'and each missing row is named with its quantity: ' + tx.names.join('; '));
+
+  // Only one kbdcInvRowKey may exist: two declarations of one name meant the
+  // later silently replaced the earlier for every caller.
+  const defs = (fs.readFileSync(APP, 'utf8').match(/\nfunction kbdcInvRowKey\s*\(/g) || []).length;
+  ok(defs === 1, 'kbdcInvRowKey is declared exactly once (' + defs + ')');
   ok(report.differ.length === 2, 'it finds the two rows whose quantities disagree (' + report.differ.length + ')');
   ok(report.differ.some(d => /A4 Paper .*here 69, Sheet 71/.test(d)),
      'and names them with both figures: ' + (report.differ[0] || '(none)'));
