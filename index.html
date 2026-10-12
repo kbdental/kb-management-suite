@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-07-2';
+var KBDC_APP_VERSION = '2026-10-12-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -12364,18 +12364,61 @@ async function kbdcDiagnose404(url, label) {
    Asset Register goes only from the device that changed the register. */
 function kbdcInsMasterDirty() { try { return localStorage.getItem('kbdc_ins_master_dirty') === '1'; } catch(e) { return false; } }
 function kbdcInsSetMasterDirty(on) { try { if (on) localStorage.setItem('kbdc_ins_master_dirty', '1'); else localStorage.removeItem('kbdc_ins_master_dirty'); } catch(e) {} }
+/* How the backend identifies a row, mirrored exactly: id when there is one,
+   otherwise name + category. Getting this wrong would send a changed row the
+   Sheet then files as a new one. */
+function kbdcInvRowKey(r) {
+  if (r && r.id !== undefined && r.id !== null && String(r.id).trim() !== '') return 'id:' + r.id;
+  var cat = (r && r.cat !== undefined) ? r.cat : (r && r.category);
+  if (r && r.name !== undefined && cat !== undefined) {
+    return 'nc:' + String(r.name).trim().toLowerCase() + '|' + String(cat).trim().toLowerCase();
+  }
+  return 'c:' + kbdcHashString(JSON.stringify(r));
+}
+function kbdcInvRowSigs() { try { return JSON.parse(localStorage.getItem('kbdc_inv_row_sigs') || '{}'); } catch(e) { return {}; } }
+function kbdcSetInvRowSigs(m) { try { localStorage.setItem('kbdc_inv_row_sigs', JSON.stringify(m)); } catch(e) {} }
+
+/**
+ * What this device still owes the Sheet — row by row, not tab by tab.
+ *
+ * Booking one item in used to send all 725 items: about 846 KB, split into
+ * eight requests, and all-or-nothing, because the tab's signature is only
+ * recorded once every chunk has landed. On a Sheet that is refusing calls -
+ * which is the Sheet this clinic has - one failed chunk meant none of it
+ * counted, the whole lot went again on the next cycle, and the one row that
+ * mattered could sit on the device for hours. From the floor that looks
+ * exactly like "the device I booked it on shows the stock, the others do not".
+ *
+ * The backend merges by key and never deletes what it was not sent, so one
+ * changed row is a complete and correct push. A stock-in now sends a few
+ * hundred bytes instead of 846 KB, which is the difference between a request
+ * that survives a busy Sheet and one that does not.
+ */
 function kbdcInvPendingPush() {
-  var invSigs = kbdcPushSigs(), payload = {}, sigs = {};
+  var invSigs = kbdcPushSigs(), rowSigs = kbdcInvRowSigs();
+  var payload = {}, sigs = {}, nextRowSigs = {};
   KBDC_INVENTORY_MODULES.forEach(function(m) {
     if (m.pushOnly && !kbdcInsMasterDirty()) return;
     var rows = m.get().map(kbdcFlattenRow);
     if (!rows.length) return;
     var sig = kbdcRowsSig(rows);
+    var mine = {};
+    rows.forEach(function(r) { mine[m.sheet + '|' + kbdcInvRowKey(r)] = kbdcHashString(JSON.stringify(r)); });
+    // Carried forward whether or not this tab is sent: a tab whose whole-tab
+    // signature matches is already on the Sheet, so its rows are current.
+    Object.keys(mine).forEach(function(k) { nextRowSigs[k] = mine[k]; });
     if (invSigs['inv:' + m.sheet] === sig) return;   // this Sheet already has it
+    var changed = rows.filter(function(r) {
+      var k = m.sheet + '|' + kbdcInvRowKey(r);
+      return rowSigs[k] !== mine[k];
+    });
     sigs[m.sheet] = sig;
-    payload[m.sheet] = rows;
+    /* Nothing identifiably changed yet the tab did: this device has no row
+       signatures yet (first push after an update), or rows were dropped
+       rather than tombstoned. Send the lot — correctness first. */
+    payload[m.sheet] = changed.length ? changed : rows;
   });
-  return { payload:payload, sigs:sigs };
+  return { payload:payload, sigs:sigs, rowSigs:nextRowSigs };
 }
 // Sent in size-bounded chunks; recorded only after every piece landed, so a
 // failed upload is retried next cycle rather than remembered as done.
@@ -12390,6 +12433,8 @@ async function kbdcInvSendPending(url) {
   var invSigs = kbdcPushSigs();
   Object.keys(pend.sigs).forEach(function(sh){ invSigs['inv:' + sh] = pend.sigs[sh]; });
   kbdcSetPushSigs(invSigs);
+  // Only once every chunk has landed, so a part-sent push is re-sent in full.
+  kbdcSetInvRowSigs(pend.rowSigs || {});
   if (pend.payload['Asset Register']) kbdcInsSetMasterDirty(false);
   return Object.keys(pend.payload);
 }
