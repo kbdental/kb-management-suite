@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-12-8';
+var KBDC_APP_VERSION = '2026-10-12-9';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -11753,18 +11753,74 @@ function kbdcInvRowRemoved(r){ var v = r && r.removed; return v === true || v ==
    deliberately: there were two function declarations with that one name, and
    the later one silently replaced this for every caller. */
 function kbdcInvItemKey(r){ return String((r&&r.name)||'').trim().toLowerCase()+'||'+String((r&&r.cat)||'').trim().toLowerCase(); }
+/**
+ * Merges this device's items with the Sheet's.
+ *
+ * The timestamp decides when there is one. Most of this clinic's 725 items
+ * were imported before anything stamped them, so their updatedAt is blank on
+ * both sides and the timestamp decides nothing — and the rule was that a tie
+ * keeps the local row. The consequence is the bug the owner spent a week on:
+ * a device could never learn about a change it had not made itself. One
+ * person issues ten Sorbitrate on their phone, it reaches the Sheet, and
+ * every other device goes on showing ten in stock for ever, through any
+ * number of Sync nows, because its own untouched copy kept winning the tie.
+ *
+ * When the stamps cannot separate them, ask a different question: has THIS
+ * device changed the row since it last pushed? That is already recorded, row
+ * by row, in kbdc_inv_row_sigs. If the local row still matches what was last
+ * sent, this device has nothing to contribute and the Sheet is simply ahead —
+ * take the Sheet's. If it differs, there is an unsent local edit, and it must
+ * not be thrown away.
+ */
 function kbdcMergeInvItemsByNameCat(localRows, remoteRows) {
   function key(r){ return String(r.name||'').trim().toLowerCase()+'||'+String(r.cat||'').trim().toLowerCase(); }
   function ts(x){ var t=x&&x.updatedAt; if(!t) return 0; var n=new Date(t).getTime(); return isNaN(n)?0:n; }
-  var byKey = {}, order = [];
-  function consider(r){
+  var rowSigs = {};
+  try { rowSigs = kbdcInvRowSigs() || {}; } catch(e) {}
+  /* The row's data, independent of how it happens to be written down: field
+     order, a number against the same number as text, and a blank cell against
+     a zero are all the same row. */
+  function canon(r) {
+    try {
+      var fr = kbdcFlattenRow(r), out = {};
+      Object.keys(fr).sort().forEach(function(n){
+        var v = fr[n];
+        if (v === undefined || v === null || v === '') { out[n] = ''; return; }
+        if (!isNaN(Number(v)) && Number(v) === 0) { out[n] = ''; return; }
+        out[n] = String(v);
+      });
+      return JSON.stringify(out);
+    } catch(e) { return String(Math.random()); }
+  }
+  // True when this device has edited the row since its last successful push.
+  function unpushed(r) {
+    try {
+      var fr = kbdcFlattenRow(r);
+      var k = 'InventoryItems|' + kbdcInvRowKey(fr);
+      var sig = rowSigs[k];
+      if (sig === undefined) return true;   // never sent: assume it is ours
+      return sig !== kbdcHashString(JSON.stringify(fr));
+    } catch(e) { return true; }
+  }
+  var byKey = {}, order = [], mine = {};
+  localRows.forEach(function(r){
     if(!r || !r.name) return;
     var k = key(r);
-    if(!(k in byKey)){ byKey[k]=r; order.push(k); }
-    else if(ts(r) > ts(byKey[k])){ byKey[k]=r; }
-  }
-  localRows.forEach(consider);   // local seen first, so an exact tie keeps local
-  remoteRows.forEach(consider);
+    if(!(k in byKey)){ byKey[k]=r; order.push(k); mine[k]=unpushed(r); }
+  });
+  remoteRows.forEach(function(r){
+    if(!r || !r.name) return;
+    var k = key(r);
+    if(!(k in byKey)){ byKey[k]=r; order.push(k); mine[k]=false; return; }
+    if (ts(r) > ts(byKey[k])) { byKey[k]=r; mine[k]=false; return; }
+    /* Stamps cannot separate them. Yield to the Sheet unless this device is
+       holding an edit it has not sent — and only when the Sheet's row is
+       genuinely different. Swapping in an identical row from the Sheet is not
+       free: the pushed-row signatures are taken over the row object, so a row
+       that merely arrived in a different field order counts as changed, and
+       every sync would send all 725 items again. The test suite caught that. */
+    if (ts(r) === ts(byKey[k]) && !mine[k] && canon(r) !== canon(byKey[k])) { byKey[k]=r; }
+  });
   return order.map(function(k){ return byKey[k]; });
 }
 // Everything for the Main backend travels in ONE getBatch + ONE saveBatch
