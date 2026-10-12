@@ -95,6 +95,33 @@ function extractInvTemplate(html) {
   });
   ok(found === 5, 'an item stored under a different spelling can be issued against (' + found + ')');
 
+  // ---- A genuinely different word, not a spacing slip ---------------------
+  // "Stationary" is not "Stationery". Matching cannot paper over that - the
+  // items are simply under another heading - so the filter has to SAY where
+  // they went, which is the whole of the owner's "71 but it shows 69".
+  const counted = await page.evaluate(() => {
+    const rows = JSON.parse(localStorage.getItem('kbdc_inv_items') || '[]');
+    rows.push({ name: 'Box File', cat: 'Stationary', stock: 2, batches: [] });
+    rows.push({ name: 'Tape', cat: 'Stationary', stock: 4, batches: [] });
+    localStorage.setItem('kbdc_inv_items', JSON.stringify(rows));
+    IT = rows;
+    const cc = catCounts();
+    return {
+      stationery: cc[catKey('Stationery')] || 0,
+      stationary: cc[catKey('Stationary')] || 0,
+      offered: allCats().filter(c => /station/i.test(c))
+    };
+  });
+  console.log('  category counts:', JSON.stringify(counted));
+  ok(counted.stationery === 3 && counted.stationary === 2,
+     'the two spellings are counted separately (' + counted.stationery + ' and ' + counted.stationary + ')');
+  ok(counted.offered.length === 2,
+     'and BOTH are offered in the filter, so the missing items can be found: ' + counted.offered.join(', '));
+
+  const dd = await page.evaluate(() => { sv('stk'); const el = document.querySelector('#p-stk select'); return el ? el.innerHTML : ''; });
+  ok(/Stationery \(3\)/.test(dd) && /Stationary \(2\)/.test(dd),
+     'the filter shows each category with its item count');
+
   ok(errs.length === 0, 'no script errors (' + JSON.stringify(errs).slice(0, 200) + ')');
   await browser.close();
   fs.rmSync(dir, { recursive: true, force: true });

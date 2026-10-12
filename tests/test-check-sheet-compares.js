@@ -124,6 +124,38 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
   ok(batches.here === 'no batches' && batches.sheet === '1 batch, 24 total',
      'and both sides are summarised readably (' + batches.here + ' vs ' + batches.sheet + ')');
 
+  // ---- A blank cell is not a difference from zero -------------------------
+  // The owner's own report: 638 of 726 items "differ", every one of them
+  // `openingStock here "0", Sheet ""`. The clinic's items were imported with
+  // openingStock 0 and the Sheet column is blank. Reporting that buried
+  // whatever was genuinely wrong under 638 false alarms.
+  const blanks = await page.evaluate(() => {
+    const cmp = (a, b) => {
+      if (a === undefined || a === null) a = '';
+      if (b === undefined || b === null) b = '';
+      if (a !== '' && b !== '' && !isNaN(Number(a)) && !isNaN(Number(b))) return Number(a) === Number(b);
+      if ((a === '') !== (b === '')) {
+        const other = (a === '') ? b : a;
+        if (other !== '' && !isNaN(Number(other)) && Number(other) === 0) return true;
+      }
+      return String(a) === String(b);
+    };
+    return {
+      zeroVsBlank: cmp(0, ''),
+      blankVsZero: cmp('', 0),
+      bothBlank:   cmp('', ''),
+      realDiff:    cmp(24, ''),      // 24 here, nothing on the Sheet IS a difference
+      textDiff:    cmp('B-77', ''),  // and so is a batch number that vanished
+      same:        cmp(24, '24')
+    };
+  });
+  console.log('  blank/zero handling:', JSON.stringify(blanks));
+  ok(blanks.zeroVsBlank && blanks.blankVsZero && blanks.bothBlank,
+     'a blank cell and a zero are not reported as a difference');
+  ok(!blanks.realDiff, 'but 24 here against a blank Sheet still is');
+  ok(!blanks.textDiff, 'and so is a batch number that is here but not on the Sheet');
+  ok(blanks.same, 'while 24 and "24" stay equal');
+
   // ---- Transactions: two missing rows must report as two, and be named ----
   const tx = await page.evaluate(async () => {
     const SHEET = [
