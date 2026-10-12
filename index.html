@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-12-2';
+var KBDC_APP_VERSION = '2026-10-12-3';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -12822,12 +12822,58 @@ function DataBackendTab() {
         setOne(mod.id, { busy: false, msg: '⚠ ' + ex.message });
       }
     }
+    /* Compares, rather than counts.
+       It used to report only "Sheet has N rows", which answers the one
+       question that is almost never the problem: the owner's device and the
+       Sheet both held 726 inventory items while disagreeing about how many of
+       something was in stock, and nothing on any screen would say so. Now it
+       names the rows that differ and shows both figures, so "Stationery says
+       69 and the Sheet says 71" stops being a guess. Nothing is changed by
+       this — it only looks. */
     async function pullModule(mod) {
-      if (!window.confirm('Check "' + mod.label + '" on the Google Sheet? This will not remove anything locally — it just tells you how many rows are there.')) return;
+      if (!window.confirm('Compare "' + mod.label + '" with the Google Sheet?\n\nThis changes nothing — it only reports what differs.')) return;
       setOne(mod.id, { busy: true, msg: '' });
       try {
         var d = await reqFn(mod.sheet, 'getData', {});
-        setOne(mod.id, { busy: false, msg: '✅ Sheet has ' + ((d.rows||[]).length) + ' rows' });
+        var remote = (d.rows || []).map(kbdcUnflattenRow);
+        var local = [];
+        try { local = mod.get ? mod.get() : []; } catch (e) {}
+        function key(r){ return kbdcInvRowKey(r); }
+        function label(r){ return String((r && (r.name || r.id)) || '?') + (r && r.cat ? (' (' + r.cat + ')') : ''); }
+        // The field worth comparing first. Everything else is reported as
+        // "differs" without picking a winner.
+        function headline(r){ return (r && r.stock !== undefined) ? 'stock' : ((r && r.qty !== undefined) ? 'qty' : ''); }
+        var rByKey = {}; remote.forEach(function(r){ if (r) rByKey[key(r)] = r; });
+        var lByKey = {}; local.forEach(function(r){ if (r) lByKey[key(r)] = r; });
+        var onlyLocal = 0, onlySheet = 0, differ = [], removedLocally = 0;
+        Object.keys(lByKey).forEach(function(k){
+          var lr = lByKey[k];
+          if (kbdcInvRowRemoved(lr)) { removedLocally++; return; }
+          if (!(k in rByKey)) { onlyLocal++; return; }
+          var rr = rByKey[k], f = headline(lr);
+          if (f) {
+            if (Number(lr[f] || 0) !== Number(rr[f] || 0)) {
+              differ.push(label(lr) + ': here ' + Number(lr[f] || 0) + ', Sheet ' + Number(rr[f] || 0));
+            }
+          } else if (JSON.stringify(kbdcFlattenRow(lr)) !== JSON.stringify(kbdcFlattenRow(rr))) {
+            differ.push(label(lr) + ': differs');
+          }
+        });
+        Object.keys(rByKey).forEach(function(k){
+          if (!(k in lByKey)) onlySheet++;
+        });
+        var bits = ['Sheet ' + remote.length + ' rows, here ' + local.length];
+        if (removedLocally) bits.push(removedLocally + ' deleted here');
+        if (onlyLocal) bits.push(onlyLocal + ' only on this device');
+        if (onlySheet) bits.push(onlySheet + ' only on the Sheet');
+        var head = (differ.length || onlyLocal || onlySheet) ? '\u26a0 ' : '\u2705 ';
+        if (differ.length) {
+          bits.push(differ.length + ' differ');
+          setOne(mod.id, { busy: false, msg: head + bits.join(' \u00b7 ') + ' \u2014 ' + differ.slice(0, 5).join('; ') +
+            (differ.length > 5 ? ('; and ' + (differ.length - 5) + ' more') : '') });
+        } else {
+          setOne(mod.id, { busy: false, msg: head + bits.join(' \u00b7 ') + (onlyLocal || onlySheet ? '' : ' \u2014 identical') });
+        }
       } catch (ex) {
         setOne(mod.id, { busy: false, msg: '⚠ ' + ex.message });
       }
