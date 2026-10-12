@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-12-6';
+var KBDC_APP_VERSION = '2026-10-12-7';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -904,15 +904,56 @@ function kbdcInvExpectedVersion() {
   var base = location.origin + location.pathname;
   var pending = null;
 
-  function reloadNow(target) {
+  function reloadNow(target, force) {
     // Loop guard: if reloading did not actually change the version (a stale
-    // CDN copy, say), don't sit in a refresh loop.
-    try {
-      var last = JSON.parse(localStorage.getItem('kbdc_version_reload') || '{}');
-      if (last.target === target && (Date.now() - (last.at || 0)) < 300000) return;
-      localStorage.setItem('kbdc_version_reload', JSON.stringify({ target: target, at: Date.now() }));
-    } catch(e) {}
+    // CDN copy, say), don't sit in a refresh loop. A person pressing the
+    // button is never a loop, so it skips the guard.
+    if (!force) {
+      try {
+        var last = JSON.parse(localStorage.getItem('kbdc_version_reload') || '{}');
+        if (last.target === target && (Date.now() - (last.at || 0)) < 300000) return;
+        localStorage.setItem('kbdc_version_reload', JSON.stringify({ target: target, at: Date.now() }));
+      } catch(e) {}
+    }
     location.replace(base + '?_v=' + Date.now());
+  }
+
+  /* A new build only installed itself while the tab was HIDDEN - the right
+     call on a phone that gets put down, and useless on a desktop that stays
+     open on one screen all day. The owner sat on a build from five days
+     earlier through an afternoon of fixes, reloading by hand and still not
+     getting them, with nothing on screen to say a newer one was waiting.
+     Say so, and let it be taken with one click. */
+  function showUpdateBar(v) {
+    try {
+      if (document.getElementById('kbdc-update-bar')) return;
+      var host = document.body || document.documentElement;
+      if (!host) return;
+      var bar = document.createElement('div');
+      bar.id = 'kbdc-update-bar';
+      bar.setAttribute('role', 'status');
+      bar.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;display:flex;' +
+        'align-items:center;justify-content:center;gap:12px;padding:9px 14px;' +
+        'background:#1B5E20;color:#fff;font:600 13px/1.4 Poppins,system-ui,sans-serif;' +
+        'box-shadow:0 2px 10px rgba(0,0,0,.25)';
+      var msg = document.createElement('span');
+      msg.textContent = 'A newer version of the app is ready (' + v + ').';
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = 'Update now';
+      btn.style.cssText = 'border:none;border-radius:7px;padding:6px 16px;cursor:pointer;' +
+        'background:#fff;color:#1B5E20;font:700 13px Poppins,system-ui,sans-serif';
+      btn.addEventListener('click', function(){ reloadNow(v, true); });
+      var later = document.createElement('button');
+      later.type = 'button';
+      later.textContent = 'Later';
+      later.style.cssText = 'border:1px solid rgba(255,255,255,.55);border-radius:7px;' +
+        'padding:6px 12px;cursor:pointer;background:transparent;color:#fff;' +
+        'font:600 12px Poppins,system-ui,sans-serif';
+      later.addEventListener('click', function(){ try { bar.remove(); } catch(e){} });
+      bar.appendChild(msg); bar.appendChild(btn); bar.appendChild(later);
+      host.appendChild(bar);
+    } catch(e) {}
   }
 
   function check() {
@@ -920,7 +961,7 @@ function kbdcInvExpectedVersion() {
       var m = html.match(/KBDC_APP_VERSION = '([^']+)'/);
       if (!m || !m[1] || m[1] === KBDC_APP_VERSION) return;
       if (document.hidden) reloadNow(m[1]);
-      else pending = m[1];           // update as soon as they put it down
+      else { pending = m[1]; showUpdateBar(m[1]); }   // or the moment they ask
     }).catch(function(){});
   }
 
