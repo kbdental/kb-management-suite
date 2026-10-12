@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-12-5';
+var KBDC_APP_VERSION = '2026-10-12-6';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -12378,6 +12378,15 @@ function kbdcInvRowKey(r) {
   }
   return 'c:' + kbdcHashString(JSON.stringify(r));
 }
+/* "2 batches, 24 total" — enough to see at a glance that one side lost them. */
+function kbdcBatchSummary(r) {
+  var b = r && r.batches;
+  if (typeof b === 'string') { try { b = JSON.parse(b); } catch(e) { return 'unreadable'; } }
+  if (!Array.isArray(b)) return 'none';
+  if (!b.length) return 'no batches';
+  var tot = b.reduce(function(n, x){ return n + (Number(x && x.stock) || 0); }, 0);
+  return b.length + ' batch' + (b.length === 1 ? '' : 'es') + ', ' + tot + ' total';
+}
 function kbdcInvRowSigs() { try { return JSON.parse(localStorage.getItem('kbdc_inv_row_sigs') || '{}'); } catch(e) { return {}; } }
 function kbdcSetInvRowSigs(m) { try { localStorage.setItem('kbdc_inv_row_sigs', JSON.stringify(m)); } catch(e) {} }
 
@@ -12863,14 +12872,38 @@ function DataBackendTab() {
           var lr = lByKey[k];
           if (kbdcInvRowRemoved(lr)) { removedLocally++; return; }
           if (!(k in rByKey)) { onlyLocal++; return; }
-          var rr = rByKey[k], f = headline(lr);
-          if (f) {
-            if (Number(lr[f] || 0) !== Number(rr[f] || 0)) {
-              differ.push(label(lr) + ': here ' + Number(lr[f] || 0) + ', Sheet ' + Number(rr[f] || 0));
+          /* EVERY field, not just the headline number.
+             This compared only `stock` and called the row identical if it
+             matched. An item can carry the right stock figure and still be
+             unusable: Stock OUT issues from `batches`, so a row whose batches
+             did not survive the trip reads "out of stock" on one device while
+             the Sheet and the device that booked it both look right - and the
+             comparison cheerfully reported "identical", which sent me looking
+             in the wrong place for a day. */
+          var rr = rByKey[k], f = headline(lr), diffs = [];
+          var lf = kbdcFlattenRow(lr), rf = kbdcFlattenRow(rr);
+          var fields = {};
+          Object.keys(lf).forEach(function(n){ fields[n] = 1; });
+          Object.keys(rf).forEach(function(n){ fields[n] = 1; });
+          Object.keys(fields).forEach(function(n){
+            if (n === 'updatedAt') return;          // a stamp, not data
+            var a = lf[n], b = rf[n];
+            if (a === undefined || a === null) a = '';
+            if (b === undefined || b === null) b = '';
+            // Numbers written by the Sheet come back as numbers; the same
+            // value typed here may be a string. Compare them as numbers when
+            // both sides look numeric, so 24 and "24" are not a difference.
+            if (a !== '' && b !== '' && !isNaN(Number(a)) && !isNaN(Number(b))) {
+              if (Number(a) !== Number(b)) diffs.push(n + ' here ' + a + ', Sheet ' + b);
+              return;
             }
-          } else if (JSON.stringify(kbdcFlattenRow(lr)) !== JSON.stringify(kbdcFlattenRow(rr))) {
-            differ.push(label(lr) + ': differs');
-          }
+            if (String(a) !== String(b)) {
+              diffs.push(n + (n === 'batches'
+                ? (' here ' + kbdcBatchSummary(lr) + ', Sheet ' + kbdcBatchSummary(rr))
+                : (' here "' + String(a).slice(0, 24) + '", Sheet "' + String(b).slice(0, 24) + '"')));
+            }
+          });
+          if (diffs.length) differ.push(label(lr) + ': ' + diffs.slice(0, 3).join(', '));
         });
         var sheetOnly = [], localOnly = [];
         Object.keys(rByKey).forEach(function(k){

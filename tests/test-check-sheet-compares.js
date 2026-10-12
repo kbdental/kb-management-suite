@@ -90,6 +90,40 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
 
   console.log('  ' + JSON.stringify(report, null, 0));
 
+  // ---- A row whose stock matches but whose BATCHES did not survive --------
+  // Stock OUT issues from batches. An item can carry the right stock figure
+  // and still read "out of stock" on one device, while the Sheet and the
+  // device that booked it both look right. Comparing only `stock` called that
+  // identical, which is what sent the search in the wrong direction.
+  const batches = await page.evaluate(() => {
+    const sheetRow = { name: 'L.A.', cat: 'General', stock: 24,
+      batches: JSON.stringify([{ batch: 'B-77', expiry: '2029-01-01', stock: 24 }]) };
+    const localRow = { name: 'L.A.', cat: 'General', stock: 24, batches: [] };
+    const lf = kbdcFlattenRow(localRow), rf = kbdcUnflattenRow(sheetRow);
+    const rf2 = kbdcFlattenRow(rf);
+    const diffs = [];
+    const fields = {};
+    Object.keys(lf).forEach(n => fields[n] = 1);
+    Object.keys(rf2).forEach(n => fields[n] = 1);
+    Object.keys(fields).forEach(n => {
+      if (n === 'updatedAt') return;
+      let a = lf[n], b = rf2[n];
+      if (a === undefined || a === null) a = '';
+      if (b === undefined || b === null) b = '';
+      if (a !== '' && b !== '' && !isNaN(Number(a)) && !isNaN(Number(b))) {
+        if (Number(a) !== Number(b)) diffs.push(n);
+        return;
+      }
+      if (String(a) !== String(b)) diffs.push(n);
+    });
+    return { diffs, here: kbdcBatchSummary(localRow), sheet: kbdcBatchSummary(rf) };
+  });
+  console.log('  batches case:', JSON.stringify(batches));
+  ok(batches.diffs.indexOf('batches') >= 0,
+     'a row whose stock matches but whose batches are missing is NOT called identical');
+  ok(batches.here === 'no batches' && batches.sheet === '1 batch, 24 total',
+     'and both sides are summarised readably (' + batches.here + ' vs ' + batches.sheet + ')');
+
   // ---- Transactions: two missing rows must report as two, and be named ----
   const tx = await page.evaluate(async () => {
     const SHEET = [
