@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-12-9';
+var KBDC_APP_VERSION = '2026-10-16-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -11119,6 +11119,12 @@ var KBDC_BACKEND_MODULES = [
   { id:'separations', label:'Separations',              sheet:'Separations',       localKey:'kbdc_hr_separations', get: function(){ return kbdcLsArray('kbdc_hr_separations'); } },
   { id:'trainings',   label:'Trainings',                sheet:'Trainings',          localKey:'kbdc_hr_trainings', get: function(){ return kbdcLsArray('kbdc_hr_trainings'); } },
   { id:'forms',       label:'Form Builder Responses',   sheet:'FormResponses',      get: function(){ return kbdcScanPrefixed('kbdc_resp_'); } },
+  /* The forms THEMSELVES, not just their responses. Only the responses were
+     ever synced, so a form built on the owner's laptop existed nowhere else:
+     seven forms on one machine and "No forms yet" on the next, with the
+     backup badge green on both because nothing had failed - the forms were
+     simply never in the list of things to send. */
+  { id:'formdefs',    label:'Forms',                    sheet:'Forms',              localKey:'kbdc_forms_v3', get: function(){ return kbdcLsArray('kbdc_forms_v3'); } },
 ];
 
 // Data that must be backed up but doesn't have (or need) its own record-level
@@ -11376,7 +11382,12 @@ function kbdcSplitPushChunks(payload, budget) {
 // a tab that simply isn't in the reply leaves local data untouched.
 var KBDC_HOT_SHEETS = {
   StaffFull:1, Tasks:1, TaskCompletions:1, Attendance:1,
-  ClinicSettings:1, RoleEmployees:1, AppData:1, LeaveRequests:1, Holidays:1, DelegatedTasks:1
+  ClinicSettings:1, RoleEmployees:1, AppData:1, LeaveRequests:1, Holidays:1, DelegatedTasks:1,
+  /* Forms is tiny — seven rows here — and a form is built in order to be
+     filled in on another device, usually within minutes. Left out of this
+     list it would be read on every tenth cycle, so a new form could take
+     twenty minutes to appear elsewhere, which reads as "it never arrives". */
+  Forms:1
 };
 
 /**
@@ -16100,8 +16111,23 @@ var FB_FIELD_DEFS = [
   { type:'tick_grid',     label:'Tick Grid',        icon:'☒',  color:'#558B2F' },
 ];
 function fbUID(){ return 'f'+Date.now().toString(36)+Math.random().toString(36).slice(2,5); }
-function fbLoadForms(){ try{ return JSON.parse(localStorage.getItem(FB_FORMS_KEY)||'[]'); }catch(e){ return []; } }
-function fbSaveForms(l){ try{ localStorage.setItem(FB_FORMS_KEY, JSON.stringify(l)); }catch(e){} }
+function fbAllForms(){ try{ return JSON.parse(localStorage.getItem(FB_FORMS_KEY)||'[]')||[]; }catch(e){ return []; } }
+function fbRemoved(f){ var v=f&&f.removed; return v===true||v==='true'||v==='TRUE'; }
+function fbLoadForms(){ return fbAllForms().filter(function(f){ return f && !fbRemoved(f); }); }
+/* Deleting a form has to be a record, not an absence. The sync merges by id
+   and never removes what it was not sent, so a form deleted here would come
+   straight back on the next pull from any device that still had it. Same
+   tombstone the inventory and task-tick deletes use. */
+function fbSaveForms(l){
+  try{
+    var live = {}, out = (l||[]).slice();
+    out.forEach(function(f){ if(f&&f.id) live[f.id]=1; });
+    fbAllForms().forEach(function(f){ if(f && f.id && fbRemoved(f) && !live[f.id]) out.push(f); });
+    localStorage.setItem(FB_FORMS_KEY, JSON.stringify(out));
+  }catch(e){}
+  try{ kbdcAutoSyncMain(); }catch(e){}
+}
+function fbStamp(f){ return Object.assign({}, f, { updatedAt:new Date().toISOString() }); }
 function fbGetResps(id){ try{ return JSON.parse(localStorage.getItem('kbdc_resp_'+id)||'[]'); }catch(e){ return []; } }
 function fbSaveResps(id,r){ try{ localStorage.setItem('kbdc_resp_'+id, JSON.stringify(r)); }catch(e){} }
 
@@ -16133,8 +16159,8 @@ function FormBuilderPage() {
     var f = st.activeForm; if(!f) return;
     var list = st.forms.slice();
     var i = list.findIndex(function(x){ return x.id===f.id; });
-    if(i>=0) list[i]=JSON.parse(JSON.stringify(f)); else list.unshift(JSON.parse(JSON.stringify(f)));
-    saveForms(list); toast('Saved ✓');
+    if(i>=0) list[i]=fbStamp(JSON.parse(JSON.stringify(f))); else list.unshift(fbStamp(JSON.parse(JSON.stringify(f))));
+    saveForms(list); toast('Saved ✓ · syncing to your other devices');
   }
   function togglePublish(){
     var f = st.activeForm; if(!f) return;
@@ -16142,13 +16168,23 @@ function FormBuilderPage() {
     var updf = Object.assign({}, f, { status: f.status==='published'?'draft':'published' });
     var list = st.forms.slice();
     var i = list.findIndex(function(x){ return x.id===updf.id; });
-    if(i>=0) list[i]=JSON.parse(JSON.stringify(updf)); else list.unshift(JSON.parse(JSON.stringify(updf)));
+    if(i>=0) list[i]=fbStamp(JSON.parse(JSON.stringify(updf))); else list.unshift(fbStamp(JSON.parse(JSON.stringify(updf))));
     saveForms(list); upd({ activeForm:updf });
     toast(updf.status==='published'?'Published ✅':'Moved to draft');
   }
   function deleteForm(id){
     if(!confirm('Delete this form and all its responses?')) return;
-    saveForms(st.forms.filter(function(f){ return f.id!==id; }));
+    var gone = st.forms.filter(function(f){ return f.id===id; })[0];
+    var rest = st.forms.filter(function(f){ return f.id!==id; });
+    if (gone) {
+      // Written down as a deletion, so it travels instead of coming back.
+      try {
+        var all = fbAllForms().filter(function(f){ return !f || f.id!==id; });
+        all.push(Object.assign({}, gone, { removed:true, updatedAt:new Date().toISOString() }));
+        localStorage.setItem(FB_FORMS_KEY, JSON.stringify(all));
+      } catch(e) {}
+    }
+    saveForms(rest);
     localStorage.removeItem('kbdc_resp_'+id); toast('Deleted');
   }
   function openForm(id){
