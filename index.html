@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-16-1';
+var KBDC_APP_VERSION = '2026-10-19-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -11138,7 +11138,7 @@ var KBDC_BLOB_KEYS = [
   'kbdc_settings','kbdc_payroll_salaries','kbdc_payroll_settings','kbdc_payroll_loans',
   'kbdc_reporting_map','kbdc_mgr_roles','kbdc_hr_config','kbdc_hr_programs',
   'kbdc_hr_asset_types','kbdc_hr_access','kbdc_hr_absconders','kbdc_la_alloc_v2',
-  'kbdc_la_shifts','kbdc_la_reg','kbdc_branches',
+  'kbdc_la_shifts','kbdc_la_reg','kbdc_branches','kbdc_la_late_rule',
   // Raw appraisal + achievers data. Their dedicated tabs (Appraisals /
   // AchieversScores) hold a flattened summary for viewing; these blobs keep the
   // full source so a cleared device can restore them intact.
@@ -18303,31 +18303,10 @@ function FinancialPage() {
     }
 
     /* \u2500\u2500 Attendance stats for an employee-month \u2500\u2500 */
-    function prAttStats(sName,sId,year,month1){
-      var ms=year+'-'+String(month1).padStart(2,'0');
-      var att=(function(){try{return JSON.parse(localStorage.getItem('kbdc_la_attendance')||'[]');}catch(ex){return[];}}());
-      var leaveArr=(function(){try{return JSON.parse(localStorage.getItem('kbdc_la_leaves')||'[]');}catch(ex){return[];}}());
-      var recs=att.filter(function(a){return(a.staffName===sName||a.staffId===sId)&&a.date&&a.date.startsWith(ms);});
-      var presentDays=recs.filter(function(r){return r.checkIn;}).length;
-      var approvedFullDays=0;
-      leaveArr.filter(function(l){
-        return l.staffName===sName&&l.status==='approved'&&(!l.halfDay||l.halfDay==='none')&&l.from&&l.from.startsWith(ms);
-      }).forEach(function(l){
-        var fd=new Date(l.from),td=new Date(l.to||l.from);
-        while(fd<=td){if(fd.getDay()!==0)approvedFullDays++;fd.setDate(fd.getDate()+1);}
-      });
-      var halfDayCount=leaveArr.filter(function(l){
-        return l.staffName===sName&&l.status==='approved'&&l.halfDay&&l.halfDay!=='none'&&l.from&&l.from.startsWith(ms);
-      }).length;
-      var workDays=prWorkDays(year,month1);
-      // Only deduct for absent days once attendance/leave is actually being
-      // tracked for this employee this month — otherwise "no check-in record"
-      // would be misread as "absent every day" and wipe out the whole salary.
-      var hasAttendanceData=recs.length>0||leaveArr.some(function(l){return l.staffName===sName&&l.from&&l.from.startsWith(ms);});
-      var absentUnpaid=hasAttendanceData?Math.max(0,workDays-presentDays-approvedFullDays-halfDayCount):0;
-      var halfDed=Math.floor(halfDayCount/2);
-      return{workDays:workDays,present:presentDays,approved:approvedFullDays,halfDays:halfDayCount,absentUnpaid:absentUnpaid,halfDed:halfDed,totalDeductDays:absentUnpaid+halfDed};
-    }
+    /* The month a salary is built on - see kbdcMonthAttStats. It lived in here,
+       out of reach of any test, which for the figure that decides everyone's
+       pay is the wrong place for it. */
+    function prAttStats(sName,sId,year,month1){ return kbdcMonthAttStats(sName,sId,year,month1); }
 
     /* \u2500\u2500 Salary computation \u2500\u2500 */
     function prCalc(s,year,month1){
@@ -24336,6 +24315,139 @@ function laMinEarlyIn(ci,ss){if(!ci||!ss)return 0;return Math.max(0,laTimeToMin(
 function laMinEarlyOut(co,se){if(!co||!se)return 0;return Math.max(0,laTimeToMin(se)-laTimeToMin(co));}
 function laMinOT(co,se){if(!co||!se)return 0;var diff=laTimeToMin(co)-laTimeToMin(se);return diff>=60?diff:0;}
 function laFmtMin(m){if(!m||m<=0)return '';var h=Math.floor(m/60),mn=m%60;return h>0?(h+'h '+(mn?mn+'m':'')):(mn+'m');}
+/* ── Late arrival = half day ──────────────────────────────────────────────
+   Policy, kept in one place so the check-in screen, the dashboard and payroll
+   cannot drift apart. Arriving more than `graceMin` minutes after the shift
+   starts costs half a day, every time it happens, and that half day is taken
+   off the month the salary is worked out from.
+
+   This replaces an older rule that gave the first two lates of a month a free
+   pass (L1/L2) and only then called it a half day. That one also never
+   reached payroll at all: the 'late-ded' tag it wrote was set and never read,
+   so a month of lates changed nobody's pay by a rupee.
+
+   fallbackShiftId matters more than it looks. Lateness is measured against
+   the employee's shift start, and laGetStaffShift returns nothing for anyone
+   without a shiftId — which, on this clinic's roster, is most people. Without
+   a fallback the rule would silently do nothing for them while appearing to
+   be switched on. */
+var LA_LATE_RULE_KEY = 'kbdc_la_late_rule';
+function laLateRule(){
+  var d = { enabled:true, graceMin:10, fallbackShiftId:'sh_morn' };
+  try {
+    var r = JSON.parse(localStorage.getItem(LA_LATE_RULE_KEY) || 'null');
+    if (r && typeof r === 'object') {
+      if (r.enabled !== undefined) d.enabled = !!r.enabled;
+      if (r.graceMin !== undefined && !isNaN(Number(r.graceMin))) d.graceMin = Math.max(0, Number(r.graceMin));
+      if (r.fallbackShiftId !== undefined) d.fallbackShiftId = r.fallbackShiftId || '';
+    }
+  } catch(e) {}
+  return d;
+}
+function laSaveLateRule(r){
+  try {
+    localStorage.setItem(LA_LATE_RULE_KEY, JSON.stringify(r || {}));
+    localStorage.setItem(LA_LATE_RULE_KEY + '_updatedAt', new Date().toISOString());
+  } catch(e) {}
+  try { kbdcAutoSyncMain(); } catch(e) {}
+}
+/* The shift a person's lateness is judged against: their own, or the clinic
+   default when they have none. */
+function laShiftFor(sName, shifts){
+  var list = shifts || laGetShifts();
+  var own = laGetStaffShift(sName, list);
+  if (own) return own;
+  var fb = laLateRule().fallbackShiftId;
+  if (!fb) return null;
+  return list.filter(function(s){ return s.id === fb; })[0] || null;
+}
+/* True when this attendance row is a half day because the person was late.
+   Read from the row's own lateMin wherever possible: the shift, or the rule,
+   may have changed since, and a day already worked should not be re-judged
+   months later by a policy that did not exist at the time. */
+function laIsLateHalfDay(rec){
+  if (!rec || !rec.checkIn) return false;
+  if (rec.lateHalfDay === true || rec.lateHalfDay === 'true' || rec.lateHalfDay === 'TRUE') return true;
+  if (rec.lateHalfDay === false || rec.lateHalfDay === 'false' || rec.lateHalfDay === 'FALSE') return false;
+  var rule = laLateRule();
+  if (!rule.enabled) return false;
+  var m = Number(rec.lateMin);
+  if (isNaN(m) || m <= 0) return false;
+  return m >= rule.graceMin;
+}
+/* How many half days a person lost to lateness in one YYYY-MM. */
+function laLateHalfDays(sName, sId, ms, rows){
+  var att = rows;
+  if (!att) { try { att = JSON.parse(localStorage.getItem('kbdc_la_attendance') || '[]'); } catch(e) { att = []; } }
+  var seen = {};
+  (att || []).forEach(function(a){
+    if (!a || !a.date || String(a.date).slice(0,7) !== ms) return;
+    if (!(a.staffName === sName || (sId && a.staffId === sId))) return;
+    if (!laIsLateHalfDay(a)) return;
+    seen[String(a.date).slice(0,10)] = 1;      // one half day per date, not per row
+  });
+  return Object.keys(seen).length;
+}
+/**
+ * The attendance figure a month's salary is built on.
+ *
+ *   workDays        days the clinic is open (week-offs and holidays removed)
+ *   present         days with a check-in
+ *   approved        approved full-day leave
+ *   halfDays        approved HALF-day leave; two of them deduct one day
+ *   lateHalf        days lost to arriving late - half a day each
+ *   absentUnpaid    open days with no check-in and no approved leave
+ *   totalDeductDays what comes off the month
+ *
+ * A late day still counts as present: the person was here. Half of it is
+ * simply not paid. Late half days are counted straight at 0.5 each rather
+ * than paired off the way half-day LEAVE is, and that floor(n/2) rule for
+ * leave is left exactly as it was, so no month's existing pay moves because
+ * of the late rule.
+ */
+function kbdcMonthWorkDays(year,month1){
+  var dim=new Date(year,month1,0).getDate();
+  var hols=(function(){try{return JSON.parse(localStorage.getItem('kbdc_la_holidays')||'[]');}catch(ex){return[];}}());
+  var weekOffDays=laGetWeekOff();
+  var cnt=0;
+  for(var d=1;d<=dim;d++){
+    var dt=new Date(year,month1-1,d);
+    if(weekOffDays.indexOf(dt.getDay())!==-1)continue;
+    var ds=year+'-'+String(month1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+    if(hols.some(function(h){return h.date===ds;}))continue;
+    cnt++;
+  }
+  return cnt;
+}
+function kbdcMonthAttStats(sName,sId,year,month1){
+  var ms=year+'-'+String(month1).padStart(2,'0');
+  var att=(function(){try{return JSON.parse(localStorage.getItem('kbdc_la_attendance')||'[]');}catch(ex){return[];}}());
+  var leaveArr=(function(){try{return JSON.parse(localStorage.getItem('kbdc_la_leaves')||'[]');}catch(ex){return[];}}());
+  var recs=att.filter(function(a){return(a.staffName===sName||a.staffId===sId)&&a.date&&String(a.date).startsWith(ms);});
+  var presentDays=recs.filter(function(r){return r.checkIn;}).length;
+  var approvedFullDays=0;
+  leaveArr.filter(function(l){
+    return l.staffName===sName&&l.status==='approved'&&(!l.halfDay||l.halfDay==='none')&&l.from&&String(l.from).startsWith(ms);
+  }).forEach(function(l){
+    var fd=new Date(l.from),td=new Date(l.to||l.from);
+    while(fd<=td){if(fd.getDay()!==0)approvedFullDays++;fd.setDate(fd.getDate()+1);}
+  });
+  var halfDayCount=leaveArr.filter(function(l){
+    return l.staffName===sName&&l.status==='approved'&&l.halfDay&&l.halfDay!=='none'&&l.from&&String(l.from).startsWith(ms);
+  }).length;
+  var workDays=kbdcMonthWorkDays(year,month1);
+  // Only deduct for absent days once attendance/leave is actually being
+  // tracked for this employee this month - otherwise "no check-in record"
+  // would be misread as "absent every day" and wipe out the whole salary.
+  var hasAttendanceData=recs.length>0||leaveArr.some(function(l){return l.staffName===sName&&l.from&&String(l.from).startsWith(ms);});
+  var absentUnpaid=hasAttendanceData?Math.max(0,workDays-presentDays-approvedFullDays-halfDayCount):0;
+  var halfDed=Math.floor(halfDayCount/2);
+  var lateHalf=laLateHalfDays(sName,sId,ms,recs);
+  var lateDed=lateHalf*0.5;
+  return{workDays:workDays,present:presentDays,approved:approvedFullDays,halfDays:halfDayCount,
+         absentUnpaid:absentUnpaid,halfDed:halfDed,lateHalf:lateHalf,lateDed:lateDed,
+         totalDeductDays:absentUnpaid+halfDed+lateDed};
+}
 function laGetShifts(){try{var s=JSON.parse(localStorage.getItem('kbdc_la_shifts')||'null');if(s&&s.length)return s;}catch(e){}return [{id:'sh_morn',name:'Morning',start:'09:00',end:'17:00',breakMin:30,color:'#1357A6'},{id:'sh_eve',name:'Evening',start:'14:00',end:'22:00',breakMin:30,color:'#6A1B9A'},{id:'sh_split',name:'Split',start:'08:00',end:'14:00',breakMin:0,color:'#E65100'},{id:'sh_flex',name:'Flexible',start:'09:00',end:'21:00',breakMin:60,color:'#2E7D32'}];}
 function laGetStaffShift(sName,shifts){try{var all=JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]');var emp=all.find(function(s){return s.name===sName;});if(!emp||!emp.shiftId)return null;return (shifts||[]).find(function(s){return s.id===emp.shiftId;})||null;}catch(e){return null;}}
 function laSaveShifts(arr){try{localStorage.setItem('kbdc_la_shifts',JSON.stringify(arr));}catch(e){}}
@@ -24951,21 +25063,16 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
          value captured when this handler started. */
       var attendance = laLoadAtt();
 
-      /* ── L1/L2 late tagging ── */
-      var empShift=laGetStaffShift(selectedEmp, shifts);
+      /* ── Late arrival ── more than the grace period past the shift start
+         costs half a day, every time, and that half day reaches payroll.
+         Judged against the person's own shift, or the clinic default when
+         they have none — otherwise this quietly never applies to anyone
+         without a shiftId, which is most of the roster. */
+      var laRule=laLateRule();
+      var empShift=laShiftFor(selectedEmp, shifts);
       var lateMin=empShift?laMinLate(t, empShift.start):0;
-      var lateTag=null;
-      if(lateMin>0){
-        var curMonth=LA_TODAY.slice(0,7);
-        var latesThisMonth=attendance.filter(function(a){
-          return a.staffName===selectedEmp && a.date.slice(0,7)===curMonth && a.lateTag&&a.lateTag!==null;
-        });
-        var l1Used=latesThisMonth.some(function(a){return a.lateTag==='L1';});
-        var l2Used=latesThisMonth.some(function(a){return a.lateTag==='L2';});
-        if(!l1Used) lateTag='L1';
-        else if(!l2Used) lateTag='L2';
-        else lateTag='late-ded'; /* 3rd+ late = half-day deduction */
-      }
+      var lateHalfDay=!!(laRule.enabled && lateMin >= laRule.graceMin && lateMin > 0);
+      var lateTag=lateHalfDay?'late-half':(lateMin>0?'late':null);
 
       var leaveOverride=todayLeave?true:undefined;
       var exists=attendance.find(function(a){return a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp));});
@@ -24973,17 +25080,16 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       if(exists){
         updated=attendance.map(function(a){
           return (a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
-            ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()})
+            ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,lateHalfDay:lateHalfDay,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()})
             :a;
         });
       } else {
-        updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
+        updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,lateHalfDay:lateHalfDay,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
       }
       setAttendance(updated);laSaveAtt(updated);
       kbdcSyncAttendanceNow();
-      if(lateTag==='L1') showToast('Checked in. Late arrival — L1 (1st late this month, no deduction)');
-      else if(lateTag==='L2') showToast('Checked in. Late arrival — L2 (2nd late this month, no deduction)');
-      else if(lateTag==='late-ded') showToast('Checked in. 3rd+ late this month — counts as half-day deduction');
+      if(lateHalfDay) showToast('Checked in '+laFmtMin(lateMin)+' late — counts as a HALF DAY for this month', false);
+      else if(lateMin>0) showToast('Checked in '+laFmtMin(lateMin)+' late — within the '+laRule.graceMin+'-minute grace');
     });
   }
 
@@ -25567,6 +25673,8 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
   /* ── Leave allocation edit state ── */
   const [showAllocEdit,setShowAllocEdit]=React.useState(false);
   const [showWeekOffEdit,setShowWeekOffEdit]=React.useState(false);
+  const [showLateEdit,setShowLateEdit]=React.useState(false);
+  const [lateEdit,setLateEdit]=React.useState(function(){ return laLateRule(); });
   const [weekOffEdit,setWeekOffEdit]=React.useState(function(){return laGetWeekOff();});
   const [allocEdit,setAllocEdit]=React.useState(function(){
     return{casual:laGetStaffAlloc(alloc,balEmp,'Casual Leave'),medical:laGetStaffAlloc(alloc,balEmp,'Sick / Medical Leave')};
@@ -25714,6 +25822,56 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
             }}),d);
         }),
         React.createElement('button',{onClick:function(){laSaveWeekOff(weekOffEdit);try{kbdcAudit('week-off-changed','clinic-wide');}catch(e){}setShowWeekOffEdit(false);showToast('Week Off saved',true);},style:{padding:'7px 18px',background:'#2E7D32',color:'#fff',border:'none',borderRadius:7,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:"'Poppins',sans-serif",marginLeft:8}},'Save')
+      ),
+      /* Late-arrival rule strip — owner/admin only. The figure it sets comes
+         straight off people's pay, so it says in words what it will do and
+         warns when nobody has a shift to be late against. */
+      !appUser&&React.createElement('div',{style:{background:'#FFF3E0',borderRadius:10,border:'1px solid #FFCC80',padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
+        React.createElement('span',{style:{fontSize:11.5,fontWeight:600,color:'#E65100',flex:1}},
+          (function(){
+            var r=laLateRule();
+            if(!r.enabled) return 'Late arrivals: no deduction (rule is off)';
+            return 'Late arrivals: more than '+r.graceMin+' min late = HALF DAY, deducted from the month\u2019s salary';
+          })()
+        ),
+        React.createElement('button',{onClick:function(){setShowLateEdit(function(v){return !v;});},style:{padding:'5px 13px',background:'#E65100',color:'#fff',border:'none',borderRadius:7,fontSize:11,fontWeight:700,cursor:'pointer'}},'Change')
+      ),
+      !appUser&&showLateEdit&&React.createElement('div',{style:{background:'#fff',border:'1px solid #FFCC80',borderRadius:10,padding:'14px 16px',marginBottom:12,display:'flex',gap:16,alignItems:'flex-end',flexWrap:'wrap'}},
+        React.createElement('label',{style:{display:'flex',alignItems:'center',gap:6,fontSize:12,fontWeight:600,color:'#E65100',cursor:'pointer'}},
+          React.createElement('input',{type:'checkbox',checked:lateEdit.enabled,onChange:function(e){var v=e.target.checked;setLateEdit(function(p){return Object.assign({},p,{enabled:v});});}}),
+          'Count late arrivals as half days'),
+        React.createElement('div',null,
+          React.createElement('div',{style:{fontSize:10.5,color:'#8D6E63',marginBottom:4}},'Allow up to (minutes late)'),
+          React.createElement('input',{type:'number',min:0,max:120,value:lateEdit.graceMin,onChange:function(e){var v=e.target.value;setLateEdit(function(p){return Object.assign({},p,{graceMin:v});});},style:{width:90,padding:'7px 10px',border:'1.5px solid #FFCC80',borderRadius:7,fontSize:12,outline:'none'}})
+        ),
+        React.createElement('div',null,
+          React.createElement('div',{style:{fontSize:10.5,color:'#8D6E63',marginBottom:4}},'Shift for staff with none set'),
+          React.createElement('select',{value:lateEdit.fallbackShiftId||'',onChange:function(e){var v=e.target.value;setLateEdit(function(p){return Object.assign({},p,{fallbackShiftId:v});});},style:{padding:'7px 10px',border:'1.5px solid #FFCC80',borderRadius:7,fontSize:12,outline:'none',background:'#fff'}},
+            React.createElement('option',{value:''},'\u2014 none (rule will not apply to them) \u2014'),
+            laGetShifts().map(function(sh){ return React.createElement('option',{key:sh.id,value:sh.id}, sh.name+' ('+sh.start+')'); })
+          )
+        ),
+        React.createElement('button',{onClick:function(){
+          var g=Math.max(0,parseInt(lateEdit.graceMin,10)||0);
+          laSaveLateRule({enabled:!!lateEdit.enabled,graceMin:g,fallbackShiftId:lateEdit.fallbackShiftId||''});
+          try{kbdcAudit('late-rule-changed',(lateEdit.enabled?('half day over '+g+' min'):'off'));}catch(e){}
+          setShowLateEdit(false);showToast('Late-arrival rule saved',true);
+        },style:{padding:'8px 18px',background:'#E65100',color:'#fff',border:'none',borderRadius:7,fontSize:12,fontWeight:700,cursor:'pointer'}},'Save'),
+        (function(){
+          /* Lateness is measured against a shift start. Anyone without one,
+             and with no fallback chosen, can never be marked late \u2014 say so
+             rather than let the rule look like it is working. */
+          var miss=[];
+          try{
+            var shifts=laGetShifts();
+            JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]').forEach(function(st2){
+              if(st2&&st2.active!==false&&st2.name&&!laGetStaffShift(st2.name,shifts)) miss.push(st2.name);
+            });
+          }catch(e){}
+          if(!miss.length||lateEdit.fallbackShiftId) return null;
+          return React.createElement('div',{style:{flexBasis:'100%',fontSize:11,color:'#B71C1C',fontWeight:600}},
+            '\u26a0 '+miss.length+' staff have no shift set, so this rule cannot apply to them: '+miss.slice(0,6).join(', ')+(miss.length>6?(' and '+(miss.length-6)+' more'):'')+'. Pick a default shift above, or set their shifts.');
+        })()
       ),
       /* Allocation config strip — owner/admin only */
       !appUser&&React.createElement('div',{style:{background:'#EEF2FF',borderRadius:10,border:'1px solid #C5CAE9',padding:'10px 16px',marginBottom:12,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}},
