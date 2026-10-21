@@ -134,10 +134,13 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
     localStorage.setItem('kbdc_settings', JSON.stringify({ weekOff: [0] }));
     laSaveLateRule({ enabled: true, graceMin: 10, fallbackShiftId: 'sh_morn' });
     const before = kbdcMonthAttStats('Aaquib Arshad', 'EM1', 2026, 9);
-    // Same month with the lateness removed, to isolate what the rule costs.
+    /* The same month with everyone arriving on time, to isolate what the rule
+       costs. The check-in times have to change, not just the stored lateMin:
+       a row with no measured lateMin is now re-measured from the shift, so
+       zeroing the field alone would leave them just as late. */
     const rows = JSON.parse(localStorage.getItem('kbdc_la_attendance') || '[]');
     localStorage.setItem('kbdc_la_attendance', JSON.stringify(
-      rows.map(r => Object.assign({}, r, { lateMin: 0, lateHalfDay: false }))));
+      rows.map(r => Object.assign({}, r, { checkIn: '09:00', lateMin: 0, lateHalfDay: false }))));
     const after = kbdcMonthAttStats('Aaquib Arshad', 'EM1', 2026, 9);
     localStorage.setItem('kbdc_la_attendance', JSON.stringify(rows));
     return { before, after };
@@ -165,6 +168,51 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
   ok(money.withLate - money.without === Math.round(30000 / money.wd * 1.5),
      'three late days add exactly 1.5 days of deduction (\u20b9' + money.without +
      ' \u2192 \u20b9' + money.withLate + ', i.e. \u20b9' + (money.withLate - money.without) + ' less pay)');
+
+  // ---- Check-ins taken BEFORE shifts were assigned ------------------------
+  // The owner's morning: nine staff, five arrivals the Late Arrivals tile
+  // called late, and Half Day Today reading 0. Those rows were written when
+  // nobody had a shift, so they were stamped lateMin 0 / lateHalfDay false
+  // and stayed innocent after the shifts were set.
+  const retro = await page.evaluate(() => {
+    localStorage.setItem('kbdc_la_shifts', JSON.stringify([
+      { id: 'shA', name: 'Morning',   start: '08:30', end: '17:00', breakMin: 30, color: '#1357A6' },
+      { id: 'shB', name: 'Morning 3', start: '09:00', end: '17:30', breakMin: 30, color: '#2E7D32' }
+    ]));
+    localStorage.setItem('kbdc_hr_staff', JSON.stringify([
+      { id: 'EM1', name: 'Suman Rathor',  active: true, shiftId: 'shB' },   // 09:00 start
+      { id: 'EM2', name: 'Vishal Kanojia', active: true, shiftId: 'shA' }   // 08:30 start
+    ]));
+    laSaveLateRule({ enabled: true, graceMin: 10, fallbackShiftId: '' });
+    // Written this morning, before any shift existed.
+    localStorage.setItem('kbdc_la_attendance', JSON.stringify([
+      { id: 'r1', staffId: 'EM1', staffName: 'Suman Rathor',  date: kbdcToday(), checkIn: '09:36', lateMin: 0, lateHalfDay: false },
+      { id: 'r2', staffId: 'EM2', staffName: 'Vishal Kanojia', date: kbdcToday(), checkIn: '08:57', lateMin: 0, lateHalfDay: false }
+    ]));
+    return {
+      late36: laIsLateHalfDay({ staffName: 'Suman Rathor', checkIn: '09:36', lateMin: 0, lateHalfDay: false }, 'Suman Rathor'),
+      ontime: laIsLateHalfDay({ staffName: 'Vishal Kanojia', checkIn: '08:27', lateMin: 0, lateHalfDay: false }, 'Vishal Kanojia'),
+      sevenLate: laIsLateHalfDay({ staffName: 'Vishal Kanojia', checkIn: '08:37', lateMin: 0, lateHalfDay: false }, 'Vishal Kanojia'),
+      month: laLateHalfDays('Suman Rathor', 'EM1', kbdcToday().slice(0, 7))
+    };
+  });
+  console.log('  rows written before shifts existed:', JSON.stringify(retro));
+  ok(retro.late36 === true, '36 minutes past a 09:00 shift is a half day once the shift is set');
+  ok(retro.ontime === false, 'someone genuinely early is still not late');
+  ok(retro.sevenLate === false, 'and 7 minutes past 08:30 is still inside the grace');
+  ok(retro.month === 1, 'and it reaches the month\u2019s count (' + retro.month + ')');
+
+  // A day that WAS measured keeps its verdict.
+  const frozen2 = await page.evaluate(() => laIsLateHalfDay(
+    { staffName: 'Suman Rathor', checkIn: '09:36', lateMin: 36, lateHalfDay: false }, 'Suman Rathor'));
+  ok(frozen2 === false, 'a day judged on the day is not re-judged later');
+
+  // A clinic with its own shifts must still get a working default.
+  const dflt = await page.evaluate(() => {
+    localStorage.removeItem('kbdc_la_late_rule');
+    return laLateRule().fallbackShiftId;
+  });
+  ok(dflt === 'shA', 'the default fallback is a shift the clinic actually has (' + dflt + ')');
 
   // ---- The owner can see and change the rule -----------------------------
   await page.evaluate(() => {

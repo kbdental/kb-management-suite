@@ -870,7 +870,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-19-1';
+var KBDC_APP_VERSION = '2026-10-21-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -24333,7 +24333,12 @@ function laFmtMin(m){if(!m||m<=0)return '';var h=Math.floor(m/60),mn=m%60;return
    be switched on. */
 var LA_LATE_RULE_KEY = 'kbdc_la_late_rule';
 function laLateRule(){
-  var d = { enabled:true, graceMin:10, fallbackShiftId:'sh_morn' };
+  /* Default to whichever shift the clinic actually has, not a built-in id:
+     a clinic that defined its own shifts has no 'sh_morn', so the fallback
+     resolved to nothing and the rule silently applied to nobody. */
+  var firstShift = '';
+  try { var sl = laGetShifts(); firstShift = (sl && sl[0] && sl[0].id) || ''; } catch(e) {}
+  var d = { enabled:true, graceMin:10, fallbackShiftId:firstShift };
   try {
     var r = JSON.parse(localStorage.getItem(LA_LATE_RULE_KEY) || 'null');
     if (r && typeof r === 'object') {
@@ -24365,16 +24370,34 @@ function laShiftFor(sName, shifts){
    Read from the row's own lateMin wherever possible: the shift, or the rule,
    may have changed since, and a day already worked should not be re-judged
    months later by a policy that did not exist at the time. */
-function laIsLateHalfDay(rec){
+function laIsLateHalfDay(rec, sName){
   if (!rec || !rec.checkIn) return false;
-  if (rec.lateHalfDay === true || rec.lateHalfDay === 'true' || rec.lateHalfDay === 'TRUE') return true;
-  if (rec.lateHalfDay === false || rec.lateHalfDay === 'false' || rec.lateHalfDay === 'FALSE') return false;
   var rule = laLateRule();
   if (!rule.enabled) return false;
-  var m = Number(rec.lateMin);
-  if (isNaN(m) || m <= 0) return false;
-  return m >= rule.graceMin;
+  var measured = Number(rec.lateMin);
+  if (isNaN(measured)) measured = 0;
+  /* A day that WAS measured keeps the verdict it was given, so changing the
+     rule or a shift later cannot re-judge work already done. */
+  if (measured > 0) {
+    if (rec.lateHalfDay === true || rec.lateHalfDay === 'true' || rec.lateHalfDay === 'TRUE') return true;
+    if (rec.lateHalfDay === false || rec.lateHalfDay === 'false' || rec.lateHalfDay === 'FALSE') return false;
+    return measured >= rule.graceMin;
+  }
+  /* lateMin 0 is ambiguous: either the person was on time, or there was no
+     shift to measure against when they checked in — which is every check-in
+     taken before shifts were assigned. Those were stamped "not late" by
+     default, so after assigning shifts the morning's arrivals stayed innocent
+     while the Late Arrivals tile, which measures live, showed five of them.
+     Measure it now; someone genuinely on time still comes out at zero. */
+  if (rec.lateHalfDay === true || rec.lateHalfDay === 'true' || rec.lateHalfDay === 'TRUE') return true;
+  var nm = sName || rec.staffName;
+  if (!nm) return false;
+  var sh = laShiftFor(nm);
+  if (!sh) return false;
+  var now = laMinLate(rec.checkIn, sh.start);
+  return now > 0 && now >= rule.graceMin;
 }
+
 /* How many half days a person lost to lateness in one YYYY-MM. */
 function laLateHalfDays(sName, sId, ms, rows){
   var att = rows;
@@ -24383,7 +24406,7 @@ function laLateHalfDays(sName, sId, ms, rows){
   (att || []).forEach(function(a){
     if (!a || !a.date || String(a.date).slice(0,7) !== ms) return;
     if (!(a.staffName === sName || (sId && a.staffId === sId))) return;
-    if (!laIsLateHalfDay(a)) return;
+    if (!laIsLateHalfDay(a, sName)) return;
     seen[String(a.date).slice(0,10)] = 1;      // one half day per date, not per row
   });
   return Object.keys(seen).length;
@@ -24581,11 +24604,19 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
   // "everyone who didn't tap the button".
   const absentN = kbdcNonWorkingDay ? 0 : Math.max(0, bStaff.length - presentN - onLeaveN);
 
-  /* Half day today */
-  const halfDayN = leaves.filter(function(l){
+  /* Half day today — approved half-day LEAVE, plus anyone whose late arrival
+     costs them half a day. The tile counted only leave, so it read 0 beside a
+     Late Arrivals tile reading 5, and nothing on any screen showed the half
+     days that were about to come off the month's pay. */
+  const halfDayLeaveN = leaves.filter(function(l){
     return l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY&&l.halfDay&&l.halfDay!=='none'&&
       (activeBranch==='All Branches'||l.branch===activeBranch);
   }).length;
+  const lateHalfToday = bStaff.filter(function(s){
+    var rec=kbdcPickAtt(todayAtt,s.id,s.name);
+    return rec&&laIsLateHalfDay(rec,s.name);
+  }).length;
+  const halfDayN = halfDayLeaveN + lateHalfToday;
 
   /* Late arrivals today */
   const lateStaff = bStaff.filter(function(s){
