@@ -264,6 +264,99 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
   ok(warned && /no shift set, so this rule cannot apply/i.test(warnText),
      'with no fallback shift it warns that nobody can be judged late');
 
+  // ---- Assigning a shift must survive the next sync ----------------------
+  // Staff records merge on updatedAt. Assigning a shift changed the row
+  // without touching that stamp, so the same person arriving from any other
+  // device with a newer stamp and a blank shiftId won the merge and the
+  // assignment vanished — taking every late arrival with it.
+  const survives = await page.evaluate(() => {
+    const stamp = '2026-10-20T10:00:00.000Z';
+    localStorage.setItem('kbdc_hr_staff', JSON.stringify([
+      { id: 'EM1', name: 'Suman Rathor', active: true, updatedAt: stamp }
+    ]));
+    localStorage.setItem('kbdc_shared_staff', localStorage.getItem('kbdc_hr_staff'));
+    laAssignShift('Suman Rathor', 'shB');
+    const local = JSON.parse(localStorage.getItem('kbdc_hr_staff'))[0];
+    // The Sheet's copy: same person, edited slightly later, no shift.
+    const remote = [{ id: 'EM1', name: 'Suman Rathor', active: true, shiftId: '', updatedAt: '2026-10-20T10:05:00.000Z' }];
+    const merged = kbdcMergeStaffByRecency([local], remote);
+    return { stamped: local.updatedAt !== stamp, after: merged[0].shiftId };
+  });
+  console.log('  shift assignment vs a later remote edit:', JSON.stringify(survives));
+  ok(survives.stamped, 'assigning a shift stamps the record');
+  ok(survives.after === 'shB', 'so it is not wiped by another device\u2019s copy (' + survives.after + ')');
+
+  // ---- The per-person explanation ----------------------------------------
+  await page.evaluate(() => {
+    localStorage.setItem('kbdc_la_shifts', JSON.stringify([
+      { id: 'shA', name: 'Morning',   start: '08:30', end: '17:00', breakMin: 30, color: '#1357A6' },
+      { id: 'shB', name: 'Morning 3', start: '09:00', end: '17:30', breakMin: 30, color: '#2E7D32' }
+    ]));
+    localStorage.setItem('kbdc_hr_staff', JSON.stringify([
+      { id: 'EM1', name: 'Suman Rathor',   active: true, shiftId: 'shB' },
+      { id: 'EM2', name: 'Vishal Kanojia', active: true, shiftId: 'shA' },
+      { id: 'EM3', name: 'Madhuri',        active: true, shiftId: 'shGONE' },
+      { id: 'EM4', name: 'Saloni',         active: true }
+    ]));
+    localStorage.setItem('kbdc_shared_staff', localStorage.getItem('kbdc_hr_staff'));
+    localStorage.setItem('kbdc_la_attendance', JSON.stringify([
+      { id: 'r1', staffId: 'EM1', staffName: 'Suman Rathor',   date: kbdcToday(), checkIn: '09:11' },
+      { id: 'r2', staffId: 'EM2', staffName: 'Vishal Kanojia', date: kbdcToday(), checkIn: '08:35' },
+      { id: 'r3', staffId: 'EM3', staffName: 'Madhuri',        date: kbdcToday(), checkIn: '09:40' }
+    ]));
+    laSaveLateRule({ enabled: true, graceMin: 10, fallbackShiftId: '' });
+  });
+  await page.reload(); await page.waitForTimeout(900);
+  await page.click('text=Admin Override').catch(() => {}); await page.waitForTimeout(300);
+  await page.fill('input[type="password"]', 'kbdc@admin').catch(() => {});
+  await page.click('button:has-text("Enter")').catch(() => {}); await page.waitForTimeout(900);
+  await page.locator('.nav', { hasText: 'LEAVE & ATTENDANCE' }).first().click().catch(() => {});
+  await page.waitForTimeout(900);
+  await page.getByText('Leave Management', { exact: false }).first().click().catch(() => {});
+  await page.waitForTimeout(900);
+  await page.locator('button:has-text("Change")').first().click().catch(() => {});
+  await page.waitForTimeout(700);
+  const table = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+  console.log('  explanation rows present:', /Today, person by person/.test(table));
+  ok(/Today, person by person/i.test(table), 'the editor explains today person by person');
+  ok(/HALF DAY/.test(table), 'the one genuinely late person is shown as a HALF DAY');
+  ok(/within 10 min grace/i.test(table), 'someone inside the grace is shown as such');
+  ok(/shift no longer exists/i.test(table), 'a shift that was deleted is named as the reason');
+  ok(/no shift set/i.test(table), 'and so is a person with no shift at all');
+  ok(/no check-in yet/i.test(table), 'and someone who has not checked in');
+
+  // ---- It has to be VISIBLE, daily and monthly ---------------------------
+  // "How will we know who is late or on half day if it doesn't show on a
+  // daily basis, and doesn't show in My Attendance where they see their
+  // month?" The rule was deducting pay with nothing on screen naming anyone.
+  await page.locator('.nav', { hasText: 'LEAVE & ATTENDANCE' }).first().click().catch(() => {});
+  await page.waitForTimeout(900);
+  await page.getByText('Dashboard', { exact: false }).first().click().catch(() => {});
+  await page.waitForTimeout(900);
+  const daily = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+  console.log('  daily list shows Half Day:', /Half Day . Late/.test(daily));
+  ok(/Half Day . Late/.test(daily), 'today\u2019s list marks the late person Half Day, not plain Present');
+  ok(/\(\+\d+m\)/.test(daily), 'and shows how many minutes late beside the time');
+  ok(/Vishal Kanojia/.test(daily), 'while the others are listed as usual');
+
+  /* My Attendance: the month in numbers, including the late half days.
+     The Attendance tab opens on a staff picker, so the person is chosen
+     first and only then does the My Attendance sub-tab exist. */
+  await page.getByText('\u23f1\ufe0f Attendance', { exact: false }).first().click().catch(() => {});
+  await page.waitForTimeout(900);
+  // The staff picker is a <select>, not a list of buttons.
+  await page.selectOption('select', { label: 'Suman Rathor' }).catch(() => {});
+  await page.waitForTimeout(1000);
+  await page.getByText('My Attendance', { exact: false }).first().click().catch(() => {});
+  await page.waitForTimeout(1200);
+  const mine = (await page.locator('body').innerText()).replace(/\s+/g, ' ');
+  console.log('  my-attendance summary present:', /Late \(half day\)/i.test(mine));
+  ok(/Working days/i.test(mine) && /Present/i.test(mine) && /Absent/i.test(mine) && /Holidays/i.test(mine),
+     'My Attendance shows the month: working days, present, absent, holidays');
+  ok(/Late \(half day\)/i.test(mine), 'and the late half days');
+  ok(/Days deducted/i.test(mine), 'and what comes off the salary');
+  ok(/off the salary/i.test(mine), 'spelled out in words as well');
+
   ok(errs.length === 0, 'no JavaScript errors (' + JSON.stringify(errs).slice(0, 200) + ')');
   console.log('\n==== ' + pass.length + ' passed, ' + failed.length + ' failed ====');
   if (failed.length) failed.forEach(f => console.log('  FAIL: ' + f));

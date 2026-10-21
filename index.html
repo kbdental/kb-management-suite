@@ -742,6 +742,7 @@ body{background:#F5F6FA}
 .lp-orange{background:#FFF3E0;color:#E65100}
 .lp-blue{background:#E3F2FD;color:#1357A6}
 .lp-grey{background:#F5F5F5;color:#546E7A;border:1px solid #E0E0E0}
+.lp-amber{background:#FFF3E0;color:#E65100;border:1px solid #FFCC80}
 .lp-purple{background:#F3E5F5;color:#6A1B9A}
 .la-clock{background:linear-gradient(135deg,#1A237E 0%,#1357A6 100%);border-radius:12px;padding:16px 20px;margin-bottom:14px;color:#fff;display:flex;align-items:center;gap:20px}
 .la-clock-time{font-size:32px;font-weight:700;letter-spacing:2px;line-height:1}
@@ -870,7 +871,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-21-1';
+var KBDC_APP_VERSION = '2026-10-21-2';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -24478,8 +24479,15 @@ function laAssignShift(staffName,shiftId){
   try{
     var key='kbdc_hr_staff';
     var all=JSON.parse(localStorage.getItem(key)||'[]');
+    /* Stamped, or the next sync quietly undoes it. Staff records merge on
+       updatedAt, and assigning a shift changed the row without touching that
+       stamp — so a copy of the same person from any other device, carrying a
+       newer stamp and a blank shiftId, wins the merge and the assignment is
+       gone. Nothing reports it; the shift simply is not there any more, and
+       lateness, which is measured from the shift start, goes back to zero. */
+    var stamp=new Date().toISOString();
     var updated=all.map(function(s){
-      if(s.name===staffName){return Object.assign({},s,{shiftId:shiftId||null});}
+      if(s.name===staffName){return Object.assign({},s,{shiftId:shiftId||null,updatedAt:stamp});}
       return s;
     });
     localStorage.setItem(key,JSON.stringify(updated));
@@ -24487,10 +24495,12 @@ function laAssignShift(staffName,shiftId){
     var skey='kbdc_shared_staff';
     var sall=JSON.parse(localStorage.getItem(skey)||'[]');
     var supdated=sall.map(function(s){
-      if(s.name===staffName){return Object.assign({},s,{shiftId:shiftId||null});}
+      if(s.name===staffName){return Object.assign({},s,{shiftId:shiftId||null,updatedAt:stamp});}
       return s;
     });
     localStorage.setItem(skey,JSON.stringify(supdated));
+    // Send it now, so the other devices judge lateness the same way.
+    try{ kbdcAutoSyncMain(); }catch(e){}
   }catch(e){}
 }
 function laGetRegReqs(){try{return JSON.parse(localStorage.getItem('kbdc_la_reg')||'[]');}catch(e){return[];}}
@@ -24832,6 +24842,11 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
           const onLv = leaves.find(l=>l.staffName===s.name&&l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY);
           let pill='lp-red', pillTxt='Absent';
           if(onLv){ pill='lp-blue'; pillTxt='On Leave'; }
+          /* A late arrival that costs half a day says so here, on the list the
+             owner reads every morning. It used to say plain "Present", so the
+             only trace of the deduction was a number in a payroll screen next
+             month, with no way to see whose it was or argue with it. */
+          else if(rec&&rec.checkIn&&laIsLateHalfDay(rec,s.name)){ pill='lp-amber'; pillTxt='Half Day \u00b7 Late'; }
           else if(rec&&rec.checkIn){ pill='lp-green'; pillTxt='Present'; }
           else if(kbdcNonWorkingDay){ pill='lp-grey'; pillTxt=kbdcTodayHoliday || 'Week Off'; }
           const color = s.c||s.color||LA_AV_COLORS[0];
@@ -24843,7 +24858,12 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
               React.createElement('div',{className:'la-sub'},s.group||s.dept||s.role||'')
             ),
             React.createElement('span',{className:'la-pill '+pill},pillTxt),
-            rec&&rec.checkIn ? React.createElement('span',{style:{fontSize:9.5,color:'#90A4AE',marginLeft:6}},rec.checkIn) : null
+            rec&&rec.checkIn ? React.createElement('span',{style:{fontSize:9.5,color:'#90A4AE',marginLeft:6}},
+              rec.checkIn + (function(){
+                var sh=laShiftFor(s.name,shifts); if(!sh) return '';
+                var mn=laMinLate(rec.checkIn,sh.start);
+                return mn>0 ? (' (+'+mn+'m)') : '';
+              })()) : null
           );
         })
       ),
@@ -25531,6 +25551,52 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
 
     /* ── MY ATTENDANCE TAB ── */
     selectedEmp && attSubTab==='myatt' && React.createElement('div',null,
+      /* The month, in numbers. The calendar below colours the days, but there
+         was nowhere a person could read what their month adds up to - and
+         nowhere at all that late arrivals and the half days they cost showed
+         up, which made the deduction impossible to check or to argue with. */
+      (function(){
+        var ms=calYear+'-'+String(calMonth+1).padStart(2,'0');
+        var emp=(function(){try{return JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]').filter(function(x){return x.name===selectedEmp;})[0];}catch(e){return null;}})()||{};
+        var st2=kbdcMonthAttStats(selectedEmp,emp.id,calYear,calMonth+1);
+        var hols=(function(){try{return JSON.parse(localStorage.getItem('kbdc_la_holidays')||'[]');}catch(e){return[];}})()
+          .filter(function(h){return h&&String(h.date).slice(0,7)===ms;}).length;
+        var tiles=[
+          {n:st2.workDays, l:'Working days', c:'#1A237E', bg:'#EEF2FF'},
+          {n:st2.present,  l:'Present',      c:'#1B5E20', bg:'#E8F5E9'},
+          {n:st2.absentUnpaid, l:'Absent',   c:'#B71C1C', bg:'#FFEBEE'},
+          {n:st2.approved, l:'Approved leave', c:'#00695C', bg:'#E0F2F1'},
+          {n:hols,         l:'Holidays',     c:'#4527A0', bg:'#EDE7F6'},
+          {n:st2.lateHalf, l:'Late (half day)', c:'#E65100', bg:'#FFF3E0'},
+          {n:st2.totalDeductDays, l:'Days deducted', c:'#B71C1C', bg:'#FFEBEE'}
+        ];
+        return React.createElement('div',{style:{background:'#fff',borderRadius:12,border:'1px solid #E8EAF6',padding:'14px 16px',marginBottom:14}},
+          React.createElement('div',{style:{fontSize:13.5,fontWeight:700,color:'#1A237E',marginBottom:10}},
+            LA_MONTH_NAMES[calMonth]+' '+calYear+' \u2014 '+selectedEmp),
+          React.createElement('div',{style:{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(118px,1fr))',gap:8}},
+            tiles.map(function(t){
+              return React.createElement('div',{key:t.l,style:{background:t.bg,borderRadius:9,padding:'9px 11px'}},
+                React.createElement('div',{style:{fontSize:19,fontWeight:800,color:t.c,lineHeight:1.1}},t.n),
+                React.createElement('div',{style:{fontSize:10.5,color:'#546E7A',fontWeight:600,marginTop:2}},t.l));
+            })
+          ),
+          st2.lateHalf>0&&React.createElement('div',{style:{marginTop:10,fontSize:11,color:'#E65100',fontWeight:600}},
+            '\u23F0 '+st2.lateHalf+' late arrival'+(st2.lateHalf===1?'':'s')+' this month \u00b7 '+(st2.lateHalf*0.5)+' day'+(st2.lateHalf*0.5===1?'':'s')+' off the salary'),
+          /* Which days, by name, so a deduction can be checked against the clock. */
+          (function(){
+            var att=[]; try{ att=JSON.parse(localStorage.getItem('kbdc_la_attendance')||'[]'); }catch(e){}
+            var days=att.filter(function(a){
+              return a&&a.date&&String(a.date).slice(0,7)===ms&&(a.staffName===selectedEmp||(emp.id&&a.staffId===emp.id))&&laIsLateHalfDay(a,selectedEmp);
+            }).sort(function(x,y){return String(x.date).localeCompare(String(y.date));});
+            if(!days.length) return null;
+            return React.createElement('div',{style:{marginTop:8,display:'flex',gap:6,flexWrap:'wrap'}},
+              days.map(function(d,i){
+                return React.createElement('span',{key:i,style:{fontSize:10.5,fontWeight:700,background:'#FFF3E0',color:'#E65100',border:'1px solid #FFCC80',borderRadius:6,padding:'3px 8px'}},
+                  String(d.date).slice(8,10)+' '+LA_MONTH_NAMES[calMonth].slice(0,3)+' \u00b7 in '+(d.checkIn||'?'));
+              }));
+          })()
+        );
+      })(),
       /* Attendance Details Calendar */
       React.createElement('div',{style:{background:'#fff',borderRadius:12,border:'1px solid #E8EAF6',padding:'16px 18px',marginBottom:16}},
         React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:12}},
@@ -25888,6 +25954,52 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
           try{kbdcAudit('late-rule-changed',(lateEdit.enabled?('half day over '+g+' min'):'off'));}catch(e){}
           setShowLateEdit(false);showToast('Late-arrival rule saved',true);
         },style:{padding:'8px 18px',background:'#E65100',color:'#fff',border:'none',borderRadius:7,fontSize:12,fontWeight:700,cursor:'pointer'}},'Save'),
+        /* Why today looks the way it does, person by person. "It shows 0 late
+           arrivals" can mean six different things - no check-in, no shift, a
+           shiftId pointing at a shift that no longer exists, inside the
+           grace, or the rule off - and none of them are visible from a tile
+           showing a number. */
+        React.createElement('div',{style:{flexBasis:'100%',marginTop:6}},
+          React.createElement('div',{style:{fontSize:11.5,fontWeight:700,color:'#E65100',marginBottom:6}},'Today, person by person'),
+          React.createElement('div',{style:{maxHeight:230,overflow:'auto',border:'1px solid #FFE0B2',borderRadius:8}},
+            React.createElement('table',{style:{width:'100%',borderCollapse:'collapse',fontSize:11}},
+              React.createElement('thead',null,React.createElement('tr',{style:{background:'#FFF8E1'}},
+                ['Staff','Shift','In','Late','Result'].map(function(h){
+                  return React.createElement('th',{key:h,style:{textAlign:'left',padding:'6px 8px',color:'#8D6E63',fontWeight:700}},h);
+                }))),
+              React.createElement('tbody',null,
+                (function(){
+                  var shl=laGetShifts(), rule=laLateRule(), out=[];
+                  var att=[]; try{ att=JSON.parse(localStorage.getItem('kbdc_la_attendance')||'[]'); }catch(e){}
+                  var staffAll=[]; try{ staffAll=JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]'); }catch(e){}
+                  staffAll.filter(function(st2){ return st2&&st2.active!==false&&st2.name; }).forEach(function(st2,ix){
+                    var rec=att.filter(function(a){ return a&&a.date===LA_TODAY&&(a.staffName===st2.name||(st2.id&&a.staffId===st2.id)); })[0];
+                    var own=st2.shiftId?shl.filter(function(x){return x.id===st2.shiftId;})[0]:null;
+                    var sh=own||laShiftFor(st2.name,shl);
+                    var why='', mins='';
+                    if(!rec||!rec.checkIn) why='no check-in yet';
+                    else if(st2.shiftId&&!own) why='shift no longer exists';
+                    else if(!sh) why='no shift set';
+                    else {
+                      var mn=laMinLate(rec.checkIn,sh.start);
+                      mins=mn>0?(mn+' min'):'on time';
+                      why=!rule.enabled?'rule is off':(laIsLateHalfDay(rec,st2.name)?'HALF DAY':(mn>0?('within '+rule.graceMin+' min grace'):'on time'));
+                    }
+                    out.push(React.createElement('tr',{key:st2.name,style:{borderTop:'1px solid #FFE0B2',background:ix%2?'#fff':'#FFFDF7'}},
+                      React.createElement('td',{style:{padding:'5px 8px',fontWeight:600}},st2.name),
+                      React.createElement('td',{style:{padding:'5px 8px'}},sh?(sh.name+' '+sh.start):'\u2014'),
+                      React.createElement('td',{style:{padding:'5px 8px'}},(rec&&rec.checkIn)||'\u2014'),
+                      React.createElement('td',{style:{padding:'5px 8px'}},mins||'\u2014'),
+                      React.createElement('td',{style:{padding:'5px 8px',fontWeight:700,color:why==='HALF DAY'?'#B71C1C':'#546E7A'}},why)
+                    ));
+                  });
+                  if(!out.length) out.push(React.createElement('tr',null,React.createElement('td',{colSpan:5,style:{padding:10,color:'#90A4AE'}},'No active staff found.')));
+                  return out;
+                })()
+              )
+            )
+          )
+        ),
         (function(){
           /* Lateness is measured against a shift start. Anyone without one,
              and with no fallback chosen, can never be marked late \u2014 say so
