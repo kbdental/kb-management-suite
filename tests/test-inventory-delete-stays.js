@@ -16,7 +16,7 @@ const os = require('os');
 const path = require('path');
 const APP = process.env.KB_APP || __dirname + '/../index.html';
 const V = process.env.KB_VENDOR || __dirname + '/vendor/node_modules';
-const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium';
 
 // The mini-app ships inside index.html as a JSON string literal that the
 // Inventory page drops into an iframe's srcdoc. Pull out the very same text

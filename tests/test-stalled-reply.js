@@ -19,7 +19,7 @@ const { chromium } = require(process.env.PW_MODULE || '/opt/node22/lib/node_modu
 const fs = require('fs');
 const APP = process.env.KB_APP || __dirname + '/../index.html';
 const V = process.env.KB_VENDOR || __dirname + '/vendor/node_modules';
-const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium';
 
 (async () => {
   const browser = await chromium.launch({ executablePath: CHROME });
@@ -120,15 +120,23 @@ const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-l
      Sync now button — returned on its first line. The status line then sat on
      the same "read N hours ago" until the page was reloaded. */
   const before = seen.length;
-  const cycled = await page.evaluate(async () => {
-    const t0 = Date.now();
-    await kbdcAutoSyncMain();
-    return Date.now() - t0;
-  });
-  console.log('  a full sync after the stall took', cycled, 'ms · requests', before, '→', seen.length);
-  ok(seen.length > before, 'a sync after the stall still reaches Google (' + before + ' → ' + seen.length + ')');
+  /* The cycle the stall interrupted is still draining its retries, so the
+     guard is legitimately raised for a few more seconds and this call records
+     "run again afterwards" rather than starting a second overlapping sync.
+     What must NOT happen is the guard staying raised for good: that is the
+     device going silent until somebody reloads the page. So ask, then give the
+     in-flight run its head and check the device picked itself up. */
+  const t0 = Date.now();
+  await page.evaluate(() => kbdcAutoSyncMain());
+  for (let w = 0; w < 18 && seen.length <= before; w++) await page.waitForTimeout(5000);
+  const cycled = Date.now() - t0;
+  console.log('  the device picked itself up after', cycled, 'ms · requests', before, '→', seen.length);
+  ok(seen.length > before,
+     'the device resumes syncing on its own, without a reload (' + before + ' → ' + seen.length + ')');
+  ok(await page.evaluate(() => kbdcSyncMainRunning) === false,
+     'and the sync guard comes back down, so later cycles are not all swallowed');
   const stamp = await page.evaluate(() => (kbdcGetSyncStatus() || {}).lastOk || '');
-  ok(!!stamp && (Date.now() - new Date(stamp).getTime()) < 60000,
+  ok(!!stamp && (Date.now() - new Date(stamp).getTime()) < 120000,
      'and the "Sheet read ..." stamp moves to now, instead of staying hours old');
 
   // kbdcDeadline itself: it must not leave a settled promise hanging, and must

@@ -871,7 +871,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-10-21-2';
+var KBDC_APP_VERSION = '2026-11-10-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -11867,10 +11867,24 @@ var kbdcSyncMainRunning = false, kbdcSyncMainAgain = false;
 // Reset by a page load, which is the point: a refresh should show attendance
 // within one round trip rather than after the whole database has been read.
 var kbdcFirstPullDone = false;
+/* The guard must come down even when the run never settles.
+   The scheduler wrapped the deadline around the OUTSIDE of these guards:
+   kbdcDeadline(kbdcAutoSyncMain(), ...). That makes the scheduler's own
+   promise give up, but the run inside carries on for ever, so its `finally`
+   never fires and kbdcSyncMainRunning stays raised. From then on every later
+   sync — scheduled, on focus, after a check-in, or from the Sync now button —
+   returned on its first line, and the device went silent until somebody
+   reloaded the page: "main Sheet read 16h ago" on a page just opened, with
+   every member of staff showing Absent. The deadline belongs INSIDE the
+   guard, where giving up also releases it. A given-up run may still be
+   finishing in the background, but every request it makes goes through the
+   single-flight queue anyway, and a device that keeps syncing is worth far
+   more than one that is tidy and dead. */
 async function kbdcAutoSyncMain() {
   if (kbdcSyncMainRunning) { kbdcSyncMainAgain = true; return; }
   kbdcSyncMainRunning = true;
-  try { await kbdcAutoSyncMainRun(); }
+  try { await kbdcDeadline(kbdcAutoSyncMainRun(), KBDC_SYNC_MAX_MS, 'sync gave up'); }
+  catch (e) { kbdcSetSyncStatus({ err: (e && e.message) ? e.message : 'sync gave up' }); }
   finally {
     kbdcSyncMainRunning = false;
     if (kbdcSyncMainAgain) { kbdcSyncMainAgain = false; return kbdcAutoSyncMain(); }
@@ -11972,8 +11986,10 @@ async function kbdcAutoSyncMainRun() {
         var localOnly = {};
         var lsStaff = kbdcLsArray('kbdc_hr_staff');
         if (lsStaff.length) localOnly['StaffFull'] = lsStaff.map(kbdcFlattenRow);
+        /* Bounded as well. This branch runs when the Sheet is ALREADY
+           struggling, so it is the last place that should offer it 4 MB. */
         pushMods.forEach(function(m) {
-          var rows = m.get().map(kbdcFlattenRow);
+          var rows = kbdcBoundLedgerPush(m.sheet, m.get().map(kbdcFlattenRow), false);
           if (rows.length) localOnly[m.sheet] = rows;
         });
         // In size-bounded pieces. This used to be ONE request carrying every
@@ -11984,6 +12000,7 @@ async function kbdcAutoSyncMainRun() {
           if (soloRes && soloRes.ok === false) throw new Error(soloRes.error || 'Backup was rejected by the backend');
           if (soloChunks[sc]['TaskCompletions']) kbdcLogMarkSent(soloChunks[sc]['TaskCompletions']);
         }
+        kbdcCommitTaskRowSigs();
       } catch (pushErr) { /* reported as the read failure below — that's the cause */ }
       kbdcSetSyncStatus({ err: 'Could not read the Google Sheet — ' +
         ((pullErr && pullErr.message) ? pullErr.message : 'unknown error') +
@@ -12210,8 +12227,11 @@ async function kbdcAutoSyncMainRun() {
     var pushPayload = {};
     var staffToPush = staffForLocal || localStaff;
     if (staffToPush && staffToPush.length) pushPayload['StaffFull'] = staffToPush.map(kbdcFlattenRow);
+    /* Needed before the payload is built, not after: it decides how much of
+       each append-only ledger goes in at all (see kbdcBoundLedgerPush). */
+    var forceFull = kbdcFullPushDue('kbdc_push_full_at');
     pushMods.forEach(function(m) {
-      var rows = m.get().map(kbdcFlattenRow);
+      var rows = kbdcBoundLedgerPush(m.sheet, m.get().map(kbdcFlattenRow), forceFull);
       if (rows.length) pushPayload[m.sheet] = rows;
     });
     pushPayload['ClinicSettings'] = [{ key: 'weekOffDays', value: JSON.stringify(laGetWeekOff()), updatedAt: localStorage.getItem('kbdc_la_weekoff_updatedAt') || '' }];
@@ -12275,8 +12295,6 @@ async function kbdcAutoSyncMainRun() {
        made inventory re-send its entire stock list each time. */
     var newSigs = {};
     Object.keys(prevSigs).forEach(function(k){ if (k.indexOf('inv:') === 0) newSigs[k] = prevSigs[k]; });
-    var lastFull = parseInt(localStorage.getItem('kbdc_push_full_at') || '0', 10);
-    var forceFull = !lastFull || (Date.now() - lastFull) > 21600000;
     var changedPayload = {};
     Object.keys(pushPayload).forEach(function(sheet) {
       var sig = kbdcRowsSig(pushPayload[sheet]);
@@ -12309,8 +12327,10 @@ async function kbdcAutoSyncMainRun() {
       var todaysLog = (pushPayload['TaskCompletions'] || []).filter(function(r){
         return String((r && r.date) || '').slice(0, 10) === todayStr;
       });
+      /* Today's rows - NOT the whole log. Assigning the entire tab here is
+         what turned a five-row delivery into 3 MB and 26 writes per cycle. */
       if (todaysLog.length && !changedPayload['TaskCompletions']) {
-        changedPayload['TaskCompletions'] = pushPayload['TaskCompletions'];
+        changedPayload['TaskCompletions'] = todaysLog;
       }
     } catch(e) {}
 
@@ -12336,6 +12356,7 @@ async function kbdcAutoSyncMainRun() {
     // Only remember the signatures once every chunk landed, so a failed push
     // is retried in full next cycle rather than being assumed delivered.
     kbdcSetPushSigs(newSigs);
+    kbdcCommitTaskRowSigs();
     if (forceFull) { try { localStorage.setItem('kbdc_push_full_at', String(Date.now())); } catch(e) {} }
     kbdcSetSyncStatus({ lastOk: Date.now(), err: '',
       lastPushBytes: pushedBytes, lastPushChunks: chunks.length,
@@ -12382,12 +12403,96 @@ function kbdcAttUnsent() {
     });
   } catch(e) { return []; }
 }
+/* --- An append-only ledger is never re-sent whole -------------------------
+   TaskCompletions had reached 4,668 rows - 3.0 MB. The main push sent the
+   WHOLE tab on any day somebody ticked a task, because the "never skip
+   today's ticks" guard assigned the entire log instead of today's rows. So
+   every device, every cycle, chunked 3 MB into 26 serialized Apps Script
+   writes in order to deliver five new rows. Attendance (565 rows, 259 KB)
+   went the same way, and was pushed twice over - once by the main sync and
+   again by its own.
+   Every one of those writes takes the Sheet's script lock, so eight phones
+   spent their entire cycle queueing behind one another. The main push never
+   reached the end, so "Backed up" froze on whatever day it last completed -
+   the "backup few days old on every phone" - and the attendance pull, which
+   runs AFTER the main sync in the same cycle, never got its turn: the Leave &
+   Attendance dashboard showed nobody present while the Attendance Sheet held
+   every check-in. It got worse by the day because a ledger only grows, which
+   is why the Sheet's attendance thinned out one row at a time: 7 a day in
+   October, then 6, then 4, then 2, then none.
+   Ticks already have exact per-row delivery tracking (kbdcLogUnsent) and are
+   pushed on their own at the top of every cycle; attendance older than a
+   fortnight cannot change. Send that, not the archive. The six-hourly full
+   push keeps its job as a restore safety net, over a window wide enough to
+   cover anything that could plausibly be deleted by hand. */
+var KBDC_LEDGER_PUSH_DAYS = 14;
+var KBDC_LEDGER_FULL_PUSH_DAYS = 45;
+function kbdcLedgerCutoff(days) {
+  return new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+}
+function kbdcLedgerDate(r) { return String((r && r.date) || '').slice(0, 10); }
+/* The Tasks tab carries each task's `done` flag, so ticking ONE task made all
+   1,471 rows look different and the whole 765 KB tab was re-pushed in seven
+   writes — all day, from every phone, because every phone has its own flags.
+   The backend keys a Tasks row by roleCode|taskCode (kbdcRowKey_), so sending
+   only the rows that changed updates them in place and adds no duplicates.
+   Signatures are recorded only once the push has actually landed; a push that
+   failed must be offered again, not written off as delivered. */
+var kbdcPendingTaskRowSigs = null;
+function kbdcTaskRowSigs() {
+  try { return JSON.parse(localStorage.getItem('kbdc_task_row_sigs') || '{}') || {}; } catch(e) { return {}; }
+}
+function kbdcCommitTaskRowSigs() {
+  if (!kbdcPendingTaskRowSigs) return;
+  try { localStorage.setItem('kbdc_task_row_sigs', JSON.stringify(kbdcPendingTaskRowSigs)); } catch(e) {}
+  kbdcPendingTaskRowSigs = null;
+}
+function kbdcTaskRowKey(r) {
+  return String((r && r.roleCode) || '') + '|' + String((r && r.taskCode) || '');
+}
+function kbdcBoundLedgerPush(sheet, rows, forceFull) {
+  rows = rows || [];
+  if (sheet === 'Tasks') {
+    var known = kbdcTaskRowSigs(), nextSigs = {}, changed = [];
+    rows.forEach(function(r){
+      var k = kbdcTaskRowKey(r), h = kbdcHashString(JSON.stringify(r));
+      nextSigs[k] = h;
+      if (forceFull || known[k] !== h) changed.push(r);
+    });
+    kbdcPendingTaskRowSigs = nextSigs;
+    return changed;
+  }
+  if (sheet === 'TaskCompletions') {
+    if (forceFull) {
+      var tcCut = kbdcLedgerCutoff(KBDC_LEDGER_FULL_PUSH_DAYS);
+      return rows.filter(function(r){ return kbdcLedgerDate(r) >= tcCut; });
+    }
+    /* Exactly the rows the Sheet has not acknowledged - usually none, because
+       kbdcPushTicksNow has already sent them a moment earlier. */
+    var unsent = {};
+    kbdcLogUnsent().forEach(function(r){ if (r && r.id) unsent[r.id] = true; });
+    return rows.filter(function(r){ return r && r.id && unsent[r.id]; });
+  }
+  if (sheet === 'Attendance') {
+    var cut = kbdcLedgerCutoff(forceFull ? KBDC_LEDGER_FULL_PUSH_DAYS : KBDC_LEDGER_PUSH_DAYS);
+    return rows.filter(function(r){ return kbdcLedgerDate(r) >= cut; });
+  }
+  return rows;
+}
+/* Is a six-hourly full push due? Each sync keeps its own stamp, so each has a
+   restore safety net without re-sending the archive every cycle. */
+function kbdcFullPushDue(key) {
+  var at = 0;
+  try { at = parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch(e) {}
+  return !at || (Date.now() - at) > 21600000;
+}
 var kbdcSyncAttRunning = false, kbdcSyncAttAgain = false;
 async function kbdcAutoSyncAttendance() {
   if (!kbdcAttBackendSeparate()) return;
   if (kbdcSyncAttRunning) { kbdcSyncAttAgain = true; return; }
   kbdcSyncAttRunning = true;
-  try { await kbdcAutoSyncAttendanceRun(); }
+  try { await kbdcDeadline(kbdcAutoSyncAttendanceRun(), KBDC_SYNC_MAX_MS, 'attendance sync gave up'); }
+  catch (e) { kbdcSetSyncStatus({ attErr: (e && e.message) ? e.message : 'attendance sync gave up' }); }
   finally {
     kbdcSyncAttRunning = false;
     if (kbdcSyncAttAgain) { kbdcSyncAttAgain = false; return kbdcAutoSyncAttendance(); }
@@ -12409,7 +12514,9 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
       }
     }
 
-    var rows = kbdcLsArray('kbdc_la_attendance').map(kbdcFlattenRow);
+    var attFull = kbdcFullPushDue('kbdc_att_full_at');
+    var rows = kbdcBoundLedgerPush('Attendance',
+      kbdcLsArray('kbdc_la_attendance').map(kbdcFlattenRow), attFull);
     if (rows.length) {
       /* Same rule as the main backup: send what changed, but never skip
          today's rows on the strength of a signature — the cost of getting
@@ -12429,6 +12536,7 @@ async function kbdcAutoSyncAttendanceRun() {   // still folded into the main syn
       }
       sigs['Attendance'] = sig;
       kbdcSetPushSigs(sigs);
+      if (attFull) { try { localStorage.setItem('kbdc_att_full_at', String(Date.now())); } catch(e) {} }
     }
     kbdcSetSyncStatus({ attLastOk: Date.now(), attErr: '' });
     kbdcNoteSyncOutcome(true);
@@ -12571,7 +12679,9 @@ async function kbdcAutoSyncInventory() {
        the owner had just spent an afternoon undoing. Inventory data belongs in
        the Inventory Sheet or nowhere; when its backend cannot be reached the
        failure is reported and the records wait safely on the device. */
-    await kbdcAutoSyncInventoryRun();
+    await kbdcDeadline(kbdcAutoSyncInventoryRun(), KBDC_SYNC_MAX_MS, 'inventory sync gave up');
+  } catch (e) {
+    kbdcSetSyncStatus({ invErr: (e && e.message) ? e.message : 'inventory sync gave up' });
   }
   finally {
     kbdcSyncInvRunning = false;

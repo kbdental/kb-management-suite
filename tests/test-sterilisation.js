@@ -8,7 +8,7 @@ const { chromium } = require(process.env.PW_MODULE || '/opt/node22/lib/node_modu
 const fs = require('fs');
 const APP = process.env.KB_APP || __dirname + '/../index.html';
 const V = process.env.KB_VENDOR || __dirname + '/vendor/node_modules';
-const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+const CHROME = process.env.PW_CHROME || '/opt/pw-browsers/chromium';
 const MAIN = 'https://script.google.com/macros/s/MAIN/exec';
 const INV  = 'https://script.google.com/macros/s/INV/exec';
 

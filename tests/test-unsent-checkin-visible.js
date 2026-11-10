@@ -13,7 +13,7 @@ const APP = process.env.KB_APP || __dirname + '/../index.html';
 const V = __dirname + '/vendor/node_modules';
 
 (async () => {
-  const browser = await chromium.launch({ executablePath:'/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
+  const browser = await chromium.launch({ executablePath:'/opt/pw-browsers/chromium' });
   const R  = fs.readFileSync(V + '/react/umd/react.production.min.js','utf8');
   const RD = fs.readFileSync(V + '/react-dom/umd/react-dom.production.min.js','utf8');
   const B  = fs.readFileSync(V + '/@babel/standalone/babel.min.js','utf8');
