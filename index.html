@@ -871,7 +871,7 @@ body{background:#F5F6FA}
 // whether a newer version is actually live, and force-navigates to a
 // cache-busted URL if so, so updates reach every device without anyone
 // needing to manually clear history/cache.
-var KBDC_APP_VERSION = '2026-11-10-1';
+var KBDC_APP_VERSION = '2026-11-13-1';
 // The backend/Code.gs version this app is built against. When the deployed
 // Apps Script reports anything else, the badge says so — see SyncStatusBadge.
 var KBDC_EXPECTED_BACKEND = '2026-10-07-1';
@@ -24393,7 +24393,36 @@ function HRAdminPage() {
 ════════════════════════════════════════════════ */
 const LA_LEAVE_KEY = 'kbdc_la_leaves';
 const LA_ATT_KEY   = 'kbdc_la_attendance';
-const LA_TODAY = kbdcToday();
+/* Today's date, asked for fresh every time - NOT frozen at page load.
+   This was `const LA_TODAY = kbdcToday()` at module scope, so a tab left
+   open overnight kept yesterday's date for as long as it stayed open. The
+   owner's browser is open for days: on 13 November his dashboard was still
+   filtering attendance to `date === '2026-11-12'`, so it listed the two
+   people who came in on the 12th, with the 12th's times, and reported
+   everyone who had checked in that morning as Absent. The status line
+   underneath calls kbdcToday() live, which is why the same screen said
+   "3 check-ins held on this device today" directly above a list showing 2.
+   That is the "daily in morning everyone shows Absent" the clinic kept
+   hitting, and no amount of sync work could have fixed it: the rows were
+   on the Sheet, on the device, and simply not being looked for.
+   Worse than the display: a check-in RECORDS `date: laToday()`, so anyone
+   checking in from a page opened the day before was filed under yesterday. */
+function laToday() { return kbdcToday(); }
+/* And a page that is open when the date turns over must notice. The panels
+   re-render on sync events, so tell them the day has changed. */
+(function kbdcWatchDateRollover(){
+  var lastDay = null;
+  try { lastDay = kbdcToday(); } catch(e) { return; }
+  setInterval(function(){
+    var d;
+    try { d = kbdcToday(); } catch(e) { return; }
+    if (d === lastDay) return;
+    lastDay = d;
+    ['kbdc-modules-sync','kbdc-staff-sync','kbdc-tasks-sync','kbdc-sync-status'].forEach(function(ev){
+      try { window.dispatchEvent(new Event(ev)); } catch(e) {}
+    });
+  }, 30000);
+})();
 const LA_DAY_NAMES = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 const LA_MONTH_NAMES = ['January','February','March','April','May','June','July','August','September','October','November','December'];
 const LA_MONTH_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -24707,17 +24736,17 @@ function kbdcPickAtt(list, id, name, date) {
 function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser }) {
   const shifts = laGetShifts();
   const bStaff = staff.filter(function(s){return activeBranch==='All Branches'||!s.branch||s.branch===activeBranch||(s.group===activeBranch);});
-  const todayAtt = attendance.filter(function(a){return a.date===LA_TODAY;});
+  const todayAtt = attendance.filter(function(a){return a.date===laToday();});
   const presentN = todayAtt.filter(function(a){return a.checkIn;}).length;
-  const onLeaveN = leaves.filter(function(l){return l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY&&(activeBranch==='All Branches'||l.branch===activeBranch);}).length;
+  const onLeaveN = leaves.filter(function(l){return l.status==='approved'&&l.from<=laToday()&&l.to>=laToday()&&(activeBranch==='All Branches'||l.branch===activeBranch);}).length;
   const pendingN = leaves.filter(function(l){return l.status==='pending'&&(activeBranch==='All Branches'||l.branch===activeBranch);}).length;
   // The dashboard had no concept of a non-working day: it contained no
   // reference to holidays or week-offs at all, so on a declared holiday — or
   // on a configured week-off — everyone who had simply not checked in was
   // counted and labelled "Absent", even while the Calendar correctly showed
   // the day as a holiday. Nobody is absent on a day they were not due in.
-  const kbdcTodayHoliday = kbdcHolidayOn(LA_TODAY);
-  const kbdcTodayWeekOff = kbdcWeekOffOn(LA_TODAY);
+  const kbdcTodayHoliday = kbdcHolidayOn(laToday());
+  const kbdcTodayWeekOff = kbdcWeekOffOn(laToday());
   const kbdcNonWorkingDay = !!kbdcTodayHoliday || kbdcTodayWeekOff;
   // On a non-working day only genuine absences of people who were expected in
   // can exist, and nobody is expected in — so the count is zero rather than
@@ -24729,7 +24758,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
      Late Arrivals tile reading 5, and nothing on any screen showed the half
      days that were about to come off the month's pay. */
   const halfDayLeaveN = leaves.filter(function(l){
-    return l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY&&l.halfDay&&l.halfDay!=='none'&&
+    return l.status==='approved'&&l.from<=laToday()&&l.to>=laToday()&&l.halfDay&&l.halfDay!=='none'&&
       (activeBranch==='All Branches'||l.branch===activeBranch);
   }).length;
   const lateHalfToday = bStaff.filter(function(s){
@@ -24949,7 +24978,7 @@ function LA_Dashboard({ staff, leaves, attendance, activeBranch, setTab, appUser
         })(),
         bStaff.map(s=>{
           const rec = kbdcPickAtt(todayAtt,s.id,s.name);
-          const onLv = leaves.find(l=>l.staffName===s.name&&l.status==='approved'&&l.from<=LA_TODAY&&l.to>=LA_TODAY);
+          const onLv = leaves.find(l=>l.staffName===s.name&&l.status==='approved'&&l.from<=laToday()&&l.to>=laToday());
           let pill='lp-red', pillTxt='Absent';
           if(onLv){ pill='lp-blue'; pillTxt='On Leave'; }
           /* A late arrival that costs half a day says so here, on the list the
@@ -25138,8 +25167,8 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
   const pickerStaff = staff.length > 0 ? staff : bStaff;
   const empObj = pickerStaff.find(s=>s.name===selectedEmp);
   const sid = empObj?(empObj.id||empObj.name):selectedEmp;
-  const todayAtt = attendance.filter(a=>a.date===LA_TODAY);
-  const todayRec = kbdcPickAtt(attendance,sid,selectedEmp,LA_TODAY);
+  const todayAtt = attendance.filter(a=>a.date===laToday());
+  const todayRec = kbdcPickAtt(attendance,sid,selectedEmp,laToday());
   const myAtt = attendance.filter(a=>kbdcAttMatches(a,sid,selectedEmp));
 
   function pickEmp(name){
@@ -25171,7 +25200,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     /* ── Leave override check ── */
     var todayLeave=(leaves||[]).find(function(l){
       return l.staffName===selectedEmp && l.status==='approved' &&
-             LA_TODAY>=l.from && LA_TODAY<=l.to;
+             laToday()>=l.from && laToday()<=l.to;
     });
     if(todayLeave){
       var leaveLabel=todayLeave.halfDay&&todayLeave.halfDay!=='none'?'half-day':'full-day';
@@ -25204,13 +25233,13 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     var _preId = 'att' + Date.now();
     (function(){
       var pre, existing = attendance.find(function(a){
-        return a.date===LA_TODAY && kbdcAttMatches(a,sid,selectedEmp); });
+        return a.date===laToday() && kbdcAttMatches(a,sid,selectedEmp); });
       if (existing) {
         pre = attendance.map(function(a){
-          return (a.date===LA_TODAY&&kbdcAttMatches(a,sid,selectedEmp))
+          return (a.date===laToday()&&kbdcAttMatches(a,sid,selectedEmp))
             ? Object.assign({},a,{checkIn:t,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}) : a; });
       } else {
-        pre = [...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,
+        pre = [...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:laToday(),
           checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:null,locOut:null,
           lateTag:null,lateMin:0,leaveOverride:(todayLeave?true:undefined),appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
       }
@@ -25236,16 +25265,16 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var lateTag=lateHalfDay?'late-half':(lateMin>0?'late':null);
 
       var leaveOverride=todayLeave?true:undefined;
-      var exists=attendance.find(function(a){return a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp));});
+      var exists=attendance.find(function(a){return a.date===laToday()&&(kbdcAttMatches(a,sid,selectedEmp));});
       var updated;
       if(exists){
         updated=attendance.map(function(a){
-          return (a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
+          return (a.date===laToday()&&(kbdcAttMatches(a,sid,selectedEmp)))
             ?Object.assign({},a,{checkIn:t,locIn:loc,lateTag:lateTag,lateMin:lateMin,lateHalfDay:lateHalfDay,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()})
             :a;
         });
       } else {
-        updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:LA_TODAY,checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,lateHalfDay:lateHalfDay,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
+        updated=[...attendance,{id:_preId,staffId:sid,staffName:selectedEmp,date:laToday(),checkIn:t,checkOut:null,hours:null,branch:activeBranch,locIn:loc,locOut:null,lateTag:lateTag,lateMin:lateMin,lateHalfDay:lateHalfDay,leaveOverride:leaveOverride,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];
       }
       setAttendance(updated);laSaveAtt(updated);
       kbdcSyncAttendanceNow();
@@ -25265,7 +25294,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var ih0=parseInt(todayRec.checkIn.split(':')[0]),im0=parseInt(todayRec.checkIn.split(':')[1]);
       var oh0=parseInt(t.split(':')[0]),om0=parseInt(t.split(':')[1]);
       var hrs0=Math.round(((oh0*60+om0)-(ih0*60+im0))/60*10)/10;
-      var pre=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))
+      var pre=attendance.map(function(a){return(a.date===laToday()&&(kbdcAttMatches(a,sid,selectedEmp)))
         ?{...a,checkOut:t,hours:hrs0,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});
       setAttendance(pre); laSaveAtt(pre);
       kbdcSyncAttendanceNow();
@@ -25277,7 +25306,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
       var ih=parseInt(todayRec.checkIn.split(':')[0]),im=parseInt(todayRec.checkIn.split(':')[1]);
       var oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]);
       var hours=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;
-      var updated=attendance.map(function(a){return(a.date===LA_TODAY&&(kbdcAttMatches(a,sid,selectedEmp)))?{...a,checkOut:t,hours:hours,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});
+      var updated=attendance.map(function(a){return(a.date===laToday()&&(kbdcAttMatches(a,sid,selectedEmp)))?{...a,checkOut:t,hours:hours,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});
       setAttendance(updated);laSaveAtt(updated);
       kbdcSyncAttendanceNow();
     });
@@ -25291,7 +25320,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     var cRec=myAtt.find(function(a){return a.date===dStr;});
     var cDt=new Date(calYear,calMonth,cd);
     var isWE=laGetWeekOff().indexOf(cDt.getDay())!==-1;
-    var isFut=dStr>LA_TODAY;
+    var isFut=dStr>laToday();
     /* A declared holiday is not an absence, and it is paid whether or not
        anyone tapped Check In. This grid knew about week-offs but had no
        holiday check at all, so Independence Day read as "A" for every
@@ -25365,11 +25394,11 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     var recId='att'+Date.now();
     function apply(loc,isFinal){
       var attendance=laLoadAtt();
-      var ex=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});
+      var ex=attendance.find(function(a){return a.date===laToday()&&(a.staffId===sI||a.staffName===sN);});
       var upd;
-      if(ex){upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))
+      if(ex){upd=attendance.map(function(a){return(a.date===laToday()&&(a.staffId===sI||a.staffName===sN))
         ?Object.assign({},a,{checkIn:t,locIn:(loc!==undefined?loc:a.locIn),appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}):a;});}
-      else{upd=[...attendance,{id:recId,staffId:sI,staffName:sN,date:LA_TODAY,checkIn:t,checkOut:null,
+      else{upd=[...attendance,{id:recId,staffId:sI,staffName:sN,date:laToday(),checkIn:t,checkOut:null,
         hours:null,branch:activeBranch,locIn:(loc!==undefined?loc:null),locOut:null,
         appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}];}
       setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();
@@ -25380,7 +25409,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
     laFetchLocation().then(function(loc){apply(loc,true);})
       .catch(function(){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});});
   }
-  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===LA_TODAY&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();});}
+  function clockOutAdm(sN,sI){var ssid=sI||sN,t=laPad(now.getHours())+':'+laPad(now.getMinutes()),rec=attendance.find(function(a){return a.date===laToday()&&(a.staffId===sI||a.staffName===sN);});if(!rec||!rec.checkIn)return;setLocLoadingAdm(function(p){return{...p,[ssid]:true};});laFetchLocation().then(function(loc){setLocLoadingAdm(function(p){return{...p,[ssid]:false};});var ih=parseInt(rec.checkIn.split(':')[0]),im=parseInt(rec.checkIn.split(':')[1]),oh=parseInt(t.split(':')[0]),om=parseInt(t.split(':')[1]),hrs=Math.round(((oh*60+om)-(ih*60+im))/60*10)/10;var upd=attendance.map(function(a){return(a.date===laToday()&&(a.staffId===sI||a.staffName===sN))?{...a,checkOut:t,hours:hrs,locOut:loc,appVer:KBDC_APP_VERSION,updatedAt:new Date().toISOString()}:a;});setAttendance(upd);laSaveAtt(upd);kbdcSyncAttendanceNow();});}
 
   var SC=['#1357A6','#2E7D32','#E65100','#6A1B9A','#C62828','#00695C','#37474F','#AD1457'];
   function doAssign(n,id){laAssignShift(n,id);setShiftMap(function(p){var nx=Object.assign({},p);if(id)nx[n]=id;else delete nx[n];return nx;});showToast('Shift saved',true);}
@@ -25461,7 +25490,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
                 else { /* No record. Before calling it an absence, check the day
                           was a working one — this table had no holiday or
                           week-off awareness at all. */
-                  var nonWorking=kbdcNonWorkingOn(LA_TODAY);
+                  var nonWorking=kbdcNonWorkingOn(laToday());
                   if(nonWorking){sPill='lp-grey';sTxt=nonWorking;}
                 }
                 return React.createElement('tr',{key:s.name},
@@ -25760,7 +25789,7 @@ function LA_Attendance({ staff, attendance, setAttendance, leaves, activeBranch,
                 flRows.map(function(row,i){
                   var dateStr=laPad(row.dt.getDate())+'/'+laPad(row.dt.getMonth()+1)+'/'+row.dt.getFullYear();
                   var dayStr=LA_DAY_NAMES[row.dt.getDay()];
-                  var isFut2=row.dStr>LA_TODAY;
+                  var isFut2=row.dStr>laToday();
                   return React.createElement('tr',{key:i,style:{borderBottom:'1px solid #F5F5F5',opacity:isFut2?0.4:1}},
                     React.createElement('td',{style:{padding:'8px 8px'}},
                       React.createElement('div',{style:{fontWeight:600,fontSize:11.5,color:'#263238'}},dateStr),
@@ -25925,7 +25954,7 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
     var isH=applyForm.halfDay!=='none';
     var days=isH?0.5:(applyForm.to&&applyForm.to>=applyForm.from?laDays(applyForm.from,applyForm.to):1);
     var to=isH?applyForm.from:(applyForm.to||applyForm.from);
-    var nl={id:'L'+Date.now(),staffName:applyForm.staffName,type:applyForm.type,halfDay:applyForm.halfDay,from:applyForm.from,to:to,days:days,reason:applyForm.reason,status:'pending',applied:LA_TODAY,branch:activeBranch,updatedAt:new Date().toISOString()};
+    var nl={id:'L'+Date.now(),staffName:applyForm.staffName,type:applyForm.type,halfDay:applyForm.halfDay,from:applyForm.from,to:to,days:days,reason:applyForm.reason,status:'pending',applied:laToday(),branch:activeBranch,updatedAt:new Date().toISOString()};
     var u=[...leaves,nl];setLeaves(u);laSaveLeaves(u);
     setShowApply(false);setSuccess('Leave request submitted!');setTimeout(function(){setSuccess('');},3000);
     setApplyForm({staffName:appUser?appUser.name:'',type:'Casual Leave',halfDay:'none',from:'',to:'',reason:''});
@@ -26083,7 +26112,7 @@ function LA_LeaveManagement({staff,leaves,setLeaves,activeBranch,appUser}){
                   var att=[]; try{ att=JSON.parse(localStorage.getItem('kbdc_la_attendance')||'[]'); }catch(e){}
                   var staffAll=[]; try{ staffAll=JSON.parse(localStorage.getItem('kbdc_hr_staff')||'[]'); }catch(e){}
                   staffAll.filter(function(st2){ return st2&&st2.active!==false&&st2.name; }).forEach(function(st2,ix){
-                    var rec=att.filter(function(a){ return a&&a.date===LA_TODAY&&(a.staffName===st2.name||(st2.id&&a.staffId===st2.id)); })[0];
+                    var rec=att.filter(function(a){ return a&&a.date===laToday()&&(a.staffName===st2.name||(st2.id&&a.staffId===st2.id)); })[0];
                     var own=st2.shiftId?shl.filter(function(x){return x.id===st2.shiftId;})[0]:null;
                     var sh=own||laShiftFor(st2.name,shl);
                     var why='', mins='';
@@ -26429,7 +26458,7 @@ function LA_Calendar({leaves,activeBranch,staff}){
   const cells=[];
   for(var i=0;i<firstDay;i++)cells.push(null);
   for(var d=1;d<=daysInMonth;d++)cells.push(d);
-  const upcoming=bLeaves.filter(function(l){return l.status==='approved'&&l.to>=LA_TODAY;}).sort(function(a,b){return a.from<b.from?-1:1;});
+  const upcoming=bLeaves.filter(function(l){return l.status==='approved'&&l.to>=laToday();}).sort(function(a,b){return a.from<b.from?-1:1;});
 
   function getEmpColor(name){
     var si=bStaff.findIndex(function(s){return s.name===name;});
@@ -26461,7 +26490,7 @@ function LA_Calendar({leaves,activeBranch,staff}){
           var dStr=year+'-'+laPad(month+1)+'-'+laPad(day);
           var dt=new Date(year,month,day);
           var weekOffDays=laGetWeekOff();var isWeekend=weekOffDays.indexOf(dt.getDay())!==-1;
-          var isFuture=dStr>LA_TODAY;
+          var isFuture=dStr>laToday();
           var holiday=holidays.find(function(h){return h.date===dStr;});
           var onLeave=bLeaves.filter(function(l){return l.status==='approved'&&l.from<=dStr&&l.to>=dStr;});
           /* Absent = staff not on leave, not weekend, not holiday, not future, and not checked in */
@@ -26533,7 +26562,7 @@ function LA_Calendar({leaves,activeBranch,staff}){
           var ds=year+'-'+laPad(month+1)+'-'+laPad(d2);
           var dt2=new Date(year,month,d2);
           var isWE=laGetWeekOff().indexOf(dt2.getDay())!==-1;
-          var isFut=ds>LA_TODAY;
+          var isFut=ds>laToday();
           var hol=holidays.find(function(h){return h.date===ds;});
           if(hol)totalHols++;
           if(!isWE&&!isFut){
@@ -26614,8 +26643,8 @@ function LA_Holidays(){
   }
   function del(id){var upd=holidays.filter(function(h){return h.id!==id;});setHolidays(upd);laSaveHolidays(upd);showToast('Holiday removed');}
 
-  var upcoming=holidays.filter(function(h){return h.date>=LA_TODAY;});
-  var past=holidays.filter(function(h){return h.date<LA_TODAY;});
+  var upcoming=holidays.filter(function(h){return h.date>=laToday();});
+  var past=holidays.filter(function(h){return h.date<laToday();});
 
   return React.createElement(React.Fragment,null,
     React.createElement('div',{style:{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:16}},
@@ -26724,7 +26753,7 @@ function LA_Regularisation({staff,attendance,setAttendance,activeBranch}){
 
   /* Build irregularity list from attendance: last 14 days */
   var irr=[];
-  var today=new Date(LA_TODAY);
+  var today=new Date(laToday());
   for(var di=0;di<14;di++){
     var dt=new Date(today);dt.setDate(today.getDate()-di);
     var ds=dt.getFullYear()+'-'+laPad(dt.getMonth()+1)+'-'+laPad(dt.getDate());
